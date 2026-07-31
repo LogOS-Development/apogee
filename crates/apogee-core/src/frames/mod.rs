@@ -1,8 +1,10 @@
 //! Frame transformation service: ICRF, ECI, ECEF, ECLIPJ2000.
 
+pub mod clock;
 pub mod eop;
 pub mod leap_seconds;
 
+pub use clock::*;
 pub use eop::*;
 pub use leap_seconds::*;
 
