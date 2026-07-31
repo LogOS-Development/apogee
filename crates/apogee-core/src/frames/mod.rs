@@ -1,8 +1,10 @@
 //! Frame transformation service: ICRF, ECI, ECEF, ECLIPJ2000.
 
 pub mod eop;
+pub mod leap_seconds;
 
 pub use eop::*;
+pub use leap_seconds::*;
 
 /// Reference frames supported by Apogee.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
