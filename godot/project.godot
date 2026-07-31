@@ -1,0 +1,11 @@
+; Apogee — Godot 4 project
+; Phase 0 scaffold: minimal config, will be expanded in Phase 3.
+
+config_version=5
+
+[application]
+config/name="Apogee"
+config/description="Multiplayer space simulation"
+run/main_scene=""
+config/features=Window,Actions,Vulkan
+config/icon=""

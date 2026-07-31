@@ -1,0 +1,35 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/apogee-core",
+    "crates/apogee-net",
+    "crates/apogee-server",
+    "crates/apogee-godot",
+    "crates/apogee-common",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Apogee Contributors"]
+
+[workspace.dependencies]
+# Numerics
+nalgebra = "0.33"
+# Time
+hifitime = "3.9"
+# Errors
+thiserror = "1.0"
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+# Logging
+tracing = "0.1"
+tracing-subscriber = "0.3"
+# Parallelism
+rayon = "1.10"
+# Internal crates
+apogee-common = { path = "crates/apogee-common" }
+apogee-core = { path = "crates/apogee-core" }
+apogee-net = { path = "crates/apogee-net" }
