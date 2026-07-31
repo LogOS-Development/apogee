@@ -43,6 +43,9 @@ pub type ApogeeResult<T> = Result<T, ApogeeError>;
 
 /// Physical constants (SI units).
 pub mod constants {
+    /// Pi to 15 significant digits.
+    pub const PI: f64 = 3.141592653589793;
+
     /// Gravitational constant (m^3 kg^-1 s^-2).
     pub const G: f64 = 6.67430e-11;
 
