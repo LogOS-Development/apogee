@@ -4,11 +4,13 @@ pub mod clock;
 pub mod eop;
 pub mod frame_service;
 pub mod leap_seconds;
+pub mod nutation_precession;
 
 pub use clock::*;
 pub use eop::*;
 pub use frame_service::*;
 pub use leap_seconds::*;
+pub use nutation_precession::*;
 
 /// Reference frames supported by Apogee.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
