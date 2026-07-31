@@ -47,9 +47,6 @@ const ARCSEC: f64 = 4.84813681109536e-6;
 /// Tolerance for milliarcsecond comparisons (1 mas in radians).
 const MAS: f64 = 4.84813681109536e-9;
 
-/// Tolerance for microarcsecond comparisons (1 μas in radians).
-const UAS: f64 = 4.84813681109536e-12;
-
 /// J2000 epoch: 2000-01-01 12:00:00 TDB
 fn j2000() -> Epoch {
     Epoch::from_gregorian(2000, 1, 1, 12, 0, 0, 0, TimeScale::TDB)
