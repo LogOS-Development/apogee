@@ -73,16 +73,17 @@ jobs:
       - name: Extract coverage percentage
         id: cov
         run: |
-          # Parse lcov.info to compute coverage percentage
-          TOTAL_FOUND=$(grep -o 'DA:[0-9]*,[0-9]*' lcov.info | awk -F, '{print $2}' | paste -sd+ | bc || echo 0)
-          TOTAL_HIT=$(grep -o 'DA:[0-9]*,[0-9]*' lcov.info | awk -F, '{print $2}' | awk '$1>0{print 1}' | paste -sd+ | bc || echo 0)
+          # Parse lcov.info: DA:line,hit_count → covered = lines with hit>0
+          STATS=$(grep "^DA:" lcov.info | awk -F, '{total++; if ($2>0) hit++} END {printf "%d %d", total, hit}')
+          TOTAL_FOUND=$(echo $STATS | awk '{print $1}')
+          TOTAL_HIT=$(echo $STATS | awk '{print $2}')
           if [ "$TOTAL_FOUND" -gt 0 ]; then
             PCT=$(echo "scale=1; $TOTAL_HIT * 100 / $TOTAL_FOUND" | bc)
           else
             PCT="0.0"
           fi
           echo "percentage=$PCT" >> "$GITHUB_OUTPUT"
-          echo "Coverage: $PCT%"
+          echo "Coverage: $PCT% ($TOTAL_HIT/$TOTAL_FOUND lines)"
 
       - name: Generate coverage badge
         run: |
