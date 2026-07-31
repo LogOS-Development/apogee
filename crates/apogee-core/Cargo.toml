@@ -13,5 +13,7 @@ thiserror = { workspace = true }
 serde = { workspace = true }
 rayon = { workspace = true }
 tracing = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking"] }
 
 [dev-dependencies]
+approx = "0.5"
