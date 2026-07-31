@@ -18,7 +18,7 @@ authors = ["Apogee Contributors"]
 # Numerics
 nalgebra = "0.33"
 # Time
-hifitime = "3.9"
+hifitime = "4.3"
 # Errors
 thiserror = "1.0"
 # Serialization
