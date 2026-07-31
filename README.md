@@ -1,6 +1,7 @@
 # Apogee
 
 [![CI](https://github.com/ryansennis/apogee/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ryansennis/apogee/actions/workflows/ci.yml)
+[![Coverage](https://coveralls.io/repos/github/ryansennis/apogee/badge.svg?branch=main)](https://coveralls.io/github/ryansennis/apogee?branch=main)
 
 A multiplayer space simulation with an authoritative headless physics server and a Godot 4 client. Built in Rust for numerical fidelity — real JPL ephemeris, spherical harmonic gravity, NRLMSISE-00 atmosphere, and multi-rate integration.
 
