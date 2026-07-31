@@ -6,22 +6,22 @@
 //! # Test Sources
 //!
 //! Obliquity of the ecliptic at J2000:
-//! - Lieske, J.H., et al. (1977), Astron. Astrophys. 58, 1–16
-//!   https://ui.adsabs.harvard.edu/abs/1977A%26A....58....1L
-//! - Value verified against IAU 1976 constant: ε₀ = 23°26'21.448"
+//! - Lieske, J.H., et al. (1977), Astron. Astrophys. 58, 1-16
+//!   https://ui.adsabs.harvard.edu/abs/1977A%26A....58....1L/abstract
+//! - Value verified against IAU 1976 constant: epsilon_0 = 23d26'21.448"
 //!
-//! GMST at J2000.0 (280.460618°):
+//! GMST at J2000.0 (280.460618 deg):
 //! - Vallado, D.A. (2013), §3.4, Eq. (3-42)
-//!   https://www.sisostds.org/Downloads/Fundamentals_of_Astrodynamics_4th_ed.pdf
+//!   https://microcosmpress.com/publishing/fundamentals-of-astrodynamics-and-applications-fourth-edition/
 //! - IERS Conventions (2010), §5.4
 //!   https://iers-conventions.obspm.fr/content/tn36.pdf
 //!
-//! ICRF ↔ ECI J2000 offset (sub-arcsecond):
+//! ICRF2 realization (sub-arcsecond frame bias):
 //! - Fey, A.L., et al. (2009), IERS Technical Note 35
-//!   https://iers-conventions.obspm.fr/content/tn35.pdf
+//!   https://ui.adsabs.harvard.edu/abs/2009ITN....35.....F
 //! - ICRF2 realization: ~0.02 mas frame bias
 //!
-//! Rotation matrix orthogonality (R · R^T = I):
+//! Rotation matrix orthogonality (R * R^T = I):
 //! - Goldstein, H., Poole, C.P. & Safko, J.L. (2002),
 //!   "Classical Mechanics", 3rd ed., §4.2: Orthogonal Transformations
 

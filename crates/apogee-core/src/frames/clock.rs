@@ -7,7 +7,8 @@
 //!
 //! Time scale conversions (TDB, TAI, UTC, TT, GPS):
 //! - IAU 2006 Resolution B3: "Redefinition of Barycentric Dynamical Time, TDB"
-//!   https://www.iau.org/static/resolutions/IAU2006_ResolB3.pdf
+//!   (see IERS Conventions 2010, Ch. 1 for the adopted formulation)
+//!   https://iers-conventions.obspm.fr/content/tn36.pdf
 //! - IERS Conventions (2010), Petit & Luzum, IERS Technical Note 36, Ch. 1
 //!   https://iers-conventions.obspm.fr/content/tn36.pdf
 //! - hifitime documentation (time scale implementation):
@@ -15,11 +16,11 @@
 //!
 //! UT1-UTC via EOP:
 //! - IERS Conventions (2010), Ch. 5: "Transformation Between the ICRF and ITRF"
-//!   https://iers-conventions.obspm.fr/content/tn36.pdf (pp. 43–48)
-//! - IERS EOP 08 C04 format description:
-//!   https://iers-conventions.obspm.fr/content/eop/eop-c04-08.txt
-//! - USNO Circular 179: "Time and Frequency Services"
-//!   https://tycho.usno.navy.mil/circ179/c179.pdf
+//!   https://iers-conventions.obspm.fr/content/tn36.pdf (pp. 43-48)
+//! - IERS EOP 08 C04 data and format:
+//!   https://hpiers.obspm.fr/iers/eop/eopc04/
+//! - IERS Earth Orientation Parameters:
+//!   https://hpiers.obspm.fr/iers/eop/
 
 use hifitime::{Epoch, TimeScale, Unit};
 
@@ -91,7 +92,7 @@ impl ClockService {
     /// - IERS Conventions (2010), §5.4: UT1 from EOP data
     ///   https://iers-conventions.obspm.fr/content/tn36.pdf (p. 45)
     /// - McCarthy & Petit (2004), "IERS Conventions (2003)", IERS TN 32
-    ///   https://iers-conventions.obspm.fr/content/tn32.pdf (§4.3)
+    ///   https://ui.adsabs.harvard.edu/abs/2004ITN....32.....M (§4.3)
     pub fn utc_to_ut1(&self, utc: Epoch) -> Epoch {
         if let Some(ref eop) = self.eop {
             let mjd = utc.to_mjd_utc_days();

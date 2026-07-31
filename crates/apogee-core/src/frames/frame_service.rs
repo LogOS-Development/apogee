@@ -13,34 +13,29 @@
 //! Obliquity of the ecliptic (IAU 1976):
 //! - Lieske, J.H., et al. (1977), "Expressions for the Precession Quantities
 //!   Based upon the IAU (1976) System of Astronomical Constants",
-//!   Astron. Astrophys. 58, 1–16
-//!   https://ui.adsabs.harvard.edu/abs/1977A%26A....58....1L
-//! - IAU 1976 Resolution: Astronomical Constants
-//!   https://www.iau.org/static/resolutions/IAU1976_French.pdf
+//!   Astron. Astrophys. 58, 1-16
+//!   https://ui.adsabs.harvard.edu/abs/1977A%26A....58....1L/abstract
 //!
 //! GMST and sidereal time:
-//! - IAU 1982 Resolution C2: "Nutation and the Fundamental Catalogue"
-//!   https://www.iau.org/static/resolutions/IAU1982_French.pdf
 //! - Vallado, D.A. (2013), "Fundamentals of Astrodynamics and Applications",
-//!   4th ed., §3.4: Sidereal Time, pp. 183–192
-//!   https://www.sisostds.org/Downloads/Fundamentals_of_Astrodynamics_4th_ed.pdf
+//!   4th ed., Microcosm Press, §3.4: Sidereal Time, pp. 183-192
+//!   https://microcosmpress.com/publishing/fundamentals-of-astrodynamics-and-applications-fourth-edition/
 //! - The Astronomical Almanac (2024), USNO/UKHO, §B: Time and Sidereal Time
+//!   https://aa.usno.navy.mil/publications/
 //!
 //! Frame transformations (general):
 //! - IERS Conventions (2010), Petit & Luzum, IERS Technical Note 36, Ch. 5:
 //!   "Transformation Between the ICRF and ITRF"
 //!   https://iers-conventions.obspm.fr/content/tn36.pdf
-//! - Seidelmann, P.K. (Ed.) (2006), "Explanatory Supplement to the
-//!   Astronomical Almanac", Ch. 3: Coordinate Systems
-//!   https://aa.usno.navy.mil/publications/docs/exp_supp_ch03.pdf
+//! - Seidelmann, P.K. & Urban, S.E. (Eds.) (2013), "Explanatory Supplement to the
+//!   Astronomical Almanac", 3rd ed., University Science Books, Ch. 3
+//!   https://aa.usno.navy.mil/publications/exp_supp
 //!
-//! ICRF ↔ ECI J2000 offset:
-//! - IERS Conventions (2010), §5.1: Frame bias
-//!   https://iers-conventions.obspm.fr/content/tn36.pdf (p. 43)
+//! ICRF realization:
 //! - Fey, A.L., et al. (2009), "The Second Realization of the International
 //!   Celestial Reference Frame by Very Long Baseline Interferometry",
 //!   IERS Technical Note 35
-//!   https://iers-conventions.obspm.fr/content/tn35.pdf
+//!   https://ui.adsabs.harvard.edu/abs/2009ITN....35.....F
 
 use nalgebra::{Matrix3, Vector3};
 
@@ -50,8 +45,8 @@ use super::Frame;
 /// IAU 1976 value: 23°26'21.448" = 23.4392911°
 ///
 /// Reference:
-/// - Lieske, J.H., et al. (1977), Astron. Astrophys. 58, 1–16, Eq. (1)
-///   https://ui.adsabs.harvard.edu/abs/1977A%26A....58....1L
+/// - Lieske, J.H., et al. (1977), Astron. Astrophys. 58, 1-16, Eq. (1)
+///   https://ui.adsabs.harvard.edu/abs/1977A%26A....58....1L/abstract
 const OBLIQUITY_J2000: f64 = 23.4392911_f64.to_radians();
 
 /// Frame transformation service.
@@ -115,8 +110,9 @@ impl FrameService {
     /// Reference:
     /// - Murray, C.D. & Dermott, S.F. (1999), "Solar System Dynamics",
     ///   Cambridge Univ. Press, §1.2: Eq. (1.13)
-    /// - Lieske, J.H., et al. (1977), Astron. Astrophys. 58, 1–16
-    ///   https://ui.adsabs.harvard.edu/abs/1977A%26A....58....1L
+    ///   https://doi.org/10.1017/CBO9781139174817
+    /// - Lieske, J.H., et al. (1977), Astron. Astrophys. 58, 1-16
+    ///   https://ui.adsabs.harvard.edu/abs/1977A%26A....58....1L/abstract
     fn eci_to_ecliptic(&self) -> Matrix3<f64> {
         let c = OBLIQUITY_J2000.cos();
         let s = OBLIQUITY_J2000.sin();
@@ -131,10 +127,8 @@ impl FrameService {
     ///
     /// Reference:
     /// - Vallado, D.A. (2013), "Fundamentals of Astrodynamics and Applications",
-    ///   4th ed., §3.4, Eq. (3-42): GMST at 0h UT1
-    ///   https://www.sisostds.org/Downloads/Fundamentals_of_Astrodynamics_4th_ed.pdf
-    /// - IAU 1982 Resolution C2: GMST polynomial expression
-    ///   https://www.iau.org/static/resolutions/IAU1982_French.pdf
+    ///   4th ed., Microcosm Press, §3.4, Eq. (3-42): GMST at 0h UT1
+    ///   https://microcosmpress.com/publishing/fundamentals-of-astrodynamics-and-applications-fourth-edition/
     /// - IERS Conventions (2010), §5.4: Earth rotation angle
     ///   https://iers-conventions.obspm.fr/content/tn36.pdf (p. 45)
     fn eci_to_ecef(&self) -> Matrix3<f64> {
