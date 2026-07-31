@@ -17,6 +17,7 @@ name = "apogee-core"
 version = "0.1.0"
 dependencies = [
  "apogee-common",
+ "approx",
  "hifitime",
  "nalgebra",
  "rayon",

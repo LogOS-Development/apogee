@@ -42,6 +42,9 @@ jobs:
 
   coverage:
     name: Code Coverage
+    # Coverage badge generation should only happen on main, not on every
+    # feature branch push/PR, to avoid noisy badge commits and double uploads.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
