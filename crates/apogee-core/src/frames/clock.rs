@@ -7,16 +7,13 @@
 //!
 //! Time scale conversions (TDB, TAI, UTC, TT, GPS):
 //! - IAU 2006 Resolution B3: "Redefinition of Barycentric Dynamical Time, TDB"
-//!   (see IERS Conventions 2010, Ch. 1 for the adopted formulation)
-//!   https://iers-conventions.obspm.fr/content/tn36.pdf
-//! - IERS Conventions (2010), Petit & Luzum, IERS Technical Note 36, Ch. 1
+//!   (adopted formulation in IERS Conventions 2010, Ch. 1)
+//! - IERS Conventions (2010), Petit & Luzum, IERS Technical Note 36, Ch. 1 & Ch. 5
 //!   https://iers-conventions.obspm.fr/content/tn36.pdf
 //! - hifitime documentation (time scale implementation):
 //!   https://docs.rs/hifitime/latest/hifitime/enum.TimeScale.html
 //!
 //! UT1-UTC via EOP:
-//! - IERS Conventions (2010), Ch. 5: "Transformation Between the ICRF and ITRF"
-//!   https://iers-conventions.obspm.fr/content/tn36.pdf (pp. 43-48)
 //! - IERS EOP 08 C04 data and format:
 //!   https://hpiers.obspm.fr/iers/eop/eopc04/
 //! - IERS Earth Orientation Parameters:
