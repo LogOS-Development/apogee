@@ -66,11 +66,80 @@ jobs:
       - name: Generate coverage report
         run: cargo llvm-cov --workspace --lcov --output-path lcov.info
 
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+      - name: Extract coverage percentage
+        id: cov
+        run: |
+          # Parse lcov.info to compute coverage percentage
+          TOTAL_FOUND=$(grep -o 'DA:[0-9]*,[0-9]*' lcov.info | awk -F, '{print $2}' | paste -sd+ | bc || echo 0)
+          TOTAL_HIT=$(grep -o 'DA:[0-9]*,[0-9]*' lcov.info | awk -F, '{print $2}' | awk '$1>0{print 1}' | paste -sd+ | bc || echo 0)
+          if [ "$TOTAL_FOUND" -gt 0 ]; then
+            PCT=$(echo "scale=1; $TOTAL_HIT * 100 / $TOTAL_FOUND" | bc)
+          else
+            PCT="0.0"
+          fi
+          echo "percentage=$PCT" >> "$GITHUB_OUTPUT"
+          echo "Coverage: $PCT%"
+
+      - name: Generate coverage badge
+        run: |
+          PCT="${{ steps.cov.outputs.percentage }}"
+          # Color: red <60, orange <80, yellow <90, green >=90
+          if (( $(echo "$PCT >= 90" | bc -l) )); then
+            COLOR="4c1"
+          elif (( $(echo "$PCT >= 80" | bc -l) )); then
+            COLOR="dfb317"
+          elif (( $(echo "$PCT >= 60" | bc -l) )); then
+            COLOR="fe7d37"
+          else
+            COLOR="e05d44"
+          fi
+          LABEL="coverage"
+          # Calculate width based on text length
+          VALUE="${PCT}%"
+          LABEL_W=70
+          VALUE_W=$(( ${#VALUE} * 8 + 10 ))
+          TOTAL_W=$(( LABEL_W + VALUE_W ))
+          cat > .github/badge-coverage.svg << EOF
+          <svg xmlns="http://www.w3.org/2000/svg" width="$TOTAL_W" height="20">
+            <linearGradient id="b" x2="0" y2="100%">
+              <stop offset="0" stop-color="#bbb" stop-opacity=".1"/>
+              <stop offset="1" stop-opacity=".1"/>
+            </linearGradient>
+            <mask id="a">
+              <rect width="$TOTAL_W" height="20" rx="3" fill="#fff"/>
+            </mask>
+            <g mask="url(#a)">
+              <path fill="#555" d="M0 0h$LABEL_W v20H0z"/>
+              <path fill="#$COLOR" d="M$LABEL_W 0h$VALUE_W v20H$LABEL_W z"/>
+              <path fill="url(#b)" d="M0 0h$TOTAL_W v20H0z"/>
+            </g>
+            <g fill="#fff" text-anchor="middle" font-family="Verdana,DejaVu Sans,sans-serif" font-size="11">
+              <text x="$(( LABEL_W / 2 ))" y="14" fill="#010101" fill-opacity=".3">$LABEL</text>
+              <text x="$(( LABEL_W / 2 ))" y="13">$LABEL</text>
+              <text x="$(( LABEL_W + VALUE_W / 2 ))" y="14" fill="#010101" fill-opacity=".3">$VALUE</text>
+              <text x="$(( LABEL_W + VALUE_W / 2 ))" y="13">$VALUE</text>
+            </g>
+          </svg>
+          EOF
+
+      - name: Commit badge
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/badge-coverage.svg
+          if git diff --cached --quiet; then
+            echo "No badge changes to commit"
+          else
+            git commit -m "chore: update coverage badge [skip ci]"
+            git push
+          fi
+
+      - name: Upload lcov artifact
+        uses: actions/upload-artifact@v4
         with:
-          files: lcov.info
-          fail_ci_if_error: false
+          name: lcov-report
+          path: lcov.info
+          retention-days: 7
 
   build-server:
     name: Build Server Binary
