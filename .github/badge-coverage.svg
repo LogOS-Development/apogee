@@ -1,20 +1,20 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="112" height="20">
+<svg xmlns="http://www.w3.org/2000/svg" width="110" height="20">
   <linearGradient id="b" x2="0" y2="100%">
     <stop offset="0" stop-color="#bbb" stop-opacity=".1"/>
     <stop offset="1" stop-opacity=".1"/>
   </linearGradient>
   <mask id="a">
-    <rect width="112" height="20" rx="3" fill="#fff"/>
+    <rect width="110" height="20" rx="3" fill="#fff"/>
   </mask>
   <g mask="url(#a)">
-    <path fill="#555" d="M0 0h70 v20H0z"/>
-    <path fill="#e05d44" d="M70 0h42 v20H70 z"/>
-    <path fill="url(#b)" d="M0 0h112 v20H0z"/>
+    <path fill="#555" d="M0 0h70v20H0z"/>
+    <path fill="#fe7d37" d="M70 0h40v20H70z"/>
+    <path fill="url(#b)" d="M0 0h110v20H0z"/>
   </g>
   <g fill="#fff" text-anchor="middle" font-family="Verdana,DejaVu Sans,sans-serif" font-size="11">
     <text x="35" y="14" fill="#010101" fill-opacity=".3">coverage</text>
     <text x="35" y="13">coverage</text>
-    <text x="91" y="14" fill="#010101" fill-opacity=".3">0.0%</text>
-    <text x="91" y="13">0.0%</text>
+    <text x="90" y="14" fill="#010101" fill-opacity=".3">73.7%</text>
+    <text x="90" y="13">73.7%</text>
   </g>
 </svg>
