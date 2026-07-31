@@ -10,10 +10,8 @@
 //!   https://ui.adsabs.harvard.edu/abs/1977A%26A....58....1L/abstract
 //! - Value verified against IAU 1976 constant: epsilon_0 = 23d26'21.448"
 //!
-//! GMST at J2000.0 (280.460618 deg):
-//! - Vallado, D.A. (2013), §3.4, Eq. (3-42)
-//!   https://microcosmpress.com/publishing/fundamentals-of-astrodynamics-and-applications-fourth-edition/
-//! - IERS Conventions (2010), §5.4
+//! Earth Rotation Angle:
+//! - IERS Conventions (2010), Eq. (5.15)
 //!   https://iers-conventions.obspm.fr/content/tn36.pdf
 //!
 //! ICRF2 realization (sub-arcsecond frame bias):
@@ -27,7 +25,12 @@
 
 use crate::frames::frame_service::FrameService;
 use crate::frames::Frame;
+use hifitime::{Epoch, TimeScale};
 use nalgebra::{Matrix3, Vector3};
+
+fn j2000() -> Epoch {
+    Epoch::from_gregorian(2000, 1, 1, 12, 0, 0, 0, TimeScale::TDB)
+}
 
 fn approx_eq_matrix(a: &Matrix3<f64>, b: &Matrix3<f64>, tol: f64) -> bool {
     (a - b).abs().max() < tol
@@ -39,23 +42,17 @@ fn approx_eq_vec(a: &Vector3<f64>, b: &Vector3<f64>, tol: f64) -> bool {
 
 #[test]
 fn test_eci_to_ecliptic_obliquity() {
-    // The obliquity of the ecliptic at J2000 is ~23.4392911 degrees
-    // A vector along the x-axis (vernal equinox direction) should be unchanged
     let svc = FrameService::new();
     let pos_eci = Vector3::new(1.0, 0.0, 0.0);
-    let pos_ecl = svc.transform_position(&pos_eci, Frame::Eci, Frame::EclipticJ2000);
-    // X-axis (vernal equinox) is in both the equatorial and ecliptic planes
+    let pos_ecl = svc.transform_position(&pos_eci, Frame::Eci, Frame::EclipticJ2000, j2000());
     assert!(approx_eq_vec(&pos_ecl, &pos_eci, 1e-10));
 }
 
 #[test]
 fn test_eci_to_ecliptic_z_axis() {
-    // A vector along the z-axis (north celestial pole) should map to
-    // z * cos(obliquity) in the ecliptic frame's y/z components
     let svc = FrameService::new();
     let pos_eci = Vector3::new(0.0, 0.0, 1.0);
-    let pos_ecl = svc.transform_position(&pos_eci, Frame::Eci, Frame::EclipticJ2000);
-    // The ecliptic z-axis is tilted by obliquity from the equatorial z-axis
+    let pos_ecl = svc.transform_position(&pos_eci, Frame::Eci, Frame::EclipticJ2000, j2000());
     let obliquity = 23.4392911_f64.to_radians();
     let expected = Vector3::new(0.0, -obliquity.sin(), obliquity.cos());
     assert!(approx_eq_vec(&pos_ecl, &expected, 1e-6));
@@ -63,21 +60,18 @@ fn test_eci_to_ecliptic_z_axis() {
 
 #[test]
 fn test_ecliptic_to_eci_inverse() {
-    // ECI → ECLIPJ2000 → ECI should roundtrip
     let svc = FrameService::new();
     let pos = Vector3::new(0.5, 0.3, 0.8);
-    let pos_ecl = svc.transform_position(&pos, Frame::Eci, Frame::EclipticJ2000);
-    let pos_back = svc.transform_position(&pos_ecl, Frame::EclipticJ2000, Frame::Eci);
+    let pos_ecl = svc.transform_position(&pos, Frame::Eci, Frame::EclipticJ2000, j2000());
+    let pos_back = svc.transform_position(&pos_ecl, Frame::EclipticJ2000, Frame::Eci, j2000());
     assert!(approx_eq_vec(&pos_back, &pos, 1e-10));
 }
 
 #[test]
-fn test_icrf_to_eci_near_identity() {
-    // ICRF and ECI (J2000) are very close — the rotation is sub-arcsecond
+fn test_icrf_to_eci_near_identity_at_j2000() {
     let svc = FrameService::new();
     let pos = Vector3::new(1.0e8, 2.0e8, 3.0e8);
-    let pos_icrf = svc.transform_position(&pos, Frame::Eci, Frame::Icrf);
-    // Difference should be < 0.1 arcsecond = ~5e-7 radians
+    let pos_icrf = svc.transform_position(&pos, Frame::Eci, Frame::Icrf, j2000());
     let diff = (pos_icrf - pos).norm();
     assert!(
         diff / pos.norm() < 1e-6,
@@ -87,46 +81,38 @@ fn test_icrf_to_eci_near_identity() {
 }
 
 #[test]
-fn test_eci_to_ecef_identity_at_j2000() {
-    // At J2000 epoch, GMST = 0 (approximately), so ECI and ECEF z-axes align
-    // The rotation is purely about the z-axis by the Greenwich hour angle
+fn test_eci_to_ecef_applies_earth_rotation_angle() {
+    // ECI x-axis at J2000 should rotate by -ERA around the common z-axis
+    // when transformed to ECEF.
     let svc = FrameService::new();
     let pos_eci = Vector3::new(1.0, 0.0, 0.0);
-    // At J2000.0, the GMST is ~280.46 degrees, not zero
-    // The key test is that the rotation is a proper rotation (orthogonal matrix)
-    let pos_ecef = svc.transform_position(&pos_eci, Frame::Eci, Frame::Ecef);
-    // The norm should be preserved
-    assert!((pos_ecef.norm() - pos_eci.norm()).abs() < 1e-10);
-}
+    let pos_ecef = svc.transform_position(&pos_eci, Frame::Eci, Frame::Ecef, j2000());
 
-#[test]
-fn test_eci_to_ecef_z_axis_unchanged() {
-    // ECI to ECEF is a rotation about the z-axis (Earth rotation axis)
-    // The z-component should be unchanged
-    let svc = FrameService::new();
-    let pos_eci = Vector3::new(1.0e7, 2.0e7, 3.0e7);
-    let pos_ecef = svc.transform_position(&pos_eci, Frame::Eci, Frame::Ecef);
+    // ERA at J2000 from IERS Conventions (2010), Eq. (5.15).
+    let era = 280.4606183744_f64.to_radians();
+    let expected = Vector3::new(era.cos(), -era.sin(), 0.0);
+
     assert!(
-        (pos_ecef.z - pos_eci.z).abs() < 1e-3,
-        "Z component changed: {}",
-        pos_ecef.z - pos_eci.z
+        approx_eq_vec(&pos_ecef, &expected, 1e-4),
+        "ECI x-axis at J2000 should map to ECEF at -ERA, expected {} got {}",
+        expected,
+        pos_ecef
     );
 }
 
 #[test]
 fn test_ecef_to_eci_roundtrip() {
     let svc = FrameService::new();
-    let pos = Vector3::new(7000.0, 0.0, 0.0); // LEO altitude
-    let pos_ecef = svc.transform_position(&pos, Frame::Eci, Frame::Ecef);
-    let pos_back = svc.transform_position(&pos_ecef, Frame::Ecef, Frame::Eci);
+    let pos = Vector3::new(7000.0, 0.0, 0.0);
+    let pos_ecef = svc.transform_position(&pos, Frame::Eci, Frame::Ecef, j2000());
+    let pos_back = svc.transform_position(&pos_ecef, Frame::Ecef, Frame::Eci, j2000());
     assert!(approx_eq_vec(&pos_back, &pos, 1e-6));
 }
 
 #[test]
 fn test_rotation_matrix_orthogonal() {
-    // The rotation matrix from ECI to ECEF should be orthogonal (R * R^T = I)
     let svc = FrameService::new();
-    let r = svc.rotation_matrix(Frame::Eci, Frame::Ecef);
+    let r = svc.rotation_matrix(Frame::Eci, Frame::Ecef, j2000());
     let product = r * r.transpose();
     let identity = Matrix3::identity();
     assert!(approx_eq_matrix(&product, &identity, 1e-10));
@@ -135,7 +121,7 @@ fn test_rotation_matrix_orthogonal() {
 #[test]
 fn test_ecliptic_rotation_orthogonal() {
     let svc = FrameService::new();
-    let r = svc.rotation_matrix(Frame::Eci, Frame::EclipticJ2000);
+    let r = svc.rotation_matrix(Frame::Eci, Frame::EclipticJ2000, j2000());
     let product = r * r.transpose();
     let identity = Matrix3::identity();
     assert!(approx_eq_matrix(&product, &identity, 1e-10));
@@ -143,10 +129,37 @@ fn test_ecliptic_rotation_orthogonal() {
 
 #[test]
 fn test_transform_velocity_preserves_norm() {
-    // Transforming a velocity vector should preserve its magnitude
-    // (rotation matrices are norm-preserving)
     let svc = FrameService::new();
-    let vel = Vector3::new(7.5, 0.0, 0.0); // ~LEO velocity km/s
-    let vel_ecl = svc.transform_velocity(&vel, Frame::Eci, Frame::EclipticJ2000);
+    let vel = Vector3::new(7.5, 0.0, 0.0);
+    let vel_ecl = svc.transform_velocity(&vel, Frame::Eci, Frame::EclipticJ2000, j2000());
     assert!((vel_ecl.norm() - vel.norm()).abs() < 1e-10);
+}
+
+#[test]
+fn test_earth_rotation_angle_at_j2000() {
+    let svc = FrameService::new();
+    let era = svc.earth_rotation_angle(j2000());
+    let expected = 280.4606183744_f64.to_radians();
+    let diff = (era - expected).abs();
+    let wrapped = diff.min(std::f64::consts::TAU - diff);
+    assert!(wrapped < 1e-6, "ERA at J2000 = {} rad", era);
+}
+
+#[test]
+fn test_earth_rotation_angle_at_2025() {
+    let svc = FrameService::new();
+    let epoch = Epoch::from_gregorian(2025, 1, 1, 12, 0, 0, 0, TimeScale::TDB);
+    let era = svc.earth_rotation_angle(epoch);
+    let expected = 281.07203336_f64.to_radians();
+    let diff = (era - expected).abs();
+    let wrapped = diff.min(std::f64::consts::TAU - diff);
+    assert!(wrapped < 1e-6, "ERA at 2025 = {} rad", era);
+}
+
+#[test]
+fn test_icrf_to_ecef_at_j2000_orthogonal() {
+    let svc = FrameService::new();
+    let r = svc.rotation_matrix(Frame::Icrf, Frame::Ecef, j2000());
+    let product = r * r.transpose();
+    assert!(approx_eq_matrix(&product, &Matrix3::identity(), 1e-10));
 }

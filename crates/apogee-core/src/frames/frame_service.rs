@@ -36,10 +36,15 @@
 //!   Celestial Reference Frame by Very Long Baseline Interferometry",
 //!   IERS Technical Note 35
 //!   https://ui.adsabs.harvard.edu/abs/2009ITN....35.....F
+//!
+//! Earth Rotation Angle (ERA):
+//! - IERS Conventions (2010), Eq. (5.15)
+//!   https://iers-conventions.obspm.fr/content/tn36.pdf
 
+use hifitime::{Epoch, TimeScale};
 use nalgebra::{Matrix3, Vector3};
 
-use super::Frame;
+use super::{EopData, Frame, NutationPrecessionModel};
 
 /// Obliquity of the ecliptic at J2000 epoch (radians).
 /// IAU 1976 value: 23°26'21.448" = 23.4392911°
@@ -49,94 +54,201 @@ use super::Frame;
 ///   https://ui.adsabs.harvard.edu/abs/1977A%26A....58....1L/abstract
 const OBLIQUITY_J2000: f64 = 23.4392911_f64.to_radians();
 
+/// 1 arcsecond in radians.
+const ARCS: f64 = std::f64::consts::PI / 180.0 / 3600.0;
+
 /// Frame transformation service.
 #[derive(Debug, Default)]
-pub struct FrameService {}
+pub struct FrameService {
+    nutation_precession: NutationPrecessionModel,
+    eop: Option<EopData>,
+}
 
 impl FrameService {
     pub fn new() -> Self {
-        Self {}
-    }
-
-    /// Get the rotation matrix from one frame to another.
-    pub fn rotation_matrix(&self, from: Frame, to: Frame) -> Matrix3<f64> {
-        match (from, to) {
-            (Frame::Eci, Frame::EclipticJ2000) => self.eci_to_ecliptic(),
-            (Frame::EclipticJ2000, Frame::Eci) => self.eci_to_ecliptic().transpose(),
-            (Frame::Eci, Frame::Icrf) => Matrix3::identity(),
-            (Frame::Icrf, Frame::Eci) => Matrix3::identity(),
-            (Frame::Eci, Frame::Ecef) => self.eci_to_ecef(),
-            (Frame::Ecef, Frame::Eci) => self.eci_to_ecef().transpose(),
-            (Frame::Icrf, Frame::EclipticJ2000) => {
-                self.rotation_matrix(Frame::Icrf, Frame::Eci) * self.eci_to_ecliptic()
-            }
-            (Frame::EclipticJ2000, Frame::Icrf) => {
-                self.eci_to_ecliptic().transpose() * self.rotation_matrix(Frame::Eci, Frame::Icrf)
-            }
-            (Frame::Icrf, Frame::Ecef) => {
-                self.rotation_matrix(Frame::Icrf, Frame::Eci) * self.eci_to_ecef()
-            }
-            (Frame::Ecef, Frame::Icrf) => {
-                self.eci_to_ecef().transpose() * self.rotation_matrix(Frame::Eci, Frame::Icrf)
-            }
-            (Frame::EclipticJ2000, Frame::Ecef) => {
-                self.rotation_matrix(Frame::EclipticJ2000, Frame::Eci) * self.eci_to_ecef()
-            }
-            (Frame::Ecef, Frame::EclipticJ2000) => {
-                self.eci_to_ecef().transpose() * self.eci_to_ecliptic()
-            }
-            _ => Matrix3::identity(),
+        Self {
+            nutation_precession: NutationPrecessionModel::new(),
+            eop: None,
         }
     }
 
-    /// Transform a position vector from one frame to another.
-    pub fn transform_position(&self, pos: &Vector3<f64>, from: Frame, to: Frame) -> Vector3<f64> {
-        self.rotation_matrix(from, to) * pos
+    /// Create a FrameService with Earth Orientation Parameters for
+    /// high-precision ICRF↔ITRF transformations.
+    pub fn with_eop(eop: EopData) -> Self {
+        Self {
+            nutation_precession: NutationPrecessionModel::new(),
+            eop: Some(eop),
+        }
     }
 
-    /// Transform a velocity vector from one frame to another.
-    /// For pure rotations (no time-varying component), this is the same as
-    /// transforming a position. For ECI↔ECEF, the full transform includes a
-    /// velocity cross-term from Earth rotation, but for the static rotation
-    /// matrix case, it's just R * v.
-    pub fn transform_velocity(&self, vel: &Vector3<f64>, from: Frame, to: Frame) -> Vector3<f64> {
-        self.rotation_matrix(from, to) * vel
+    /// Get the rotation matrix from one frame to another at a given epoch.
+    ///
+    /// For epoch-independent pairs (Eci↔EclipticJ2000, Eci↔Icrf) the epoch
+    /// is ignored. For Eci↔Ecef the epoch is used to compute GMST and, when
+    /// EOP data is available, the polar-motion matrix.
+    pub fn rotation_matrix(&self, from: Frame, to: Frame, epoch: Epoch) -> Matrix3<f64> {
+        match (from, to) {
+            _ if from == to => Matrix3::identity(),
+            (Frame::Eci, Frame::EclipticJ2000) => self.eci_to_ecliptic(),
+            (Frame::EclipticJ2000, Frame::Eci) => self.eci_to_ecliptic().transpose(),
+            (Frame::Eci, Frame::Icrf) => self.icrf_to_eci(epoch).transpose(),
+            (Frame::Icrf, Frame::Eci) => self.icrf_to_eci(epoch),
+            (Frame::Eci, Frame::Ecef) => self.eci_to_ecef(epoch),
+            (Frame::Ecef, Frame::Eci) => self.eci_to_ecef(epoch).transpose(),
+            (Frame::Icrf, Frame::EclipticJ2000) => {
+                self.rotation_matrix(Frame::Icrf, Frame::Eci, epoch) * self.eci_to_ecliptic()
+            }
+            (Frame::EclipticJ2000, Frame::Icrf) => {
+                self.eci_to_ecliptic().transpose()
+                    * self.rotation_matrix(Frame::Eci, Frame::Icrf, epoch)
+            }
+            (Frame::Icrf, Frame::Ecef) => {
+                self.rotation_matrix(Frame::Icrf, Frame::Eci, epoch) * self.eci_to_ecef(epoch)
+            }
+            (Frame::Ecef, Frame::Icrf) => {
+                self.eci_to_ecef(epoch).transpose()
+                    * self.rotation_matrix(Frame::Eci, Frame::Icrf, epoch)
+            }
+            (Frame::EclipticJ2000, Frame::Ecef) => {
+                self.rotation_matrix(Frame::EclipticJ2000, Frame::Eci, epoch)
+                    * self.eci_to_ecef(epoch)
+            }
+            (Frame::Ecef, Frame::EclipticJ2000) => {
+                self.eci_to_ecef(epoch).transpose() * self.eci_to_ecliptic()
+            }
+            (Frame::BodyFixed(_), _) | (_, Frame::BodyFixed(_)) => {
+                // Body-fixed frames require a planetary rotation model;
+                // not implemented in phase 1.1.
+                Matrix3::identity()
+            }
+            _ => {
+                // Fallback for any uncovered same-frame pairs (should be
+                // unreachable because of the identity arm above).
+                Matrix3::identity()
+            }
+        }
+    }
+
+    /// Transform a position vector from one frame to another at an epoch.
+    pub fn transform_position(
+        &self,
+        pos: &Vector3<f64>,
+        from: Frame,
+        to: Frame,
+        epoch: Epoch,
+    ) -> Vector3<f64> {
+        self.rotation_matrix(from, to, epoch) * pos
+    }
+
+    /// Transform a velocity vector from one frame to another at an epoch.
+    ///
+    /// For pure rotations this is the same as a position transform. For
+    /// ECI↔ECEF the caller is responsible for adding the Earth-rotation
+    /// cross-term when full velocity transformation is required.
+    pub fn transform_velocity(
+        &self,
+        vel: &Vector3<f64>,
+        from: Frame,
+        to: Frame,
+        epoch: Epoch,
+    ) -> Vector3<f64> {
+        self.rotation_matrix(from, to, epoch) * vel
+    }
+
+    /// Rotation matrix from ICRF to the J2000 mean equator/equinox (ECI).
+    ///
+    /// ICRF and the J2000 mean equator/equinox are related by the IAU 2000
+    /// frame bias only (a sub-arcsecond rotation). Nutation and precession
+    /// are not included because ECI is a mean-of-date frame fixed at J2000.
+    fn icrf_to_eci(&self, _epoch: Epoch) -> Matrix3<f64> {
+        self.nutation_precession.frame_bias_matrix().transpose()
+    }
+
+    /// Rotation matrix from ECI (J2000) to ECEF at the given epoch.
+    ///
+    /// This is the bias-precession-nutation matrix (BPN) followed by the
+    /// Earth-rotation matrix R_z(-ERA) and the polar-motion matrix W:
+    ///
+    ///   ECEF = W · R_z(-ERA) · N · P · B · ECI
+    ///
+    /// When EOP data is unavailable the polar-motion matrix is the identity.
+    fn eci_to_ecef(&self, epoch: Epoch) -> Matrix3<f64> {
+        let bpn = self.nutation_precession.gcrf_to_tod_matrix(epoch);
+        let era = self.earth_rotation_angle(epoch);
+        let c = era.cos();
+        let s = era.sin();
+        // R_z(-ERA)
+        let r = Matrix3::new(c, s, 0.0, -s, c, 0.0, 0.0, 0.0, 1.0);
+        let earth_rot = r * bpn;
+
+        if let Some(eop) = &self.eop {
+            let mjd_utc = epoch.to_time_scale(TimeScale::UTC).to_mjd_utc_days();
+            if let Some(entry) = eop.at_mjd(mjd_utc) {
+                let w = polar_motion_matrix(entry.x_pole, entry.y_pole);
+                return w * earth_rot;
+            }
+        }
+
+        earth_rot
+    }
+
+    /// Earth Rotation Angle (ERA) in radians from UT1 at the given epoch.
+    ///
+    /// # References
+    ///
+    /// - IERS Conventions (2010), Eq. (5.15)
+    ///   https://iers-conventions.obspm.fr/content/tn36.pdf
+    pub fn earth_rotation_angle(&self, epoch: Epoch) -> f64 {
+        let jd_ut1 = self.jd_ut1(epoch);
+        let d = jd_ut1 - 2_451_545.0;
+        let fraction = 0.779_057_273_264_0 + 1.002_737_811_911_354_6 * d;
+        let era = (fraction % 1.0) * std::f64::consts::TAU;
+        if era < 0.0 {
+            era + std::f64::consts::TAU
+        } else {
+            era
+        }
+    }
+
+    fn jd_ut1(&self, epoch: Epoch) -> f64 {
+        // Use the TT-scale JD as the continuous time proxy, then apply the
+        // UT1-UTC correction from EOP. This aligns the J2000.0 reference
+        // (JD 2451545.0) correctly across time scales.
+        let jd_tt = epoch.to_jde_tt_days();
+        let mjd_utc = epoch.to_time_scale(TimeScale::UTC).to_mjd_utc_days();
+        let ut1_utc = self
+            .eop
+            .as_ref()
+            .and_then(|eop| eop.at_mjd(mjd_utc))
+            .map(|e| e.ut1_utc)
+            .unwrap_or(0.0);
+        jd_tt + ut1_utc / 86_400.0
     }
 
     /// Rotation matrix from ECI (J2000 equatorial) to ECLIPJ2000.
-    /// Rotation about the x-axis by negative obliquity (tilting the equator
-    /// down to the ecliptic plane).
-    ///
-    /// Reference:
-    /// - Murray, C.D. & Dermott, S.F. (1999), "Solar System Dynamics",
-    ///   Cambridge Univ. Press, §1.2: Eq. (1.13)
-    ///   https://doi.org/10.1017/CBO9781139174817
-    /// - Lieske, J.H., et al. (1977), Astron. Astrophys. 58, 1-16
-    ///   https://ui.adsabs.harvard.edu/abs/1977A%26A....58....1L/abstract
     fn eci_to_ecliptic(&self) -> Matrix3<f64> {
         let c = OBLIQUITY_J2000.cos();
         let s = OBLIQUITY_J2000.sin();
         // R_x(-ε) = [[1, 0, 0], [0, cos(ε), -sin(ε)], [0, sin(ε), cos(ε)]]
         Matrix3::new(1.0, 0.0, 0.0, 0.0, c, -s, 0.0, s, c)
     }
+}
 
-    /// Rotation matrix from ECI (J2000) to ECEF.
-    /// Rotation about the z-axis by the Greenwich Mean Sidereal Time (GMST).
-    /// At J2000.0 epoch (2000-01-01 12:00 TT), GMST ≈ 280.460618°.
-    /// For the static case (no epoch parameter yet), use J2000 GMST.
-    ///
-    /// Reference:
-    /// - Vallado, D.A. (2013), "Fundamentals of Astrodynamics and Applications",
-    ///   4th ed., Microcosm Press, §3.4, Eq. (3-42): GMST at 0h UT1
-    ///   https://microcosmpress.com/publishing/fundamentals-of-astrodynamics-and-applications-fourth-edition/
-    /// - IERS Conventions (2010), §5.4: Earth rotation angle
-    ///   https://iers-conventions.obspm.fr/content/tn36.pdf (p. 45)
-    fn eci_to_ecef(&self) -> Matrix3<f64> {
-        // GMST at J2000.0 in radians
-        let gmst = 280.4606183744_f64.to_radians();
-        let c = gmst.cos();
-        let s = gmst.sin();
-        // R_z(θ) = [[cos(θ), sin(θ), 0], [-sin(θ), cos(θ), 0], [0, 0, 1]]
-        Matrix3::new(c, s, 0.0, -s, c, 0.0, 0.0, 0.0, 1.0)
-    }
+/// Polar motion matrix W = R_y(-x_pole) R_x(-y_pole).
+///
+/// x_pole and y_pole are in arcseconds. Returns the small rotation from
+/// the terrestrial intermediate frame to ITRF/ECEF.
+fn polar_motion_matrix(x_pole: f64, y_pole: f64) -> Matrix3<f64> {
+    let x = x_pole * ARCS;
+    let y = y_pole * ARCS;
+    let cx = x.cos();
+    let sx = x.sin();
+    let cy = y.cos();
+    let sy = y.sin();
+
+    // R_y(-x) R_x(-y) =
+    // [[ cx, sx*sy, sx*cy ],
+    //  [ 0,   cy,    -sy  ],
+    //  [-sx,  cx*sy, cx*cy ]]
+    Matrix3::new(cx, sx * sy, sx * cy, 0.0, cy, -sy, -sx, cx * sy, cx * cy)
 }

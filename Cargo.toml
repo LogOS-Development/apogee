@@ -33,3 +33,5 @@ rayon = "1.10"
 apogee-common = { path = "crates/apogee-common" }
 apogee-core = { path = "crates/apogee-core" }
 apogee-net = { path = "crates/apogee-net" }
+# EOP cache directory
+# dirs = "5.0"
