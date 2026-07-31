@@ -7,6 +7,40 @@
 //! - ECI ↔ ECLIPJ2000: rotation about x-axis by obliquity of ecliptic
 //! - ECI ↔ ICRF: near-identity (ICRF and ECI J2000 differ by <0.1 arcsecond)
 //! - ECI ↔ ECEF: rotation about z-axis by Greenwich Sidereal Time (GMST)
+//!
+//! # References
+//!
+//! Obliquity of the ecliptic (IAU 1976):
+//! - Lieske, J.H., et al. (1977), "Expressions for the Precession Quantities
+//!   Based upon the IAU (1976) System of Astronomical Constants",
+//!   Astron. Astrophys. 58, 1–16
+//!   https://ui.adsabs.harvard.edu/abs/1977A%26A....58....1L
+//! - IAU 1976 Resolution: Astronomical Constants
+//!   https://www.iau.org/static/resolutions/IAU1976_French.pdf
+//!
+//! GMST and sidereal time:
+//! - IAU 1982 Resolution C2: "Nutation and the Fundamental Catalogue"
+//!   https://www.iau.org/static/resolutions/IAU1982_French.pdf
+//! - Vallado, D.A. (2013), "Fundamentals of Astrodynamics and Applications",
+//!   4th ed., §3.4: Sidereal Time, pp. 183–192
+//!   https://www.sisostds.org/Downloads/Fundamentals_of_Astrodynamics_4th_ed.pdf
+//! - The Astronomical Almanac (2024), USNO/UKHO, §B: Time and Sidereal Time
+//!
+//! Frame transformations (general):
+//! - IERS Conventions (2010), Petit & Luzum, IERS Technical Note 36, Ch. 5:
+//!   "Transformation Between the ICRF and ITRF"
+//!   https://iers-conventions.obspm.fr/content/tn36.pdf
+//! - Seidelmann, P.K. (Ed.) (2006), "Explanatory Supplement to the
+//!   Astronomical Almanac", Ch. 3: Coordinate Systems
+//!   https://aa.usno.navy.mil/publications/docs/exp_supp_ch03.pdf
+//!
+//! ICRF ↔ ECI J2000 offset:
+//! - IERS Conventions (2010), §5.1: Frame bias
+//!   https://iers-conventions.obspm.fr/content/tn36.pdf (p. 43)
+//! - Fey, A.L., et al. (2009), "The Second Realization of the International
+//!   Celestial Reference Frame by Very Long Baseline Interferometry",
+//!   IERS Technical Note 35
+//!   https://iers-conventions.obspm.fr/content/tn35.pdf
 
 use nalgebra::{Matrix3, Vector3};
 
@@ -14,6 +48,10 @@ use super::Frame;
 
 /// Obliquity of the ecliptic at J2000 epoch (radians).
 /// IAU 1976 value: 23°26'21.448" = 23.4392911°
+///
+/// Reference:
+/// - Lieske, J.H., et al. (1977), Astron. Astrophys. 58, 1–16, Eq. (1)
+///   https://ui.adsabs.harvard.edu/abs/1977A%26A....58....1L
 const OBLIQUITY_J2000: f64 = 23.4392911_f64.to_radians();
 
 /// Frame transformation service.
@@ -73,6 +111,12 @@ impl FrameService {
     /// Rotation matrix from ECI (J2000 equatorial) to ECLIPJ2000.
     /// Rotation about the x-axis by negative obliquity (tilting the equator
     /// down to the ecliptic plane).
+    ///
+    /// Reference:
+    /// - Murray, C.D. & Dermott, S.F. (1999), "Solar System Dynamics",
+    ///   Cambridge Univ. Press, §1.2: Eq. (1.13)
+    /// - Lieske, J.H., et al. (1977), Astron. Astrophys. 58, 1–16
+    ///   https://ui.adsabs.harvard.edu/abs/1977A%26A....58....1L
     fn eci_to_ecliptic(&self) -> Matrix3<f64> {
         let c = OBLIQUITY_J2000.cos();
         let s = OBLIQUITY_J2000.sin();
@@ -84,6 +128,15 @@ impl FrameService {
     /// Rotation about the z-axis by the Greenwich Mean Sidereal Time (GMST).
     /// At J2000.0 epoch (2000-01-01 12:00 TT), GMST ≈ 280.460618°.
     /// For the static case (no epoch parameter yet), use J2000 GMST.
+    ///
+    /// Reference:
+    /// - Vallado, D.A. (2013), "Fundamentals of Astrodynamics and Applications",
+    ///   4th ed., §3.4, Eq. (3-42): GMST at 0h UT1
+    ///   https://www.sisostds.org/Downloads/Fundamentals_of_Astrodynamics_4th_ed.pdf
+    /// - IAU 1982 Resolution C2: GMST polynomial expression
+    ///   https://www.iau.org/static/resolutions/IAU1982_French.pdf
+    /// - IERS Conventions (2010), §5.4: Earth rotation angle
+    ///   https://iers-conventions.obspm.fr/content/tn36.pdf (p. 45)
     fn eci_to_ecef(&self) -> Matrix3<f64> {
         // GMST at J2000.0 in radians
         let gmst = 280.4606183744_f64.to_radians();

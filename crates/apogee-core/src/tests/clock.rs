@@ -2,6 +2,27 @@
 //!
 //! hifitime 4.x handles TDB/TAI/UTC/TT natively. ClockService wraps
 //! hifitime and adds UT1-UTC support via EOP data.
+//!
+//! # Test Sources
+//!
+//! TAI-UTC leap second offsets:
+//! - IERS Bulletin C: https://hpiers.obspm.fr/iers/bul/bulc/Leap_Second.dat
+//! - NIST Time and Frequency: https://www.nist.gov/pml/time-and-frequency-division
+//!
+//! Leap second history (37s offset as of 2017):
+//! - IERS Earth Orientation Center: https://hpiers.obspm.fr/iers/eop/eopc/
+//!
+//! TDB-TT relationship (~32.184s + periodic variations):
+//! - IAU 2006 Resolution B3, §2: TDB = TT + 0.001658 sin(g) + ...
+//!   https://www.iau.org/static/resolutions/IAU2006_ResolB3.pdf
+//! - Fairhead, M. & Bretagnon, P. (1990), Astron. Astrophys. 229, 240–247
+//!
+//! GPS-TAI offset (19s, constant since GPS epoch 1980-01-06):
+//! - IS-GPS-200, §3.3.1: https://www.gps.gov/technical/icwg/IS-GPS-200M.pdf
+//!
+//! UT1-UTC test values (EOP C04):
+//! - IERS EOP 08 C04: https://iers-conventions.obspm.fr/content/eop/eop-c04-08.txt
+//! - Test fixture values from IERS C04 at MJD 51544 (2000-01-01)
 
 use crate::frames::clock::ClockService;
 use hifitime::{Epoch, TimeScale};

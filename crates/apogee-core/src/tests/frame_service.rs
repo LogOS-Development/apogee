@@ -2,6 +2,28 @@
 //!
 //! Tests rotation matrices between ICRF, ECI, ECEF, ECLIPJ2000.
 //! Uses nalgebra Vector3 and Matrix3 for position vectors and rotations.
+//!
+//! # Test Sources
+//!
+//! Obliquity of the ecliptic at J2000:
+//! - Lieske, J.H., et al. (1977), Astron. Astrophys. 58, 1–16
+//!   https://ui.adsabs.harvard.edu/abs/1977A%26A....58....1L
+//! - Value verified against IAU 1976 constant: ε₀ = 23°26'21.448"
+//!
+//! GMST at J2000.0 (280.460618°):
+//! - Vallado, D.A. (2013), §3.4, Eq. (3-42)
+//!   https://www.sisostds.org/Downloads/Fundamentals_of_Astrodynamics_4th_ed.pdf
+//! - IERS Conventions (2010), §5.4
+//!   https://iers-conventions.obspm.fr/content/tn36.pdf
+//!
+//! ICRF ↔ ECI J2000 offset (sub-arcsecond):
+//! - Fey, A.L., et al. (2009), IERS Technical Note 35
+//!   https://iers-conventions.obspm.fr/content/tn35.pdf
+//! - ICRF2 realization: ~0.02 mas frame bias
+//!
+//! Rotation matrix orthogonality (R · R^T = I):
+//! - Goldstein, H., Poole, C.P. & Safko, J.L. (2002),
+//!   "Classical Mechanics", 3rd ed., §4.2: Orthogonal Transformations
 
 use crate::frames::frame_service::FrameService;
 use crate::frames::Frame;

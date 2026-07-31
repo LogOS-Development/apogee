@@ -44,6 +44,11 @@ pub type ApogeeResult<T> = Result<T, ApogeeError>;
 /// Physical constants (SI units).
 pub mod constants {
     /// Pi to 15 significant digits.
+    ///
+    /// Note: Rust's `std::f64::consts::PI` is identical (both are the
+    /// nearest f64 to mathematical π). This constant exists for
+    /// explicitness and discoverability alongside other project constants.
+    #[allow(clippy::approx_constant)]
     pub const PI: f64 = 3.141592653589793;
 
     /// Gravitational constant (m^3 kg^-1 s^-2).
