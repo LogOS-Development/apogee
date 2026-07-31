@@ -66,11 +66,11 @@ jobs:
       - name: Generate coverage report
         run: cargo llvm-cov --workspace --lcov --output-path lcov.info
 
-      - name: Upload coverage to Coveralls
-        uses: coverallsapp/github-action@v2
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
         with:
-          path-to-lcov: lcov.info
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          files: lcov.info
+          fail_ci_if_error: false
 
   build-server:
     name: Build Server Binary
