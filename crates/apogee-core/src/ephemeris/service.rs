@@ -120,11 +120,16 @@ impl EphemerisService {
 mod tests {
     use super::*;
     use crate::ephemeris::kernel::tests::build_type3_fixture;
+
+    fn constant_fixture() -> Vec<u8> {
+        build_type3_fixture(499, 0.0, 86400.0, 1, |_x| [1.0, 2.0, 3.0], |_x| [0.0; 3])
+    }
+
     use approx::assert_relative_eq;
 
     #[test]
-    fn test_service_loads_and_queries_one_body() {
-        let fixture = build_type3_fixture(499, 0.0, 86400.0, 1, |_x| [1.0, 2.0, 3.0]);
+    fn test_service_state_at() {
+        let fixture = constant_fixture();
         let kernel = Kernel::from_bytes(&fixture).unwrap();
         let mut service = EphemerisService::from_kernel(kernel, 4);
 
@@ -137,11 +142,11 @@ mod tests {
     }
 
     #[test]
-    fn test_service_state_cache_hit() {
-        let fixture = build_type3_fixture(499, 0.0, 86400.0, 1, |_x| [1.0, 2.0, 3.0]);
+    fn test_service_cache_hit() {
+        let fixture = constant_fixture();
         let kernel = Kernel::from_bytes(&fixture).unwrap();
-        let mut service = EphemerisService::from_kernel(kernel, 4);
 
+        let mut service = EphemerisService::from_kernel(kernel, 4);
         let epoch = Epoch::from_et_seconds(43200.0);
         let _ = service.state_at(499, epoch).unwrap();
         let _ = service.state_at(499, epoch).unwrap();
@@ -151,10 +156,10 @@ mod tests {
 
     #[test]
     fn test_service_all_states_at() {
-        let fixture = build_type3_fixture(499, 0.0, 86400.0, 1, |_x| [1.0, 2.0, 3.0]);
+        let fixture = constant_fixture();
         let kernel = Kernel::from_bytes(&fixture).unwrap();
-        let mut service = EphemerisService::from_kernel(kernel, 4);
 
+        let mut service = EphemerisService::from_kernel(kernel, 4);
         let epoch = Epoch::from_et_seconds(43200.0);
         let solar = service.all_states_at(epoch).unwrap();
 
@@ -164,20 +169,20 @@ mod tests {
 
     #[test]
     fn test_service_rejects_uncovered_epoch() {
-        let fixture = build_type3_fixture(499, 0.0, 86400.0, 1, |_x| [1.0, 2.0, 3.0]);
+        let fixture = constant_fixture();
         let kernel = Kernel::from_bytes(&fixture).unwrap();
-        let mut service = EphemerisService::from_kernel(kernel, 4);
 
+        let mut service = EphemerisService::from_kernel(kernel, 4);
         let epoch = Epoch::from_et_seconds(86401.0);
         assert!(service.state_at(499, epoch).is_err());
     }
 
     #[test]
-    fn test_service_rejects_non_finite_epoch() {
-        let fixture = build_type3_fixture(499, 0.0, 86400.0, 1, |_x| [1.0, 2.0, 3.0]);
+    fn test_service_rejects_missing_body() {
+        let fixture = constant_fixture();
         let kernel = Kernel::from_bytes(&fixture).unwrap();
-        let mut service = EphemerisService::from_kernel(kernel, 4);
 
+        let mut service = EphemerisService::from_kernel(kernel, 4);
         // hifitime panics when constructing an Epoch from non-finite seconds,
         // so test the finite check on the converted ET value instead by
         // poisoning the kernel state_at path through an uncovered body. The
