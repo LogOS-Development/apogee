@@ -7,7 +7,8 @@
 
 use crate::ephemeris::kernel::{BodyState, SolarSystemState};
 use crate::gravity::point_mass::PointMassGravity;
-use crate::integrator::{Integrator, Rk4, StateDerivative, StateVector};
+use crate::integrator::{Integrator, Rk4, StateVector};
+use crate::tests::helpers::point_mass_derivative;
 use apogee_common::constants::GM_MOON;
 use approx::assert_relative_eq;
 use nalgebra::Vector3;
@@ -23,21 +24,6 @@ fn moon_system() -> SolarSystemState {
             position: Vector3::zeros(),
             velocity: Vector3::zeros(),
         }],
-    }
-}
-
-/// Acceleration function for the RK4 integrator.
-fn point_mass_derivative(
-    state: &StateVector,
-    celestial: &SolarSystemState,
-    gravity: &PointMassGravity,
-) -> StateDerivative {
-    let acc = gravity
-        .acceleration(&state.position, celestial)
-        .expect("valid point-mass acceleration");
-    StateDerivative {
-        velocity: state.velocity,
-        acceleration: acc,
     }
 }
 

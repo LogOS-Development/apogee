@@ -2,7 +2,8 @@
 mod artemis2_validation {
     use crate::ephemeris::kernel::{BodyState, Kernel, SolarSystemState};
     use crate::gravity::point_mass::PointMassGravity;
-    use crate::integrator::{Integrator, Rk4, StateDerivative, StateVector};
+    use crate::integrator::{Integrator, Rk4, StateVector};
+    use crate::tests::helpers::point_mass_derivative;
     use nalgebra::Vector3;
 
     /// Path to the Artemis 2 SPK fixture.
@@ -10,28 +11,6 @@ mod artemis2_validation {
         env!("CARGO_MANIFEST_DIR"),
         "/../../tests/fixtures/artemis2.bsp"
     );
-
-    /// Convert seconds past J2000 TDB to a calendar string.
-    fn et_to_utc(et: f64) -> String {
-        // J2000 epoch is 2000-01-01 12:00:00 TDB.
-        // Approximate TDB ≈ UTC for short-duration validation.
-        let jd = et / 86400.0 + 2_451_545.0;
-        format!("JD {jd}")
-    }
-
-    fn point_mass_derivative(
-        state: &StateVector,
-        celestial: &SolarSystemState,
-        gravity: &PointMassGravity,
-    ) -> StateDerivative {
-        let acc = gravity
-            .acceleration(&state.position, celestial)
-            .expect("valid point-mass acceleration");
-        StateDerivative {
-            velocity: state.velocity,
-            acceleration: acc,
-        }
-    }
 
     /// Build a point-mass ephemeris from kernel states at a single epoch.
     fn build_celestial(kernel: &Kernel, et: f64) -> SolarSystemState {
@@ -90,8 +69,8 @@ mod artemis2_validation {
 
         println!(
             "Artemis 2 propagation: et0={et0} ({}) -> et1={et1} ({})",
-            et_to_utc(et0),
-            et_to_utc(et1)
+            hifitime::Epoch::from_tdb_seconds(et0).to_gregorian_str(hifitime::TimeScale::TDB),
+            hifitime::Epoch::from_tdb_seconds(et1).to_gregorian_str(hifitime::TimeScale::TDB)
         );
         println!("position error: {position_error_km:.3} km");
         println!("velocity error: {velocity_error_ms:.4} m/s");

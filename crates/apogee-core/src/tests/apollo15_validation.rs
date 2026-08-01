@@ -1,7 +1,8 @@
 #[cfg(test)]
 mod apollo15_validation {
     use crate::gravity::point_mass::PointMassGravity;
-    use crate::integrator::{Integrator, Rk4, StateDerivative, StateVector};
+    use crate::integrator::{Integrator, Rk4, StateVector};
+    use crate::tests::helpers::point_mass_derivative;
     use nalgebra::Vector3;
 
     /// Apollo 15 reference trajectory fixture. Generated with spiceypy from
@@ -48,20 +49,6 @@ mod apollo15_validation {
                 position: Vector3::zeros(),
                 velocity: Vector3::zeros(),
             }],
-        }
-    }
-
-    fn point_mass_derivative(
-        state: &StateVector,
-        celestial: &crate::ephemeris::kernel::SolarSystemState,
-        gravity: &PointMassGravity,
-    ) -> StateDerivative {
-        let acc = gravity
-            .acceleration(&state.position, celestial)
-            .expect("valid point-mass acceleration");
-        StateDerivative {
-            velocity: state.velocity,
-            acceleration: acc,
         }
     }
 

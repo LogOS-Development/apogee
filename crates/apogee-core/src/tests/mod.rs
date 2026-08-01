@@ -1,5 +1,7 @@
 //! Tests module.
 
+pub mod helpers;
+
 mod apollo15_validation;
 mod artemis2_validation;
 mod clock;
