@@ -1,8 +1,10 @@
 //! Multi-rate integrator: RK8(9) outer, RK4(5) inner.
 
+pub mod rk4;
 pub mod rk45;
 pub mod rk89;
 
+pub use rk4::*;
 pub use rk45::*;
 pub use rk89::*;
 
