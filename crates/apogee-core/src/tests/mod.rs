@@ -1,5 +1,6 @@
 //! Tests module.
 
+mod apollo15_validation;
 mod artemis2_validation;
 mod clock;
 mod data_integrity;
