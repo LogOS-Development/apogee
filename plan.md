@@ -196,22 +196,29 @@ Exit criterion: Two-body propagation (Earth + satellite) matches Keplerian analy
 1.6 Single-Spacecraft 6DOF Propagation (Weeks 14–20)
 
 Tasks:
-Task	Description	Validation
-ECS Component Registration	All core components defined, spawn single spacecraft	Entity spawns and persists
-ForceAggregator System	Collects gravity + drag + SRP forces	Force sum balances at equilibrium (circular orbit)
-Multi-Rate Step System	Integrates position/velocity/attitude	Stable over 24h propagation
-Solar Radiation Pressure	Panelized model with eclipse detection	SRP acceleration matches cannonball within 5%
-Atmospheric Drag	Ballistic coefficient from vehicle config	ISS TLE propagation matches within 1 km / 24h
-Mass/CG Tracking	Update mass as fuel burns, update inertia	CG shift matches analytical fuel distribution
+Task	Description	Validation	Tracking
+ECS Component Registration	All core components defined, spawn single spacecraft	Entity spawns and persists	#35
+ForceAggregator System	Collects gravity + drag + SRP forces	Force sum balances at equilibrium (circular orbit)	#35
+Single-Rate RK4 Step System	Integrates position/velocity	Stable over 24h propagation, energy conservation	#35
+Solar Radiation Pressure	Panelized/cannonball model with eclipse detection	SRP acceleration matches cannonball within 5%	#35
+Atmospheric Drag	Ballistic coefficient from vehicle config, density from NRLMSISE-00	ISS TLE propagation stays in LEO over 24h	#35
+Configurable Space-Weather Inputs	F10.7, F10.7A, Ap loaded per simulation, not hardcoded	SimulationConfig used by drag model	#40
+Propagator Selection (follow-up)	Per-object integrator choice (two-body, RK4, adaptive)	Same state compared across propagators	#37
+Adaptive Step Sizing (follow-up)	Dynamic dt based on local dynamics/tolerance	Step shrinks near perigee, grows in cruise	#38
+Federated Simulation Coupling (follow-up)	External solar-system simulation can update celestial bodies	Federation tick updates Sun/Earth mid-propagation	#39
+Multi-Rate Step System (Phase 1.5 follow-up)	Separate rates for translation, attitude, flexible modes	Stable over 24h propagation	(Phase 1.5 issue)
+Mass/CG Tracking (follow-up)	Update mass as fuel burns, update inertia	CG shift matches analytical fuel distribution	(future)
 
 Dependencies: 1.3, 1.4, 1.5
-// Phase 1 demo: single spacecraft in LEO
+// Phase 1.6 first-pass demo: single spacecraft in LEO using fixed-step RK4.
+// Strict <1 km vs next-day TLE requires J2/spherical-harmonic gravity, EOP,
+// and adaptive stepping deferred to follow-up issues.
 fn main() {
     let mut world = World::new();
-    
+
     // Spawn Earth (from ephemeris)
     world.spawn(BodyState::earth_at(epoch));
-    
+
     // Spawn spacecraft at ISS altitude
     let iss_state = tle_to_statevec(ISS_TLE);
     world.spawn(SpacecraftBundle {
@@ -223,20 +230,20 @@ fn main() {
         },
         ..default()
     });
-    
+
     // Propagate 24 hours
     let mut clock = ClockService::new(epoch);
     for tick in 0..86_400 {
         world.run_system(aggregate_forces);
-        world.run_system(multi_rate_step, Duration::from_secs(1));
+        world.run_system(fixed_step_rk4, Duration::from_secs(1));
         clock.advance(Duration::from_secs(1));
     }
-    
-    // Validate against next-day TLE
+
+    // Validate against next-day TLE (strict threshold needs follow-up gravity)
     assert!(position_error < 1_000.0);  // < 1 km
 }
 
-Exit criterion: MVP Milestone G1. Single spacecraft propagates 24 hours in LEO with < 1 km error vs TLE. All P0 celestial and gravity requirements validated.
+Exit criterion: MVP Milestone G1. Single spacecraft propagates 24 hours in LEO without numerical instability or non-LEO escape. Strict < 1 km error vs TLE is the acceptance target for the J2/EOP/adaptive-step follow-up.
 Phase 2: Networking & Multiplayer (Weeks 20–32)
 2.1 FlatBuffer Schema Design (Weeks 20–22)
 

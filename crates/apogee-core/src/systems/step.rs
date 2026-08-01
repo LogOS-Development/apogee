@@ -4,7 +4,7 @@
 //! full multi-rate / adaptive integrator will be introduced in a follow-up
 //! Phase 1.5 issue.
 
-use crate::components::dynamics::{Dynamics, SpacecraftConfig};
+use crate::components::dynamics::{Dynamics, SimulationConfig, SpacecraftConfig};
 use crate::components::kinematics::Kinematics;
 use crate::ephemeris::kernel::SolarSystemState;
 use crate::integrator::{IntegrationResult, Integrator, Rk4, StateDerivative, StateVector};
@@ -14,11 +14,15 @@ use crate::systems::force_aggregator::aggregate_forces;
 /// the fixed-step RK4 integrator configured by `integrator`.
 ///
 /// Attitude and angular velocity are left unchanged in this first milestone.
+///
+/// Selectable propagators and adaptive step sizing are tracked in follow-up
+/// issues for per-object fidelity and federated simulation support.
 #[allow(clippy::too_many_arguments)]
 pub fn step_spacecraft(
     kinematics: &mut Kinematics,
     dynamics: &Dynamics,
     config: &SpacecraftConfig,
+    sim_config: &SimulationConfig,
     celestial: &SolarSystemState,
     integrator: &mut Rk4,
     dt: f64,
@@ -43,6 +47,7 @@ pub fn step_spacecraft(
             &trial_kinematics,
             dynamics,
             config,
+            sim_config,
             celestial,
             day_of_year,
             seconds_utc,
@@ -68,6 +73,7 @@ pub fn propagate(
     kinematics: &mut Kinematics,
     dynamics: &Dynamics,
     config: &SpacecraftConfig,
+    sim_config: &SimulationConfig,
     celestial: &SolarSystemState,
     dt: f64,
     duration_s: f64,
@@ -82,6 +88,7 @@ pub fn propagate(
             kinematics,
             dynamics,
             config,
+            sim_config,
             celestial,
             &mut integrator,
             step,
@@ -120,6 +127,7 @@ mod tests {
             cg_offset: Vector3::zeros(),
         };
         let config = SpacecraftConfig::default();
+        let sim_config = SimulationConfig::default();
         let celestial = SolarSystemState {
             states: vec![crate::ephemeris::kernel::BodyState {
                 naif_id: 399,
@@ -133,6 +141,7 @@ mod tests {
             &mut kinematics,
             &dynamics,
             &config,
+            &sim_config,
             &celestial,
             60.0,
             3_600.0,

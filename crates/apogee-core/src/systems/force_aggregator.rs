@@ -6,7 +6,7 @@ use nalgebra::Vector3;
 use crate::aero::model::AtmosphereInput;
 use crate::aero::nrlmsise00::Nrlmsise00;
 use crate::aero::{AtmosphericDrag, SolarRadiationPressure};
-use crate::components::dynamics::SpacecraftConfig;
+use crate::components::dynamics::{SimulationConfig, SpacecraftConfig};
 use crate::components::kinematics::Kinematics;
 use crate::ephemeris::kernel::SolarSystemState;
 use crate::gravity::PointMassGravity;
@@ -41,11 +41,15 @@ impl AggregatedForces {
 /// The `day_of_year` and `seconds_utc` inputs are used to build the
 /// atmosphere-model input. For a real simulation these would come from a
 /// `ClockService` tied to the current epoch.
+///
+/// Space-weather values are taken from `sim_config` rather than hardcoded so
+/// a federation can drive them from an external simulation.
 #[allow(clippy::too_many_arguments)]
 pub fn aggregate_forces(
     kinematics: &Kinematics,
     dynamics: &crate::components::dynamics::Dynamics,
     config: &SpacecraftConfig,
+    sim_config: &SimulationConfig,
     celestial: &SolarSystemState,
     day_of_year: u16,
     seconds_utc: f64,
@@ -63,9 +67,9 @@ pub fn aggregate_forces(
             longitude_rad: latlon.longitude_rad,
             day_of_year,
             seconds_utc,
-            f107: 150.0,
-            f107a: 150.0,
-            ap: 4.0,
+            f107: sim_config.f107,
+            f107a: sim_config.f107a,
+            ap: sim_config.ap,
         };
         let drag_area = config.drag_area_m2(dynamics.mass);
         AtmosphericDrag.acceleration_with_model(
@@ -162,6 +166,7 @@ mod tests {
             reflectivity: 1.2,
             reference_mass_kg: 420_000.0,
         };
+        let sim_config = SimulationConfig::default();
         let celestial = SolarSystemState {
             states: vec![crate::ephemeris::kernel::BodyState {
                 naif_id: 399,
@@ -173,6 +178,7 @@ mod tests {
             &kinematics,
             &dynamics,
             &config,
+            &sim_config,
             &celestial,
             80,
             12.0 * 3600.0,

@@ -53,3 +53,30 @@ impl SpacecraftConfig {
         self.ballistic_coefficient * mass
     }
 }
+
+/// Environment / simulation configuration for force models.
+///
+/// This is intentionally separate from `SpacecraftConfig` because a single
+/// federation simulation can contain many spacecraft but only one set of
+/// space-weather / epoch inputs at a given time. It can be federated with an
+/// external solar-system ephemeris by updating `celestial` and `clock` inputs
+/// at the simulation's own cadence.
+#[derive(Debug, Clone, Copy)]
+pub struct SimulationConfig {
+    /// 10.7 cm solar flux (sfu).
+    pub f107: f64,
+    /// 81-day averaged 10.7 cm solar flux (sfu).
+    pub f107a: f64,
+    /// Geomagnetic activity index.
+    pub ap: f64,
+}
+
+impl Default for SimulationConfig {
+    fn default() -> Self {
+        Self {
+            f107: 150.0,
+            f107a: 150.0,
+            ap: 4.0,
+        }
+    }
+}
