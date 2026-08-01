@@ -38,5 +38,26 @@ TOTAL_FOUND=$(echo "$STATS" | awk '{print $1}')
 TOTAL_HIT=$(echo "$STATS" | awk '{print $2}')
 PCT=$(echo "scale=1; $TOTAL_HIT * 100 / $TOTAL_FOUND" | bc)
 
+# Color: red <60, orange <80, yellow <90, green >=90
+if (( $(echo "$PCT >= 90" | bc -l) )); then
+    COLOR="4c1"
+elif (( $(echo "$PCT >= 80" | bc -l) )); then
+    COLOR="dfb317"
+elif (( $(echo "$PCT >= 60" | bc -l) )); then
+    COLOR="fe7d37"
+else
+    COLOR="e05d44"
+fi
+
+cat > .github/coverage.json <<EOF
+{
+  "schemaVersion": 1,
+  "label": "coverage",
+  "message": "${PCT}%",
+  "color": "$COLOR"
+}
+EOF
+
 echo "Coverage: ${PCT}% (${TOTAL_HIT}/${TOTAL_FOUND} lines)"
 echo "LCOV report: ${OUTPUT_PATH}"
+echo "Shield JSON: .github/coverage.json"

@@ -135,7 +135,7 @@ jobs:
           echo "percentage=$PCT" >> "$GITHUB_OUTPUT"
           echo "Coverage: $PCT% ($TOTAL_HIT/$TOTAL_FOUND lines)"
 
-      - name: Generate coverage badge
+      - name: Generate coverage badge and JSON
         run: |
           PCT="${{ steps.cov.outputs.percentage }}"
           # Color: red <60, orange <80, yellow <90, green >=90
@@ -176,12 +176,20 @@ jobs:
             </g>
           </svg>
           EOF
+          cat > .github/coverage.json << EOF
+          {
+            "schemaVersion": 1,
+            "label": "coverage",
+            "message": "$VALUE",
+            "color": "$COLOR"
+          }
+          EOF
 
       - name: Commit badge
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .github/badge-coverage.svg
+          git add .github/badge-coverage.svg .github/coverage.json
           if git diff --cached --quiet; then
             echo "No badge changes to commit"
           else
