@@ -9,6 +9,7 @@ mod data_integrity;
 mod eop;
 mod frame_service;
 mod integration_erfa;
+mod iss_propagation;
 mod leap_seconds;
 mod lunar_orbit;
 mod mars_propagation_golden;
