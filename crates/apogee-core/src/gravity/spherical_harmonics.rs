@@ -105,18 +105,34 @@ impl SphericalHarmonics {
     }
 
     /// Gravitational acceleration due to spherical harmonics at an inertial
-    /// position.
+    /// position, using the full configured degree and order.
     ///
     /// For this phase the position is assumed to already be in the body-fixed
-    /// frame (no EOP rotation). The acceleration is returned in the same
-    /// frame.
+    /// frame (no EOP rotation). The acceleration is returned in the same frame.
     pub fn acceleration(&self, position: &Vector3<f64>) -> ApogeeResult<Vector3<f64>> {
+        self.acceleration_with_degree(position, self.degree, self.order)
+    }
+
+    /// Compute acceleration with a runtime-selected degree/order truncation.
+    ///
+    /// This is useful for adaptive harmonic selection: high-degree terms can be
+    /// skipped at high altitudes where their contribution falls below a
+    /// tolerance.
+    pub fn acceleration_with_degree(
+        &self,
+        position: &Vector3<f64>,
+        max_degree: usize,
+        max_order: usize,
+    ) -> ApogeeResult<Vector3<f64>> {
         let r = position.norm();
         if r == 0.0 {
             return Err(ApogeeError::Gravity(
                 "singularity at origin in spherical harmonics".into(),
             ));
         }
+
+        let effective_degree = max_degree.min(self.degree);
+        let effective_order = max_order.min(self.order);
 
         let x = position.x;
         let y = position.y;
@@ -128,15 +144,15 @@ impl SphericalHarmonics {
 
         // Compute fully normalized associated Legendre P_nm(sin phi) and
         // their derivative with respect to phi.
-        let (p, dp_dphi) = normalized_legendre(self.degree, self.order, sin_phi, cos_phi);
+        let (p, dp_dphi) = normalized_legendre(effective_degree, effective_order, sin_phi, cos_phi);
 
         // Spherical-coordinate acceleration components.
         let mut d_u_d_r = 0.0;
         let mut d_u_d_phi = 0.0;
         let mut d_u_d_lambda = 0.0;
 
-        for n in 2..=self.degree {
-            let m_max = n.min(self.order);
+        for n in 2..=effective_degree {
+            let m_max = n.min(effective_order);
             let rho_n = rho.powi(n as i32);
             for m in 0..=m_max {
                 let c = self.c[n][m];
@@ -170,6 +186,28 @@ impl SphericalHarmonics {
         let az = a_r * sin_phi + a_phi * cos_phi;
 
         Ok(Vector3::new(ax, ay, az))
+    }
+
+    /// Select an effective degree and order for a given radius ratio.
+    ///
+    /// `radius_ratio` is `reference_radius / distance_from_body_center`. High
+    /// degrees are kept only while their nominal amplitude `ratio^(n+1)` is
+    /// above `tolerance`. Order is clamped to the selected degree.
+    ///
+    /// Returns `(effective_degree, effective_order)` with order ≤ degree.
+    pub fn select_degree_order(&self, radius_ratio: f64, tolerance: f64) -> (usize, usize) {
+        if radius_ratio <= 0.0 || radius_ratio >= 1.0 || tolerance <= 0.0 {
+            return (self.degree, self.order);
+        }
+
+        // Amplitude of degree-n term scales roughly as ratio^(n+1).
+        // Solve ratio^(n+1) < tolerance for n.
+        let log_ratio = radius_ratio.ln();
+        let log_tol = tolerance.ln();
+        let n_float = (log_tol / log_ratio) - 1.0;
+        let selected_degree = (n_float.floor() as usize).clamp(2, self.degree);
+        let selected_order = selected_degree.min(self.order);
+        (selected_degree, selected_order)
     }
 }
 
@@ -234,6 +272,13 @@ fn normalized_legendre(
         for m in 1..=m_max {
             if m == n {
                 continue; // diagonal already computed
+            }
+            if m == n - 1 {
+                // First sub-diagonal: P_{n,n-1} = sqrt(2n+1) sin(phi) P_{n-1,n-1}.
+                let a = ((2 * n + 1) as f64).sqrt();
+                p[n][m] = a * sin_phi * p[n - 1][m];
+                dp[n][m] = a * (sin_phi * dp[n - 1][m] + cos_phi * p[n - 1][m]);
+                continue;
             }
             let a = ((2 * n + 1) as f64 * (2 * n - 1) as f64 / ((n - m) * (n + m)) as f64).sqrt();
             let b = ((2 * n + 1) as f64 * (n - m - 1) as f64 * (n + m - 1) as f64
@@ -326,5 +371,54 @@ mod tests {
     fn test_singularity_at_origin() {
         let model = SphericalHarmonics::new(2, 0);
         assert!(model.acceleration(&Vector3::zeros()).is_err());
+    }
+
+    #[test]
+    fn test_select_degree_order_reduces_with_altitude() {
+        let model = SphericalHarmonics::new(70, 70);
+
+        // LEO: ratio close to 1 -> keep high degree.
+        let (deg, ord) = model.select_degree_order(0.95, 1e-9);
+        assert!(deg >= 50, "expected high degree at LEO, got {deg}");
+        assert_eq!(ord, deg);
+
+        // GEO-like: ratio much smaller -> drop high degrees.
+        let (deg, ord) = model.select_degree_order(0.15, 1e-9);
+        assert!(deg < 20, "expected low degree at GEO, got {deg}");
+        assert_eq!(ord, deg);
+
+        // Deep space: ratio tiny -> keep only a few zonal terms.
+        let (deg, ord) = model.select_degree_order(0.02, 1e-9);
+        assert!(deg <= 10, "expected low degree in deep space, got {deg}");
+        assert_eq!(ord, deg);
+    }
+
+    #[test]
+    #[cfg(not(debug_assertions))]
+    fn test_degree_70_evaluates_under_50us() {
+        let mut model = SphericalHarmonics::new(70, 70);
+        for n in 2..=70 {
+            let m_max = n.min(70);
+            for m in 0..=m_max {
+                model.c[n][m] = 1e-6 * ((n + m) as f64).sin();
+                model.s[n][m] = 1e-6 * ((n - m) as f64).cos();
+            }
+        }
+        let pos = Vector3::new(6_778_137.0, 0.0, 0.0);
+
+        // Warmup.
+        let _ = model.acceleration(&pos).unwrap();
+
+        let iters = 100u64;
+        let start = std::time::Instant::now();
+        for _ in 0..iters {
+            let _ = model.acceleration(&pos).unwrap();
+        }
+        let elapsed = start.elapsed();
+        let per_call_us = elapsed.as_micros() as f64 / iters as f64;
+        assert!(
+            per_call_us < 50.0,
+            "degree-70 spherical harmonics took {per_call_us:.1} us per call, target < 50 us"
+        );
     }
 }
