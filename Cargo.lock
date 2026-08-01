@@ -46,6 +46,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "apogee-discovery"
+version = "0.1.0"
+dependencies = [
+ "apogee-common",
+ "approx",
+ "serde",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
 name = "apogee-godot"
 version = "0.1.0"
 dependencies = [
@@ -53,6 +64,18 @@ dependencies = [
  "apogee-core",
  "nalgebra",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "apogee-llm"
+version = "0.1.0"
+dependencies = [
+ "apogee-common",
+ "approx",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tracing",
 ]
 
 [[package]]
@@ -73,6 +96,46 @@ dependencies = [
  "apogee-net",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "apogee-social"
+version = "0.1.0"
+dependencies = [
+ "apogee-common",
+ "apogee-llm",
+ "approx",
+ "hifitime",
+ "nalgebra",
+ "serde",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
+name = "apogee-strategic"
+version = "0.1.0"
+dependencies = [
+ "apogee-common",
+ "apogee-social",
+ "approx",
+ "nalgebra",
+ "serde",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
+name = "apogee-tactical"
+version = "0.1.0"
+dependencies = [
+ "apogee-common",
+ "apogee-social",
+ "approx",
+ "nalgebra",
+ "serde",
+ "thiserror 1.0.69",
+ "tracing",
 ]
 
 [[package]]

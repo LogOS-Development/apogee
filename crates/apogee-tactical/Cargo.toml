@@ -1,0 +1,17 @@
+[package]
+name = "apogee-tactical"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+apogee-common = { workspace = true }
+apogee-social = { workspace = true }
+nalgebra = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+approx = "0.5"
