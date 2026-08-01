@@ -142,6 +142,36 @@ mod tests {
     }
 
     #[test]
+    fn test_earth_moon_two_body_cancellation_line() {
+        // Spacecraft on the Earth-Moon line, closer to Earth. Net acceleration
+        // should point toward the more massive body (Earth) and be continuous.
+        let gravity = PointMassGravity::default();
+        let moon_distance = 384_400_000.0;
+        // Spacecraft 1/4 of the way from Earth to Moon.
+        let spacecraft = Vector3::new(moon_distance * 0.25, 0.0, 0.0);
+        let celestial = SolarSystemState {
+            states: vec![
+                body_state(399, [0.0, 0.0, 0.0]),
+                body_state(301, [moon_distance, 0.0, 0.0]),
+            ],
+        };
+
+        let acc = gravity.acceleration(&spacecraft, &celestial).unwrap();
+
+        // Net pull is toward Earth (negative x) because Earth dominates.
+        assert!(acc.x < 0.0, "expected net pull toward Earth, got {}", acc.x);
+        assert_relative_eq!(acc.y, 0.0, epsilon = 1e-15);
+        assert_relative_eq!(acc.z, 0.0, epsilon = 1e-15);
+
+        // Verify by closed-form two-body sum.
+        let r_se = moon_distance * 0.25;
+        let r_sm = moon_distance * 0.75;
+        let earth_acc = -apogee_common::constants::GM_EARTH / r_se.powi(2);
+        let moon_acc = apogee_common::constants::GM_MOON / r_sm.powi(2);
+        assert_relative_eq!(acc.x, earth_acc + moon_acc, epsilon = 1e-9);
+    }
+
+    #[test]
     fn test_singularity_returns_error() {
         let gravity = PointMassGravity::default();
         let spacecraft = Vector3::new(0.0, 0.0, 0.0);

@@ -107,4 +107,31 @@ mod tests {
         let inertia = diag_inertia(1.0, 2.0, 3.0);
         assert!(gradient_torque(&Vector3::zeros(), &inertia, 1.0).is_err());
     }
+
+    #[test]
+    fn test_principal_axis_aligned_with_radius_zero_torque() {
+        // A principal-axis-aligned spacecraft (diagonal inertia, R along a
+        // principal axis) feels zero gravity-gradient torque.
+        let inertia = diag_inertia(800.0, 600.0, 400.0);
+        let pos = Vector3::new(0.0, 7_000_000.0, 0.0);
+        let gm = 3.986004415e14;
+        let torque = gradient_torque(&pos, &inertia, gm).unwrap();
+        assert_relative_eq!(torque.norm(), 0.0, epsilon = 1e-9);
+    }
+
+    #[test]
+    fn test_non_diagonal_inertia_produces_cross_terms() {
+        // A non-diagonal inertia tensor couples radius vector components.
+        let inertia =
+            nalgebra::Matrix3::new(1000.0, 100.0, 50.0, 100.0, 800.0, 30.0, 50.0, 30.0, 600.0);
+        let pos = Vector3::new(7_000_000.0, 1_000_000.0, 500_000.0);
+        let gm = 3.986004415e14;
+        let torque = gradient_torque(&pos, &inertia, gm).unwrap();
+
+        // With a diagonal inertia this position gives only y torque; the
+        // off-diagonal terms create x and z components as well.
+        assert!(torque.x.abs() > 1e-9, "expected x torque from I_xy/I_xz");
+        assert!(torque.y.abs() > 1e-9, "expected y torque");
+        assert!(torque.z.abs() > 1e-9, "expected z torque from I_xz/I_yz");
+    }
 }

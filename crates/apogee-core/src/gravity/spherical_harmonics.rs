@@ -374,6 +374,77 @@ mod tests {
     }
 
     #[test]
+    fn test_tesseral_c22_longitude_rotation() {
+        // C_2,2 produces an acceleration pattern that rotates with the input
+        // longitude. A 90-degree rotation around z should rotate the acceleration
+        // by 90 degrees.
+        let mut model = SphericalHarmonics::new(2, 2);
+        model.c[2][2] = 1.0e-6;
+        let r = R_EARTH_EQ + 400_000.0;
+
+        let pos_a = Vector3::new(r, 0.0, 0.0); // λ = 0
+        let pos_b = Vector3::new(0.0, r, 0.0); // λ = π/2
+
+        let a_a = model.acceleration(&pos_a).unwrap();
+        let a_b = model.acceleration(&pos_b).unwrap();
+
+        // The central gravity is the same at both equatorial points; the C_2,2
+        // perturbation is longitude-dependent. Because of the cos(2λ) behavior,
+        // the perturbations at λ=0 and λ=π/2 are equal and opposite in the
+        // radial-inward direction, so the sum of the inward components equals
+        // twice the central acceleration.
+        let central = -GM_EARTH / r.powi(2);
+        assert_relative_eq!(a_a.x + a_b.y, 2.0 * central, epsilon = 1e-5);
+        assert_relative_eq!(a_a.z, 0.0, epsilon = 1e-12);
+        assert_relative_eq!(a_b.z, 0.0, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn test_load_egm2008_parses_coefficients() {
+        // Synthetic EGM2008-style content.
+        let content = "2 0 -4.84169317386951e-04 0.0\n\
+                       2 1 -1.86987640000000e-10 1.19528012000000e-09\n\
+                       2 2 2.43926074800000e-06 -1.40027358800000e-06\n\
+                       3 0 9.57194713000000e-07 0.0\n";
+        let dir = std::env::temp_dir().join("apogee_egm2008_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test_egm2008.txt");
+        std::fs::write(&path, content).unwrap();
+
+        let model = SphericalHarmonics::load_egm2008(path.to_str().unwrap(), 3, 2).unwrap();
+        assert_relative_eq!(model.c[2][0], -4.84169317386951e-04, epsilon = 1e-15);
+        assert_relative_eq!(model.s[2][2], -1.400273588e-06, epsilon = 1e-15);
+        assert_relative_eq!(model.c[3][0], 9.57194713e-07, epsilon = 1e-15);
+        // Order 2 line for degree 3 should be stored.
+        assert_relative_eq!(model.c[3][2], 0.0, epsilon = 1e-15);
+    }
+
+    #[test]
+    fn test_higher_degree_perturbation_is_smooth() {
+        // Adding a small degree-4 zonal term changes the radial acceleration
+        // continuously; the difference should scale like (Re/r)^4.
+        let mut model2 = SphericalHarmonics::new(2, 0);
+        let mut model4 = SphericalHarmonics::new(4, 0);
+        model2.c[2][0] = -0.484169317386951e-03;
+        model4.c[2][0] = model2.c[2][0];
+        model4.c[4][0] = -5.79905313000000e-07;
+
+        let pos = Vector3::new(0.0, 0.0, R_EARTH_EQ + 400_000.0);
+        let a2 = model2.acceleration(&pos).unwrap();
+        let a4 = model4.acceleration(&pos).unwrap();
+
+        // Difference is radial and orders of magnitude smaller than central.
+        let diff = (a4 - a2).norm();
+        assert!(
+            diff > 1e-12 && diff < 1e-2,
+            "unexpected J4-scale difference: {diff}"
+        );
+        assert_relative_eq!((a4 - a2).x, 0.0, epsilon = 1e-15);
+        assert_relative_eq!((a4 - a2).y, 0.0, epsilon = 1e-15);
+    }
+
+    #[test]
     fn test_select_degree_order_reduces_with_altitude() {
         let model = SphericalHarmonics::new(70, 70);
 
