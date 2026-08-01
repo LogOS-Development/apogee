@@ -140,6 +140,10 @@ pub struct SolarSystemState {
     pub states: Vec<BodyState>,
 }
 
+/// Chebyshev coefficient set for one component (position or velocity) across
+/// three axes.
+pub(crate) type CoefficientSet = [Vec<f64>; 3];
+
 /// Loaded SPICE ephemeris kernel.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Kernel {
@@ -267,7 +271,7 @@ impl Kernel {
         segment: &SpkSegment,
         record_index: i32,
         rsize: i32,
-    ) -> ApogeeResult<[Vec<f64>; 3]> {
+    ) -> ApogeeResult<CoefficientSet> {
         let offset = segment.first_data_byte_offset + record_index as usize * rsize as usize * 8;
         let header_size = 16usize;
         let n_coeffs = (rsize - 2) / 3;
@@ -306,7 +310,7 @@ impl Kernel {
         segment: &SpkSegment,
         record_index: i32,
         rsize: i32,
-    ) -> ApogeeResult<([Vec<f64>; 3], [Vec<f64>; 3])> {
+    ) -> ApogeeResult<(CoefficientSet, CoefficientSet)> {
         let offset = segment.first_data_byte_offset + record_index as usize * rsize as usize * 8;
         let header_size = 16usize;
         let n_coeffs = (rsize - 2) / 6;
