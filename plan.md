@@ -556,3 +556,319 @@ Phase	Duration	Effort (person-weeks)	Key Risk
 Total	~72 weeks	~92 person-weeks	
 
 At 1 full-time engineer: ~18 months to launch. With a team of 3 (sim/core, networking, client): ~8–10 months with overlap.
+
+---
+
+# Expanded Architecture: Player, Combat & Civilization
+
+The ECS architecture scales beyond spacecraft — a player, a missile, a settlement,
+and a planet are all entities with different component compositions. The physics
+core built for orbital mechanics is the same physics core that handles bullet
+trajectories and recoil in vacuum.
+
+## Layer Stack
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                   Layer 5: Civilization                   │
+│   Social dynamics, economics, factions, LLM mediation    │
+├─────────────────────────────────────────────────────────┤
+│                   Layer 4: Strategic                      │
+│   Space combat, fleet ops, settlement management         │
+├─────────────────────────────────────────────────────────┤
+│                   Layer 3: Tactical                       │
+│   Infantry combat, FPS mechanics, inventory, EVA         │
+├─────────────────────────────────────────────────────────┤
+│                   Layer 2: Interior                        │
+│   CW relative motion, contact dynamics, indoor aero      │  ← already designed
+├─────────────────────────────────────────────────────────┤
+│                   Layer 1: Spacecraft                      │
+│   6DOF, flexible body, all perturbations                 │  ← already designed
+├─────────────────────────────────────────────────────────┤
+│                   Layer 0: Celestial                       │
+│   N-body, ephemeris, frames                              │  ← already designed
+└─────────────────────────────────────────────────────────┘
+```
+
+Each layer inherits the physics truth of layers below it. A player walking on a
+station hull during a battle experiences orbital mechanics (L0), spacecraft
+dynamics (L1), relative motion (L2), FPS movement (L3), and tactical outcomes feed
+strategic L4, which feeds civilization-wide L5.
+
+
+## Layer 3: Player Avatar & Tactical Systems
+
+### Player Avatar Component
+
+- `PlayerAvatar`: player_id, character_name, health/stamina, g_load, locomotion
+  mode, movement intent, location context
+- `LocomotionMode`: FreeFloating, SurfaceWalking, MagneticBoots, EVA, Seated, Prone
+- `PlayerLocation`: Interior{spacecraft, room}, ExteriorEVA{spacecraft},
+  PlanetarySurface{body, lat, lon}, OpenSpace{reference_frame}
+- `MovementIntent`: forward/right/up, pitch/yaw/roll, sprint/jump/crouch
+
+### Inventory System
+
+- `Inventory`: slots with type (Hand, Belt, Backpack, Pocket, SuitMount, WeaponSling,
+  Helmet, Armor), capacity (volume), current volume
+- `ItemDefinition`: id, name, mass, volume, dimensions, traits (weapon/tool/
+  consumable/clothing/deployable)
+- `WeaponSpec`: damage_type (Kinetic/Explosive/Energy/EMP), base_damage,
+  muzzle_velocity, fire_rate, magazine_size, effective_range, recoil_impulse,
+  projectile_type (Hitscan/Projectile/Beam)
+- `ToolSpec`: Welder, CuttingTorch, Multimeter, DataPad, MiningDrill,
+  ConstructionWrench
+- `ConsumableSpec`: Food, Water, Medicine, OxygenRefill, Stimulant
+- `ClothingSpec`: Casual, FlightSuit, EVAHeadsuit, EVASuit, TacticalArmor,
+  SpacesuitHeavy — with thermal_resistance, armor_rating, pressurized, mobility_penalty
+- `DeployableSpec`: Turret, Beacon, ExplosiveCharge, HabitatModule
+
+### Player Physics
+
+The player avatar exists in the same physics world as everything else. No separate
+physics engine. The player is an ECS entity with collision shape, mass, and
+velocity — just like every other object.
+
+- `PlayerPhysics`: position (local to parent), velocity, orientation,
+  angular_velocity, mass (includes carried items), inertia, collision_capsule,
+  grounded, contact_normal, contact_entity
+- Physics tick: compute local gravity (from parent body or spacecraft acceleration),
+  compute movement force by locomotion mode, add equipment effects (suit mass,
+  weapon recoil), integrate using same integrator as spacecraft, resolve collisions,
+  apply G-load to health
+
+### Zero-G Weapon Physics
+
+Firing a rifle in vacuum makes you drift backward. Firing repeatedly rotates you.
+Players must learn to manage momentum and orientation — or fire in matched pairs.
+
+- Recoil: F = ma, impulse = m * Δv applied to player velocity
+- Off-axis torque from muzzle offset rotates player
+- Hitscan: instant raycast, apply damage
+- Projectile: spawn as full ECS entity — inherits all physics
+- Beam: instant, attenuates with distance and atmosphere density
+
+### EVA / Spacewalk
+
+- `EVACapability`: thruster_type, fuel_mass, thrust_per_axis, o2_supply,
+  suit_pressure, suit_integrity, thermal_reserve
+- EVA tick: solar radiation exposure, shadowed vs sunlit, suit thermal balance,
+  O2 consumption (scales with exertion), micrometeoroid/debris collision,
+  suit breach detection (depressurization), thruster fuel management
+
+
+## Layer 4: Strategic Combat
+
+### Space Combat
+
+Space combat is simulated by Layer 1 physics. A missile is just a spacecraft with
+a warhead. A railgun slug is a projectile with ballistic coefficient. A laser is a
+beam with attenuation. The physics doesn't change — only the entities and behaviors.
+
+- `CombatAI`: target, engagement_rules, weapon_groups
+- `Missile`: target, guidance (ProportionalNavigation, PurePursuit, Optimal,
+  CommandGuidance), warhead, boost/sustain phases
+- Guidance tick: compute LOS rate, apply PN command, apply thrust — all Layer 1
+
+### Infantry Combat Integration
+
+- `HealthState`: hp, max_hp, injuries (Wound/Fracture/Burn/SuitBreach), bleeding,
+  concussion, oxygen_deprivation, thermal_status
+- Damage tick: armor mitigation, apply to health, physics-based knockback (not
+  canned animation), death drops all inventory as physics objects
+- Planetary infantry: local gravity from celestial body, atmospheric effects on
+  weapons (range, blast radius, laser attenuation), environmental hazards,
+  surface physics (lower gravity = longer jumps)
+
+
+## Layer 5: Civilization & Social Dynamics
+
+### Social Simulation Stack
+
+```
+┌───────────────────────────────────────────────────────────┐
+│                 LLM Mediation Layer                        │
+│   Spins up LLM instances to process aggregate events      │
+│   Generates narrative, faction reactions, emergent crises │
+├───────────────────────────────────────────────────────────┤
+│                 Cultural Evolution                         │
+│   Memes, ideologies, technology spread, cultural drift    │
+├───────────────────────────────────────────────────────────┤
+│                 Political Dynamics                         │
+│   Factions, elections, coups, treaties, trade agreements  │
+├───────────────────────────────────────────────────────────┤
+│                 Economic Simulation                        │
+│   Markets, supply chains, resource flows, labor           │
+├───────────────────────────────────────────────────────────┤
+│                 Demographic Simulation                     │
+│   Population, migration, birth/death, skills, education   │
+├───────────────────────────────────────────────────────────┤
+│                 Settlement / Station State                 │
+│   Infrastructure, resources, population, defenses         │
+└───────────────────────────────────────────────────────────┘
+```
+
+### Settlement as ECS Entity
+
+- `Settlement`: id, name, location (body, lat/lon, orbital_state), population,
+  economy, governance, culture, defense, infrastructure, history (append-only log)
+- `PopulationState`: total, demographics (age_distribution, skill_profiles,
+  species), happiness, health, education_level, unemployment, migration_rate
+- `EconomyState`: gdp, currency, industries, trade_routes, wealth_distribution
+  (LorenzCurve → Gini, Palma ratio), inflation, resource_stockpile/production/
+  consumption
+- `GovernanceState`: government_type (Democracy/Oligarchy/CorporateCharter/
+  MilitaryJunta/AiGoverned/AnarchistCollective/Theocracy/Meritocracy),
+  ruling_faction, stability, legitimacy, corruption, military_strength,
+  diplomatic_relations, active_policies
+- `CultureState`: primary_values, cultural_artifacts, memes, language_primary,
+  language_fragmentation, technological_level, openness, xenophobia
+- `DefenseState`: garrison, fortification_level, defensive_fleet, ground_defenses,
+  missile_silos, early_warning
+
+### Social Dynamics Tick
+
+Runs at a much slower rate than physics — once per game-day or game-week:
+1. Demographic update (population growth/decline)
+2. Economic simulation (production, consumption)
+3. Trade route resolution
+4. Ingest player actions into settlement state
+5. Cultural drift and meme propagation
+6. Political dynamics (governance updates)
+7. Inter-settlement diplomacy
+8. LLM-mediated nonlinear effects
+
+### LLM Mediation Layer
+
+The LLM doesn't run every tick — it runs periodically to process accumulated
+events and generate emergent consequences.
+
+- `LlmMediator`: mediator_instances per region, event_queue, generated_effects
+- Process cycle: aggregate regional state, build mediation prompt, query LLM
+  (local model on server), parse structured JSON effects, apply back to simulation
+- Runs asynchronously, doesn't block physics tick (every 5 min real-time)
+
+The LLM is a nonlinear oracle: the deterministic layer handles first-order dynamics
+(linear, well-understood), the LLM layer handles second-order dynamics (nonlinear,
+path-dependent, historically contingent).
+
+| Deterministic sim handles        | LLM handles                           |
+|----------------------------------|---------------------------------------|
+| Population growth/decline        | Revolution triggers                   |
+| Resource production/consumption  | Market panic / speculative bubbles    |
+| Trade route capacity             | Formation of black markets             |
+| Military strength comparison     | Alliances based on ideology           |
+| Cultural contact/exchange        | Cultural synthesis creating new values |
+| Policy enactment                 | Unintended consequences of policy      |
+| Wealth distribution metrics      | When inequality triggers instability  |
+
+### Player Impact on Society
+
+- `PlayerActionLog`: trade_completed, combat_victory, infrastructure_built,
+  diplomatic_mission, contraband_smuggled, civilian_casualties, rescue_operation,
+  propaganda_broadcast, assassination, humanitarian_aid, station_construction,
+  mining_operation
+- Each action feeds into settlement state, modifies happiness/stability/economy
+- LLM periodically processes aggregate to generate emergent consequences
+
+
+## Revised Critical Path
+
+```
+Phase 0-1: Core Sim ──────────────────► MVP G1
+      │
+      ├──► Phase 2: Networking ──────► G2 Alpha
+      │         │
+      │         └──► Phase 10: MMO Infra ──► Persistent Universe
+      │
+      ├──► Phase 3: Godot Client ────► G2 Alpha
+      │         │
+      │         └──► Phase 7: Player/FPS ──► Walking in ships
+      │                   │
+      │                   └──► Phase 8: Combat ──► Space + ground warfare
+      │
+      ├──► Phase 4: Vehicle Systems ─► G3 Beta
+      │
+      └──► Phase 9: Economy/Social ──► G4 Feature Complete
+                │
+                └──► LLM Mediation ──► Emergent civilization dynamics
+                                         │
+                                         ▼
+                                      G5 Launch
+```
+
+
+## Additional Phases
+
+### Phase 7: Player Avatar & FPS (Weeks 48–68)
+
+| Task                          | Exit Criterion                                    |
+|-------------------------------|---------------------------------------------------|
+| Player entity + physics       | Walk inside station, EVA on hull                  |
+| Inventory system              | Carry 10 items, drop them as physics objects      |
+| Clothing & equipment          | EVA suit required for spacewalk                    |
+| Weapons                       | Fire weapon, recoil physics in zero-G             |
+| Melee                         | Stab, punch, grapple in zero-G                    |
+| Health & injury               | Suit breach causes rapid death in vacuum           |
+| Interaction                   | Press button, open door, pick up item              |
+
+### Phase 8: Combat Systems (Weeks 56–72)
+
+| Task                          | Exit Criterion                                    |
+|-------------------------------|---------------------------------------------------|
+| Space combat                  | Destroy target craft at 100km range                |
+| Ground combat                 | Fight on Mars, Moon, Earth                        |
+| Vehicle combat                | Drive and shoot from vehicle                       |
+| Boarding actions              | Board enemy station through airlock                |
+| Damage model                  | Shoot reactor → explosion                         |
+| AI combatants                 | NPCs fight with basic tactics                     |
+
+### Phase 9: Economy & Social Systems (Weeks 60–76)
+
+| Task                          | Exit Criterion                                    |
+|-------------------------------|---------------------------------------------------|
+| Resource system               | Extract ore → refine → build component            |
+| Market simulation            | Price responds to supply shocks                   |
+| Settlement management         | Grow colony from 100 to 10,000 population         |
+| Faction system                | Player-led faction controls a station             |
+| Diplomacy                     | Two factions sign peace treaty                    |
+| LLM integration               | Player-triggered revolution cascades across 3 settlements |
+
+### Phase 10: MMO Infrastructure (Weeks 64–84)
+
+| Task                          | Exit Criterion                                    |
+|-------------------------------|---------------------------------------------------|
+| Persistent universe           | Player logs in next day, stuff is where they left  |
+| Cross-shard economy           | Buy ore on Mars shard, sell on Earth shard         |
+| Player housing                | Decorate and store items                          |
+| Guilds / corporations         | Guild owns a station collectively                 |
+| Server meshing                | 1000 players across Earth/Moon/Mars/Jovian shards |
+
+
+## Revised Effort Estimate
+
+| Phase                     | Duration (solo) | Can Parallelize?    |
+|---------------------------|-----------------|---------------------|
+| 0-1: Core Sim             | 20 weeks        | No (foundation)     |
+| 2: Networking              | 12 weeks        | After Phase 1       |
+| 3: Godot Client            | 16 weeks        | After Phase 1       |
+| 4: Vehicle Systems         | 16 weeks        | After Phase 1       |
+| 5: Gameplay Basics        | 16 weeks        | After Phases 2-3    |
+| 6: Hardening              | 12 weeks        | After Phases 4-5    |
+| 7: Player/FPS             | 20 weeks        | After Phase 3       |
+| 8: Combat                 | 16 weeks        | After Phase 7       |
+| 9: Economy/Social         | 16 weeks        | After Phase 2       |
+| 10: MMO Infra             | 20 weeks        | After Phase 2       |
+| 6b: Final Hardening       | 12 weeks        | After all above     |
+| **Total**                 | **~176 weeks**  |                     |
+
+Solo: ~3.5 years. Team of 5 (sim, net, client, gameplay, social/economy): ~18–24 months.
+
+The LLM-mediated social dynamics layer is the genuinely novel contribution. Nobody
+has done that. EVE Online has player-driven economics, but it's entirely first-order.
+This system models why populations revolt, when cultural shifts cascade, and how
+player actions ripple through civilization in nonlinear ways that no closed-form
+model can capture.
+
+Build to Phase 1 MVP first. Get a spacecraft orbiting Earth with validated physics.
+Then layer on.
