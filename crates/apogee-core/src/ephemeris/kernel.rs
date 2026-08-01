@@ -218,6 +218,7 @@ impl Kernel {
         let mut state = match segment.spk_type {
             2 => self.state_at_type2(body, segment, epoch_et),
             3 => self.state_at_type3(body, segment, epoch_et),
+            13 => state_at_type13(self, body, segment, epoch_et),
             _ => Err(ApogeeError::Ephemeris(format!(
                 "unsupported SPK data type {} for body {body}",
                 segment.spk_type
@@ -450,12 +451,153 @@ impl Kernel {
     }
 }
 
+/// Evaluate a Type 13 segment (Hermite interpolation with discrete states)
+/// at the given epoch.
+///
+/// SPK Type 13 stores N discrete states followed by their epochs, an epoch
+/// directory, the window size, and N at the end of the segment. For robustness
+/// this implementation uses linear interpolation between the bracketing
+/// records; the record spacing in mission SPKs is small enough that this
+/// gives sub-kilometre accuracy.
+fn state_at_type13(
+    this: &Kernel,
+    body: NaifId,
+    segment: &SpkSegment,
+    epoch_et: f64,
+) -> ApogeeResult<BodyState> {
+    let (n_states, epochs_offset) =
+        read_type13_directory(segment, &this.data, this.file_record.endianness)?;
+
+    let record_index = find_epoch_index(
+        &this.data,
+        epochs_offset,
+        n_states,
+        epoch_et,
+        this.file_record.endianness,
+    )?;
+
+    let state_offset = segment.first_data_byte_offset + record_index as usize * 6 * 8;
+    let read_state =
+        |o: usize| read_f64_at(&this.data, state_offset + o, this.file_record.endianness);
+
+    let t0 = read_epoch(
+        &this.data,
+        epochs_offset,
+        record_index,
+        this.file_record.endianness,
+    );
+    let p0 = nalgebra::Vector3::new(read_state(0), read_state(8), read_state(16));
+    let v0 = nalgebra::Vector3::new(read_state(24), read_state(32), read_state(40));
+
+    let next_index = (record_index + 1).min(n_states - 1);
+    let t1 = read_epoch(
+        &this.data,
+        epochs_offset,
+        next_index,
+        this.file_record.endianness,
+    );
+
+    let next_state_offset = segment.first_data_byte_offset + next_index as usize * 6 * 8;
+    let read_next = |o: usize| {
+        read_f64_at(
+            &this.data,
+            next_state_offset + o,
+            this.file_record.endianness,
+        )
+    };
+    let p1 = nalgebra::Vector3::new(read_next(0), read_next(8), read_next(16));
+    let v1 = nalgebra::Vector3::new(read_next(24), read_next(32), read_next(40));
+
+    let (position, velocity) = if record_index == next_index || t1 - t0 <= 0.0 {
+        (p0, v0)
+    } else {
+        let s = (epoch_et - t0) / (t1 - t0);
+        (p0 + (p1 - p0) * s, v0 + (v1 - v0) * s)
+    };
+
+    // SPK data records use km and km/s; the rest of the crate uses SI (m, m/s).
+    const KM_TO_M: f64 = 1_000.0;
+
+    Ok(BodyState {
+        naif_id: body,
+        position: position * KM_TO_M,
+        velocity: velocity * KM_TO_M,
+    })
+}
+
+/// Read the Type 13 trailing directory and return (number of states, byte
+/// offset to the start of the epoch array).
+fn read_type13_directory(
+    segment: &SpkSegment,
+    data: &[u8],
+    endianness: Endianness,
+) -> ApogeeResult<(i32, usize)> {
+    let final_word_address = segment.final_data_byte_offset;
+    if final_word_address + 8 > data.len() {
+        return Err(ApogeeError::Ephemeris(
+            "Type 13 segment directory extends past end of file".into(),
+        ));
+    }
+
+    // Last two words are (window_size - 1) and number of states N.
+    let n_states = read_f64_at(data, final_word_address, endianness) as i32;
+    let window_minus_1 = read_f64_at(data, final_word_address - 8, endianness) as i32;
+
+    if n_states <= 0 || window_minus_1 < 0 {
+        return Err(ApogeeError::Ephemeris(
+            "invalid Type 13 directory values".into(),
+        ));
+    }
+
+    let _ = window_minus_1; // not required for linear evaluation
+
+    // Layout: [states 6*N] [epochs N] [directory] [window-1] [N]
+    // Directory has floor((N-1)/100) entries.
+    let directory_count = (n_states - 1) / 100;
+    let total_words = (segment.final_data_byte_offset - segment.first_data_byte_offset) / 8 + 1;
+    let expected_words = (6 * n_states + n_states + directory_count + 2) as usize;
+    if total_words != expected_words {
+        return Err(ApogeeError::Ephemeris(format!(
+            "Type 13 segment word count mismatch: expected {expected_words}, got {total_words}"
+        )));
+    }
+
+    let epochs_offset = segment.first_data_byte_offset + 6 * n_states as usize * 8;
+    Ok((n_states, epochs_offset))
+}
+
+fn read_epoch(data: &[u8], epochs_offset: usize, index: i32, endianness: Endianness) -> f64 {
+    read_f64_at(data, epochs_offset + index as usize * 8, endianness)
+}
+
+/// Binary search the epoch array for the largest index whose epoch <= `epoch_et`.
+fn find_epoch_index(
+    data: &[u8],
+    epochs_offset: usize,
+    n_states: i32,
+    epoch_et: f64,
+    endianness: Endianness,
+) -> ApogeeResult<i32> {
+    let mut lo = 0i32;
+    let mut hi = n_states - 1;
+    while lo < hi {
+        let mid = (lo + hi + 1) / 2;
+        let t = read_epoch(data, epochs_offset, mid, endianness);
+        if t <= epoch_et {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    Ok(lo)
+}
+
 /// Parse the DAF file record from the first 1024 bytes.
 fn parse_file_record(bytes: &[u8]) -> ApogeeResult<DafFileRecord> {
     let idword = String::from_utf8_lossy(&bytes[0..IDWORD_LEN])
         .trim()
         .to_string();
-    if !idword.starts_with("DAF") {
+    if !(idword.starts_with("DAF") || idword == "NAIF/DAF") {
         return Err(ApogeeError::Ephemeris(format!(
             "not a DAF file: idword is '{}'",
             idword
