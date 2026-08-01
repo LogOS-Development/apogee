@@ -114,10 +114,45 @@ impl SpaceWeatherData {
         &self.entries
     }
 
-    /// Look up space weather by date.
+    /// Look up space weather by exact date.
     pub fn at_date(&self, year: u32, month: u32, day: u32) -> Option<&SpaceWeather> {
         self.entries
             .iter()
             .find(|e| e.year == year && e.month == month && e.day == day)
     }
+
+    /// Look up space weather by date, returning the nearest entry if an exact
+    /// match is not available.
+    ///
+    /// Returns `None` only when the database is empty.
+    pub fn nearest_date(&self, year: u32, month: u32, day: u32) -> Option<&SpaceWeather> {
+        if self.entries.is_empty() {
+            return None;
+        }
+
+        let target = date_to_ordinal(year, month, day);
+        self.entries.iter().min_by_key(|e| {
+            let ordinal = date_to_ordinal(e.year, e.month, e.day);
+            ordinal.abs_diff(target)
+        })
+    }
+}
+
+/// Convert a calendar date to a rough ordinal day count (days since 1 Jan 1).
+/// Used only for nearest-date distance comparisons; exact epoch is not required.
+fn date_to_ordinal(year: u32, month: u32, day: u32) -> i64 {
+    // Months before the current one this year.
+    const CUM_DAYS: [u32; 13] = [0, 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+    let y = i64::from(year);
+    let leap_years = (y - 1) / 4 - (y - 1) / 100 + (y - 1) / 400;
+    let base = y * 365 + leap_years;
+    let mut day_of_year = CUM_DAYS[month as usize] + day;
+    if month > 2 && is_leap_year(year) {
+        day_of_year += 1;
+    }
+    base + i64::from(day_of_year)
+}
+
+fn is_leap_year(year: u32) -> bool {
+    (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
 }

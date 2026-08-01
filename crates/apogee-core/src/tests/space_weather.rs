@@ -86,3 +86,19 @@ fn test_lookup_missing_date_returns_none() {
     let sw = SpaceWeatherData::parse(data).unwrap();
     assert!(sw.at_date(2024, 1, 2).is_none());
 }
+
+#[test]
+fn test_nearest_date_returns_exact_when_available() {
+    let data = "2024-01-01,150.0,145.0,3.0,15\n2024-01-02,152.0,146.0,2.0,12\n";
+    let sw = SpaceWeatherData::parse(data).unwrap();
+    let entry = sw.nearest_date(2024, 1, 1).unwrap();
+    assert!((entry.f107 - 150.0).abs() < 1e-9);
+}
+
+#[test]
+fn test_nearest_date_returns_closest_when_missing() {
+    let data = "2024-01-01,150.0,145.0,3.0,15\n2024-01-03,152.0,146.0,2.0,12\n";
+    let sw = SpaceWeatherData::parse(data).unwrap();
+    let entry = sw.nearest_date(2024, 1, 2).unwrap();
+    assert!((entry.f107 - 150.0).abs() < 1e-9);
+}
