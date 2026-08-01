@@ -554,7 +554,7 @@ fn parse_spk_type3_summary(
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
     use approx::assert_relative_eq;
 
@@ -601,7 +601,7 @@ mod tests {
     /// The fixture contains a file record, one summary record, and one or more
     /// data records. The coefficient generator receives the normalized Chebyshev
     /// time `x` in [-1, 1] and returns the physical position for that record.
-    fn build_type3_fixture<F>(
+    pub fn build_type3_fixture<F>(
         target_id: i32,
         start_et: f64,
         end_et: f64,
