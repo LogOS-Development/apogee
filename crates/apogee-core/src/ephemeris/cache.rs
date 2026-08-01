@@ -187,8 +187,9 @@ mod tests {
     use super::*;
     use approx::assert_relative_eq;
 
-    fn make_state(x: f64, y: f64, z: f64) -> BodyState {
+    fn make_state(naif_id: NaifId, x: f64, y: f64, z: f64) -> BodyState {
         BodyState {
+            naif_id,
             position: nalgebra::Vector3::new(x, y, z),
             velocity: nalgebra::Vector3::new(0.0, 0.0, 0.0),
         }
@@ -230,7 +231,7 @@ mod tests {
         let mut cache = EphemerisCache::new(2);
         assert!(cache.get_state(499, 0.0).is_none());
 
-        cache.put_state(499, 0.0, make_state(1.0, 2.0, 3.0));
+        cache.put_state(499, 0.0, make_state(499, 1.0, 2.0, 3.0));
         let state = cache.get_state(499, 0.0).unwrap();
         assert_relative_eq!(state.position.x, 1.0, epsilon = 1e-12);
     }
@@ -238,9 +239,9 @@ mod tests {
     #[test]
     fn test_state_cache_eviction() {
         let mut cache = EphemerisCache::new(2);
-        cache.put_state(499, 0.0, make_state(1.0, 0.0, 0.0));
-        cache.put_state(500, 0.0, make_state(2.0, 0.0, 0.0));
-        cache.put_state(501, 0.0, make_state(3.0, 0.0, 0.0));
+        cache.put_state(499, 0.0, make_state(499, 1.0, 0.0, 0.0));
+        cache.put_state(500, 0.0, make_state(500, 2.0, 0.0, 0.0));
+        cache.put_state(501, 0.0, make_state(501, 3.0, 0.0, 0.0));
 
         assert!(cache.get_state(499, 0.0).is_none());
         assert!(cache.get_state(500, 0.0).is_some());
@@ -250,7 +251,7 @@ mod tests {
     #[test]
     fn test_state_cache_nanoseconds_rounding() {
         let mut cache = EphemerisCache::new(2);
-        cache.put_state(499, 0.0, make_state(7.0, 0.0, 0.0));
+        cache.put_state(499, 0.0, make_state(499, 7.0, 0.0, 0.0));
         let state = cache.get_state(499, 1e-10).unwrap();
         assert_relative_eq!(state.position.x, 7.0, epsilon = 1e-12);
     }

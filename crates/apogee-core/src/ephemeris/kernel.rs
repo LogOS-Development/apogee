@@ -122,6 +122,7 @@ pub struct SpkSegment {
 /// Body state from ephemeris.
 #[derive(Debug, Clone)]
 pub struct BodyState {
+    pub naif_id: NaifId,
     pub position: apogee_common::Position,
     pub velocity: apogee_common::Velocity,
 }
@@ -214,14 +215,16 @@ impl Kernel {
             ))
         })?;
 
-        match segment.spk_type {
-            2 => self.state_at_type2(segment, epoch_et),
-            3 => self.state_at_type3(segment, epoch_et),
+        let mut state = match segment.spk_type {
+            2 => self.state_at_type2(body, segment, epoch_et),
+            3 => self.state_at_type3(body, segment, epoch_et),
             _ => Err(ApogeeError::Ephemeris(format!(
                 "unsupported SPK data type {} for body {body}",
                 segment.spk_type
             ))),
-        }
+        }?;
+        state.naif_id = body;
+        Ok(state)
     }
 
     /// Read Type 2/3 segment directory from the final four doubles of the data
@@ -354,7 +357,12 @@ impl Kernel {
     /// Evaluate a Type 2 segment (position-only Chebyshev coefficients) at the
     /// given epoch. Velocity is obtained by analytic differentiation of the
     /// position Chebyshev series.
-    fn state_at_type2(&self, segment: &SpkSegment, epoch_et: f64) -> ApogeeResult<BodyState> {
+    fn state_at_type2(
+        &self,
+        body: NaifId,
+        segment: &SpkSegment,
+        epoch_et: f64,
+    ) -> ApogeeResult<BodyState> {
         let (init, intlen, rsize, n) = self.read_segment_directory(segment)?;
 
         let record_index_f = (epoch_et - init) / intlen;
@@ -388,6 +396,7 @@ impl Kernel {
         let scale = 1.0 / radius;
 
         Ok(BodyState {
+            naif_id: body,
             position,
             velocity: velocity_normalized * scale,
         })
@@ -395,7 +404,12 @@ impl Kernel {
 
     /// Evaluate a Type 3 segment (position + velocity Chebyshev coefficients)
     /// at the given epoch.
-    fn state_at_type3(&self, segment: &SpkSegment, epoch_et: f64) -> ApogeeResult<BodyState> {
+    fn state_at_type3(
+        &self,
+        body: NaifId,
+        segment: &SpkSegment,
+        epoch_et: f64,
+    ) -> ApogeeResult<BodyState> {
         let (init, intlen, rsize, n) = self.read_segment_directory(segment)?;
 
         let record_index_f = (epoch_et - init) / intlen;
@@ -429,6 +443,7 @@ impl Kernel {
         let scale = 1.0 / radius;
 
         Ok(BodyState {
+            naif_id: body,
             position,
             velocity: velocity_normalized * scale,
         })

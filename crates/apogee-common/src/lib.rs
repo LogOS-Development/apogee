@@ -80,4 +80,29 @@ pub mod constants {
 
     /// Solar radiation pressure at 1 AU (N/m^2).
     pub const SRP_1AU: f64 = 4.5391e-6;
+
+    /// Return the standard JPL/NAIF gravitational parameter (GM) for a body
+    /// by NAIF ID, in m^3/s^2.
+    ///
+    /// Values are converted from NAIF km^3/s^2 kernels to SI. Unknown bodies
+    /// return `None`.
+    pub const fn gravitational_parameter(body_id: super::NaifId) -> Option<f64> {
+        match body_id {
+            10 => Some(GM_SUN),           // Sun
+            199 => Some(2.2032e13),       // Mercury
+            299 => Some(3.24858599e14),   // Venus
+            399 => Some(GM_EARTH),        // Earth
+            301 => Some(GM_MOON),         // Moon
+            499 => Some(4.2828375214e13), // Mars
+            599 => Some(1.266865349e17),  // Jupiter
+            699 => Some(3.7931208e15),    // Saturn
+            799 => Some(5.7939513e15),    // Uranus
+            899 => Some(6.8365271e15),    // Neptune
+            999 => Some(8.696e11),        // Pluto
+            _ => None,
+        }
+    }
 }
+
+/// Re-export the lookup helper at the crate root for ergonomic use.
+pub use constants::gravitational_parameter;
