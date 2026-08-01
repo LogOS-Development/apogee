@@ -16,6 +16,12 @@ fn de441_mars_barycenter_vs_horizons() {
         env!("CARGO_MANIFEST_DIR"),
         "/../../data/ephemeris/de441.bsp"
     );
+    // Skip if the DE441 kernel has not been downloaded yet. CI runs with
+    // fetched data; local unit-test runs can safely ignore this.
+    if !std::path::Path::new(path).exists() {
+        eprintln!("SKIP: DE441 kernel not found at {path}");
+        return;
+    }
     let kernel = Kernel::load(path).unwrap();
 
     let epoch = Epoch::from_gregorian(2025, 1, 1, 12, 0, 0, 0, hifitime::TimeScale::TDB);
