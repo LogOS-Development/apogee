@@ -41,6 +41,55 @@ fn point_mass_derivative(
     }
 }
 
+/// Query JPL HORIZONS for a geocentric state vector of the given NAIF body
+/// at a single epoch. Returns position (m) and velocity (m/s) in the ecliptic
+/// J2000 frame. This is intentionally minimal; failures return an error so the
+/// test can skip when the network is unavailable.
+fn horizons_geocentric_state(
+    naif_id: i32,
+    start_epoch: &str,
+    stop_epoch: &str,
+) -> Result<(Vector3<f64>, Vector3<f64>), String> {
+    let start = urlencoding::encode(start_epoch);
+    let stop = urlencoding::encode(stop_epoch);
+    let url = format!(
+        "https://ssd.jpl.nasa.gov/api/horizons.api?format=text&COMMAND={naif_id}&OBJ_DATA=NO&MAKE_EPHEM=YES&EPHEM_TYPE=VECTOR&CENTER=@399&START_TIME={start}&STOP_TIME={stop}&STEP_SIZE=1m&OUT_UNITS=KM-S&REF_PLANE=ECLIP&VEC_TABLE=2"
+    );
+
+    let response = reqwest::blocking::get(&url)
+        .map_err(|e| format!("HORIZONS request failed: {e}"))?
+        .text()
+        .map_err(|e| format!("HORIZONS response read failed: {e}"))?;
+
+    if response.contains("INPUT ERROR") || response.contains("No such record") {
+        return Err(format!("HORIZONS API error in response:\n{response}"));
+    }
+
+    parse_horizons_vector_block(&response)
+        .ok_or_else(|| "HORIZONS response did not contain a state vector".to_string())
+}
+
+/// Parse the first X/Y/Z/VX/VY/VZ block in a HORIZONS text response. Units are
+/// assumed km and km/s; returned in m and m/s.
+fn parse_horizons_vector_block(text: &str) -> Option<(Vector3<f64>, Vector3<f64>)> {
+    let re = regex::Regex::new(
+        r"X\s*=\s*([+\-0-9.Ee]+)\s*Y\s*=\s*([+\-0-9.Ee]+)\s*Z\s*=\s*([+\-0-9.Ee]+)\s*\n\s*VX\s*=\s*([+\-0-9.Ee]+)\s*VY\s*=\s*([+\-0-9.Ee]+)\s*VZ\s*=\s*([+\-0-9.Ee]+)",
+    )
+    .ok()?;
+    let caps = re.captures(text)?;
+    let pos = Vector3::new(
+        caps[1].parse::<f64>().ok()? * 1_000.0,
+        caps[2].parse::<f64>().ok()? * 1_000.0,
+        caps[3].parse::<f64>().ok()? * 1_000.0,
+    );
+    let vel = Vector3::new(
+        caps[4].parse::<f64>().ok()? * 1_000.0,
+        caps[5].parse::<f64>().ok()? * 1_000.0,
+        caps[6].parse::<f64>().ok()? * 1_000.0,
+    );
+    Some((pos, vel))
+}
+
 #[test]
 fn test_apollo_11_style_lunar_orbit() {
     let gravity = PointMassGravity::default();
@@ -95,5 +144,54 @@ fn test_apollo_11_style_lunar_orbit() {
     assert!(
         state.velocity.y.abs() < 0.1 * speed_final,
         "expected small y velocity component"
+    );
+}
+
+#[test]
+#[ignore = "requires network access to JPL HORIZONS; set RUSTFLAGS or run with --ignored"]
+fn test_moon_geocentric_orbit_vs_horizons_apollo_era() {
+    // Apollo 11 lunar orbit insertion epoch, roughly 1969-07-19 21:22 UTC.
+    let start_epoch = "1969-07-19T21:22:00";
+    let duration_s = 2.0 * 3600.0; // 2 hours, about one lunar orbit
+
+    let (moon_start_pos, moon_start_vel) =
+        horizons_geocentric_state(301, start_epoch, "1969-07-19T21:23:00")
+            .expect("HORIZONS query for Moon");
+    let (moon_end_pos, moon_end_vel_expected) =
+        horizons_geocentric_state(301, "1969-07-19T23:22:00", "1969-07-19T23:23:00")
+            .expect("HORIZONS query for Moon");
+
+    // Treat the Moon as the test particle and propagate it around the Earth
+    // using a point-mass Earth+Moon model in the geocentric inertial frame.
+    let celestial = SolarSystemState {
+        states: vec![BodyState {
+            naif_id: 399,
+            position: Vector3::zeros(),
+            velocity: Vector3::zeros(),
+        }],
+    };
+
+    let mut state = StateVector {
+        position: moon_start_pos,
+        velocity: moon_start_vel,
+    };
+
+    let gravity = PointMassGravity::default();
+    let mut integrator = Rk4::new(60.0); // 1 minute step
+    let derivative_fn = |s: &StateVector| point_mass_derivative(s, &celestial, &gravity);
+
+    let result = integrator.step(&mut state, &derivative_fn, duration_s);
+    assert!(result.accepted);
+
+    let position_error_km = (state.position - moon_end_pos).norm() / 1_000.0;
+    let velocity_error_ms = (state.velocity - moon_end_vel_expected).norm();
+
+    assert!(
+        position_error_km < 100.0,
+        "Moon geocentric position error = {position_error_km:.2} km after 2 h"
+    );
+    assert!(
+        velocity_error_ms < 1.0,
+        "Moon geocentric velocity error = {velocity_error_ms:.4} m/s after 2 h"
     );
 }
