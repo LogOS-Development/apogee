@@ -58,9 +58,18 @@ pub fn quaternion_error(
 /// Integrate angular velocity into a quaternion over `dt` using first-order Lie
 /// update (Euler-Rodrigues). Good enough for GNC loop rates; the propagation
 /// integrator uses higher-order methods for the physics step.
-pub fn integrate_attitude(q: &Quaternion<f64>, omega_rad_s: &Vector3<f64>, dt: f64) -> Quaternion<f64> {
+pub fn integrate_attitude(
+    q: &Quaternion<f64>,
+    omega_rad_s: &Vector3<f64>,
+    dt: f64,
+) -> Quaternion<f64> {
     let half_dt = dt * 0.5;
-    let delta = Quaternion::new(0.0, omega_rad_s.x * half_dt, omega_rad_s.y * half_dt, omega_rad_s.z * half_dt);
+    let delta = Quaternion::new(
+        0.0,
+        omega_rad_s.x * half_dt,
+        omega_rad_s.y * half_dt,
+        omega_rad_s.z * half_dt,
+    );
     let q_next = q + delta * q;
     q_next.normalize()
 }

@@ -32,7 +32,9 @@ pub fn step_spacecraft(
     let mut state = StateVector::from_kinematics(kinematics);
 
     let inertia = dynamics.inertia;
-    let inertia_inv = inertia.try_inverse().unwrap_or_else(nalgebra::Matrix3::identity);
+    let inertia_inv = inertia
+        .try_inverse()
+        .unwrap_or_else(nalgebra::Matrix3::identity);
     let _mass_inv = 1.0 / dynamics.mass;
 
     let derivative_fn = |s: &StateVector| {

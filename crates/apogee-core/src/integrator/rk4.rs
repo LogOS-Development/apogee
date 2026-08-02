@@ -66,29 +66,19 @@ fn rk4_stage(
     let mut s2 = state.clone();
     s2.position += k1.velocity * (0.5 * h);
     s2.velocity += k1.acceleration * (0.5 * h);
-    s2.attitude = integrate_attitude(&s2.attitude,
-        &s2.angular_velocity,
-        0.5 * h,
-    );
+    s2.attitude = integrate_attitude(&s2.attitude, &s2.angular_velocity, 0.5 * h);
     let k2 = derivative_fn(&s2);
 
     let mut s3 = state.clone();
     s3.position += k2.velocity * (0.5 * h);
     s3.velocity += k2.acceleration * (0.5 * h);
-    s3.attitude = integrate_attitude(
-        &s3.attitude,
-        &s3.angular_velocity,
-        0.5 * h,
-    );
+    s3.attitude = integrate_attitude(&s3.attitude, &s3.angular_velocity, 0.5 * h);
     let k3 = derivative_fn(&s3);
 
     let mut s4 = state.clone();
     s4.position += k3.velocity * h;
     s4.velocity += k3.acceleration * h;
-    s4.attitude = integrate_attitude(&s4.attitude,
-        &s4.angular_velocity,
-        h,
-    );
+    s4.attitude = integrate_attitude(&s4.attitude, &s4.angular_velocity, h);
     let k4 = derivative_fn(&s4);
 
     state.position +=
@@ -96,17 +86,19 @@ fn rk4_stage(
     state.velocity +=
         (k1.acceleration + 2.0 * k2.acceleration + 2.0 * k3.acceleration + k4.acceleration)
             * (h / 6.0);
-    state.attitude = integrate_attitude(
-        &state.attitude,
-        &state.angular_velocity,
-        h,
-    );
-    state.angular_velocity +=
-        (k1.angular_acceleration + 2.0 * k2.angular_acceleration + 2.0 * k3.angular_acceleration + k4.angular_acceleration)
-            * (h / 6.0);
+    state.attitude = integrate_attitude(&state.attitude, &state.angular_velocity, h);
+    state.angular_velocity += (k1.angular_acceleration
+        + 2.0 * k2.angular_acceleration
+        + 2.0 * k3.angular_acceleration
+        + k4.angular_acceleration)
+        * (h / 6.0);
 }
 
-fn _integrate_attitude_quat(q: &nalgebra::Quaternion<f64>, omega: &nalgebra::Vector3<f64>, dt: f64) -> nalgebra::Quaternion<f64> {
+fn _integrate_attitude_quat(
+    q: &nalgebra::Quaternion<f64>,
+    omega: &nalgebra::Vector3<f64>,
+    dt: f64,
+) -> nalgebra::Quaternion<f64> {
     crate::control::integrate_attitude(q, omega, dt)
 }
 

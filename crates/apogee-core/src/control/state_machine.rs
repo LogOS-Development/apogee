@@ -102,7 +102,12 @@ impl FlightModeMachine {
     }
 
     /// Request a transition. `guard` is the current vehicle health estimate.
-    pub fn command(&mut self, cmd: ModeCommand, guard: &ModeGuard, rate_rad_s: f64) -> TransitionResult {
+    pub fn command(
+        &mut self,
+        cmd: ModeCommand,
+        guard: &ModeGuard,
+        rate_rad_s: f64,
+    ) -> TransitionResult {
         let target = match cmd {
             ModeCommand::Set(m) => m,
             ModeCommand::Fault => FlightMode::Safe,
@@ -133,7 +138,9 @@ impl FlightModeMachine {
             // Idle/Point/Maneuver require healthy actuators, valid attitude, and
             // rate within bounds. Safe mode is intentionally permissive.
             FlightMode::Idle | FlightMode::Point | FlightMode::Maneuver | FlightMode::Coast => {
-                guard.actuators_healthy && guard.attitude_valid && rate_rad_s <= guard.max_rate_rad_s
+                guard.actuators_healthy
+                    && guard.attitude_valid
+                    && rate_rad_s <= guard.max_rate_rad_s
             }
         }
     }

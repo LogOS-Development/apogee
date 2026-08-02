@@ -94,11 +94,11 @@ fn test_apollo_11_style_lunar_orbit() {
     let spacecraft_velocity = Vector3::new(-orbital_speed, 0.0, 0.0);
 
     let mut state = StateVector {
-            position: spacecraft_position,
+        position: spacecraft_position,
         velocity: spacecraft_velocity,
-            attitude: nalgebra::Quaternion::identity(),
-            angular_velocity: nalgebra::Vector3::zeros(),
-        };
+        attitude: nalgebra::Quaternion::identity(),
+        angular_velocity: nalgebra::Vector3::zeros(),
+    };
 
     let celestial = moon_system();
     let mut integrator = Rk4::new(10.0); // 10 s fixed step
@@ -160,11 +160,11 @@ fn test_moon_geocentric_orbit_vs_horizons_apollo_era() {
     };
 
     let mut state = StateVector {
-            position: moon_start_pos,
+        position: moon_start_pos,
         velocity: moon_start_vel,
-            attitude: nalgebra::Quaternion::identity(),
-            angular_velocity: nalgebra::Vector3::zeros(),
-        };
+        attitude: nalgebra::Quaternion::identity(),
+        angular_velocity: nalgebra::Vector3::zeros(),
+    };
 
     let gravity = PointMassGravity {};
     let mut integrator = Rk4::new(60.0); // 1 minute step

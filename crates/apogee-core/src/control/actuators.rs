@@ -131,7 +131,11 @@ impl ReactionWheelAssembly {
         params: Vec<WheelParameters>,
     ) -> Self {
         let n = axes.len();
-        assert_eq!(axes.len(), params.len(), "axes and params length must match");
+        assert_eq!(
+            axes.len(),
+            params.len(),
+            "axes and params length must match"
+        );
         let coupling_matrix = Self::build_coupling_matrix(&axes);
         Self {
             axes: axes.clone(),
@@ -335,10 +339,7 @@ mod tests {
 
     #[test]
     fn test_rw_cross_coupling_changes_off_axis_torque() {
-        let axes = vec![
-            Vector3::new(1.0, 0.0, 0.0),
-            Vector3::new(0.0, 1.0, 0.0),
-        ];
+        let axes = vec![Vector3::new(1.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0)];
         let params = vec![WheelParameters::default(); 2];
         let rwa = ReactionWheelAssembly::new(axes, 1.0, 10.0, params);
         let cmds = vec![0.5, 0.0];
@@ -350,8 +351,10 @@ mod tests {
     #[test]
     fn test_rw_gyroscopic_coupling_with_bus_rate() {
         let axes = vec![Vector3::new(0.0, 0.0, 1.0)];
-        let mut params = WheelParameters::default();
-        params.inertia_spin = 1e-3;
+        let params = WheelParameters {
+            inertia_spin: 1e-3,
+            ..WheelParameters::default()
+        };
         let mut rwa = ReactionWheelAssembly::new(axes, 1.0, 10.0, vec![params]);
         // Spin wheel up to 100 rad/s.
         rwa.speeds[0] = 100.0;

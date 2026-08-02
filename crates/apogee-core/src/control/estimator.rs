@@ -138,12 +138,16 @@ impl AttitudeEkf {
         // K = P H^T S^-1    (6x3)
         // Joseph update: P+ = (I - K H) P (I - K H)^T + K R K^T (6x6).
         let h_dyn: DMatrix<f64> = h.clone();
-        let p_dyn: DMatrix<f64> = DMatrix::from_row_slice(6, 6, self.estimate.covariance.as_slice());
+        let p_dyn: DMatrix<f64> =
+            DMatrix::from_row_slice(6, 6, self.estimate.covariance.as_slice());
         let r3: DMatrix<f64> = dmatrix_from_matrix3(r);
 
         let ht = h_dyn.transpose();
         let s: DMatrix<f64> = h_dyn.clone() * p_dyn.clone() * ht.clone() + r3.clone();
-        let s_inv: DMatrix<f64> = s.clone().try_inverse().unwrap_or_else(|| DMatrix::identity(3, 3));
+        let s_inv: DMatrix<f64> = s
+            .clone()
+            .try_inverse()
+            .unwrap_or_else(|| DMatrix::identity(3, 3));
 
         let k: DMatrix<f64> = p_dyn.clone() * ht * s_inv.clone();
         let z_dyn = DVector::from_row_slice(&[z.x, z.y, z.z]);

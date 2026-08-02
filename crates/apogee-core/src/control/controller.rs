@@ -6,7 +6,7 @@
 
 use nalgebra::{UnitQuaternion, Vector3};
 
-use crate::control::{FlightMode, quaternion_error, torque_command, ControlOutput};
+use crate::control::{quaternion_error, torque_command, ControlOutput, FlightMode};
 
 /// Attitude controller gains.
 #[derive(Debug, Clone)]
@@ -82,7 +82,8 @@ impl AttitudeController {
     ) -> ControlOutput {
         match mode {
             FlightMode::Idle | FlightMode::Point | FlightMode::Maneuver => {
-                let (err_vec, _err_scalar) = quaternion_error(estimated_attitude, &setpoint.attitude);
+                let (err_vec, _err_scalar) =
+                    quaternion_error(estimated_attitude, &setpoint.attitude);
                 // Quaternion vector part is roughly axis * sin(theta/2); double for small-angle axis.
                 let angle_error = err_vec * 2.0;
                 let rate_error = estimated_rate - setpoint.angular_velocity;

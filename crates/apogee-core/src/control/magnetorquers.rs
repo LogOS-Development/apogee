@@ -33,11 +33,7 @@ pub struct MagnetorquerSet {
 
 impl MagnetorquerSet {
     /// Compute body torque from commanded dipole moment and body-frame B field.
-    pub fn torque(
-        &self,
-        dipole_am2: &Vector3<f64>,
-        b_body_t: &Vector3<f64>,
-    ) -> Vector3<f64> {
+    pub fn torque(&self, dipole_am2: &Vector3<f64>, b_body_t: &Vector3<f64>) -> Vector3<f64> {
         let m = self.quantize(dipole_am2);
         m.cross(b_body_t)
     }
@@ -73,11 +69,7 @@ impl BdotController {
     }
 
     /// Compute dipole command given current body-frame B field and dt since last call.
-    pub fn compute(
-        &mut self,
-        b_body_t: &Vector3<f64>,
-        dt: f64,
-    ) -> Vector3<f64> {
+    pub fn compute(&mut self, b_body_t: &Vector3<f64>, dt: f64) -> Vector3<f64> {
         let dot = match &self.last_b_body {
             Some(prev) => {
                 if dt > 0.0 {
