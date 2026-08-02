@@ -26,6 +26,21 @@ pub fn decimal_year(epoch: Epoch) -> f64 {
     f64::from(year) + (day_of_year - 1.0) / days_in_year
 }
 
+/// Parse an ISO-like date string `YYYY-MM-DD` into a `(year, month, day)` tuple.
+///
+/// This helper is used by fixture-driven tests that read date columns from CSV
+/// files. It does not perform validation; the caller (typically `hifitime`)
+/// validates the resulting date.
+#[must_use]
+pub fn parse_iso_date(s: &str) -> (i32, u8, u8) {
+    let parts: Vec<&str> = s.split('-').collect();
+    (
+        parts[0].parse().expect("year"),
+        parts[1].parse().expect("month"),
+        parts[2].parse().expect("day"),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -47,7 +62,12 @@ mod tests {
     #[test]
     fn decimal_year_leap_year() {
         let epoch = Epoch::from_gregorian_utc(2024, 7, 2, 0, 0, 0, 0);
-        // 184 days into 366-day year -> 2024 + 183/366
+        // 184 days into 366-day year -> 2024 + 183/366.
         assert_relative_eq!(decimal_year(epoch), 2024.5, epsilon = 1e-9);
+    }
+
+    #[test]
+    fn parse_iso_date_splits_components() {
+        assert_eq!(parse_iso_date("2024-03-15"), (2024, 3, 15));
     }
 }

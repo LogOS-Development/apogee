@@ -56,8 +56,14 @@ impl Igrf {
     /// mimicking the ring-current effect in a coarse, spherical-harmonic way.
     pub fn field_with_ap(&self, position_m: &Vector3<f64>, epoch: Epoch, ap: f64) -> Vector3<f64> {
         let decimal_year = decimal_year(epoch);
-        let (mut g, h) = coefficients_at_epoch(decimal_year);
-        crate::magnetosphere::disturbance::add_ap_perturbation(self.body_id(), &mut g, ap);
+        let (mut g, mut h) = coefficients_at_epoch(decimal_year);
+        crate::magnetosphere::disturbance::add_ap_perturbation(
+            self.body_id(),
+            &mut g,
+            &mut h,
+            position_m,
+            ap,
+        );
         self.field_with_coeffs(position_m, &g, &h)
     }
 
@@ -138,31 +144,40 @@ impl Igrf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use apogee_common::time::parse_iso_date;
     use approx::assert_relative_eq;
 
     #[test]
-    fn test_dipole_equator_z_component() {
-        // Sanity check for a pure zonal dipole (g_1^0 only). The field at the
-        // equator on the +x axis points along +z in ECEF (southward field line
-        // entering the southern hemisphere). This mirrors the sign convention in
-        // IGRF, where the axial dipole coefficient g_1^0 is negative.
+    fn test_dipole_equator_matches_closed_form() {
+        // Analytic validation of a pure zonal dipole at the equator.
         //
-        // Source: IGRF-13 technical documentation, NOAA NGDC / IAGA VMOD,
-        // https://www.ngdc.noaa.gov/IAGA/vmod/igrf.html
+        // For a potential V = a (a/r)^2 g_1^0 cosθ, the geocentric spherical
+        // field components are:
+        //   B_r     = 2 g_1^0 ρ^3 cosθ
+        //   B_θ     =   g_1^0 ρ^3 sinθ
+        //   B_φ     = 0
+        // where ρ = a/r. At the equator (θ = π/2), cosθ = 0 and sinθ = 1, so
+        // B_r = 0 and B_θ = g_1^0 ρ^3. Converting B_θ (southward) to ECEF gives
+        // a purely vertical (+z) vector with magnitude |g_1^0| ρ^3.
+        //
+        // Source: Blakely, R. J., Potential Theory in Gravity and Magnetic
+        // Applications, Cambridge University Press, 1995, §4.2.
+        let g_10: f64 = -30_000.0;
         let mut g = [0.0; 105];
-        g[1] = -30_000.0; // g_1^0
+        g[1] = g_10;
         let h = [0.0; 105];
 
         let model = Igrf { max_degree: 1 };
-        let _epoch = Epoch::from_gregorian_utc(2020, 1, 1, 0, 0, 0, 0);
         let r = (IGRF_REF_RADIUS_KM * 1_000.0) + 400_000.0;
         let pos = Vector3::new(r, 0.0, 0.0);
         let b = model.field_with_coeffs(&pos, &g, &h);
 
-        // At equator the dipole field is purely vertical in ECEF: B_x=B_y=0, B_z positive.
+        let rho = IGRF_REF_RADIUS_KM * 1_000.0 / r;
+        let expected_bz = g_10.abs() * rho.powi(3);
+
         assert_relative_eq!(b.x, 0.0, epsilon = 1e-6);
         assert_relative_eq!(b.y, 0.0, epsilon = 1e-6);
-        assert!(b.z > 0.0, "expected B_z > 0 at equator, got {}", b.z);
+        assert_relative_eq!(b.z, expected_bz, epsilon = 1e-6);
     }
 
     #[test]
@@ -251,7 +266,7 @@ mod tests {
             let ref_btheta: f64 = parts[5].parse().unwrap();
             let ref_bphi: f64 = parts[6].parse().unwrap();
 
-            let (year, month, day) = parse_date(date);
+            let (year, month, day) = parse_iso_date(date);
             let epoch = Epoch::from_gregorian_utc(year, month, day, 0, 0, 0, 0);
 
             let lat_rad = lat_deg.to_radians();
@@ -285,14 +300,5 @@ mod tests {
             assert_relative_eq!(btheta, ref_btheta, epsilon = 1500.0, max_relative = 0.07);
             assert_relative_eq!(bphi, ref_bphi, epsilon = 1500.0, max_relative = 0.07);
         }
-    }
-
-    fn parse_date(s: &str) -> (i32, u8, u8) {
-        let parts: Vec<&str> = s.split('-').collect();
-        (
-            parts[0].parse().unwrap(),
-            parts[1].parse().unwrap(),
-            parts[2].parse().unwrap(),
-        )
     }
 }
