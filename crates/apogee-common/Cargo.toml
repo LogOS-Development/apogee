@@ -10,3 +10,6 @@ nalgebra = { workspace = true }
 hifitime = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
+
+[dev-dependencies]
+approx = "0.5"
