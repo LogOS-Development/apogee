@@ -6,6 +6,11 @@ members = [
     "crates/apogee-server",
     "crates/apogee-godot",
     "crates/apogee-common",
+    "crates/apogee-social",
+    "crates/apogee-strategic",
+    "crates/apogee-tactical",
+    "crates/apogee-discovery",
+    "crates/apogee-llm",
 ]
 
 [workspace.package]
@@ -33,5 +38,10 @@ rayon = "1.10"
 apogee-common = { path = "crates/apogee-common" }
 apogee-core = { path = "crates/apogee-core" }
 apogee-net = { path = "crates/apogee-net" }
+apogee-social = { path = "crates/apogee-social" }
+apogee-strategic = { path = "crates/apogee-strategic" }
+apogee-tactical = { path = "crates/apogee-tactical" }
+apogee-discovery = { path = "crates/apogee-discovery" }
+apogee-llm = { path = "crates/apogee-llm" }
 # EOP cache directory
 # dirs = "5.0"
