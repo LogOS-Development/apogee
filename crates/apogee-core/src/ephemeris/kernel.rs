@@ -903,7 +903,7 @@ pub mod tests {
         let directory_size = 4 * 8;
         let total_data_bytes = record_count as usize * record_size_bytes as usize + directory_size;
         // Total DAF records needed to hold data bytes, rounded up.
-        let data_daf_records = (total_data_bytes + RECORD_SIZE - 1) / RECORD_SIZE;
+        let data_daf_records = total_data_bytes.div_ceil(RECORD_SIZE);
         let total_daf_records = first_data_record as usize - 1 + data_daf_records;
         let mut bytes = minimal_daf_header("DAF/SPK", 2, 2, total_daf_records as i32 + 1);
         bytes.resize(RECORD_SIZE * total_daf_records, 0);
@@ -1035,7 +1035,7 @@ pub mod tests {
         let record_size_bytes = rsize_doubles * 3 * 8 + 16;
         let directory_size = 4 * 8;
         let total_data_bytes = record_count as usize * record_size_bytes as usize + directory_size;
-        let data_daf_records = (total_data_bytes + RECORD_SIZE - 1) / RECORD_SIZE;
+        let data_daf_records = total_data_bytes.div_ceil(RECORD_SIZE);
         let total_daf_records = first_data_record as usize - 1 + data_daf_records;
         let mut bytes = minimal_daf_header("DAF/SPK", 2, 2, total_daf_records as i32 + 1);
         bytes.resize(RECORD_SIZE * total_daf_records, 0);
@@ -1072,14 +1072,14 @@ pub mod tests {
             bytes[offset + 8..offset + 16].copy_from_slice(&radius.to_le_bytes());
 
             let mut samples = vec![[0.0; 3]; n_coeffs];
-            for i in 0..n_coeffs {
+            for (i, sample) in samples.iter_mut().enumerate() {
                 let x = ((2 * i + 1) as f64 * std::f64::consts::PI / (2.0 * n_coeffs as f64)).cos();
                 let t = mid + x * radius;
-                samples[i] = position_fn(t);
+                *sample = position_fn(t);
             }
 
             let mut coeffs = vec![[0.0; 3]; n_coeffs];
-            for k in 0..n_coeffs {
+            for (k, coeff) in coeffs.iter_mut().enumerate() {
                 let mut sum = [0.0; 3];
                 for (j, sample) in samples.iter().enumerate() {
                     let x_j =
@@ -1094,17 +1094,16 @@ pub mod tests {
                 } else {
                     2.0 / n_coeffs as f64
                 };
-                coeffs[k][0] = sum[0] * scale;
-                coeffs[k][1] = sum[1] * scale;
-                coeffs[k][2] = sum[2] * scale;
+                coeff[0] = sum[0] * scale;
+                coeff[1] = sum[1] * scale;
+                coeff[2] = sum[2] * scale;
             }
 
             let block_size = n_coeffs * 8;
-            for i in 0..n_coeffs {
-                for axis in 0..3 {
+            for (i, coeff) in coeffs.iter().enumerate() {
+                for (axis, c) in coeff.iter().enumerate() {
                     let coeff_offset = offset + 16 + axis * block_size + i * 8;
-                    bytes[coeff_offset..coeff_offset + 8]
-                        .copy_from_slice(&coeffs[i][axis].to_le_bytes());
+                    bytes[coeff_offset..coeff_offset + 8].copy_from_slice(&c.to_le_bytes());
                 }
             }
         }

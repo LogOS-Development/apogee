@@ -1,4 +1,5 @@
 #[cfg(test)]
+#[allow(clippy::module_inception, clippy::type_complexity)]
 mod apollo15_validation {
     use crate::gravity::point_mass::PointMassGravity;
     use crate::integrator::{Integrator, Rk4, StateVector};
@@ -61,11 +62,11 @@ mod apollo15_validation {
             "reference trajectory must contain at least two states"
         );
 
-        let gravity = PointMassGravity::default();
+        let gravity = PointMassGravity {};
         let celestial = moon_only_system();
         let mut integrator = Rk4::new(10.0); // 10 s fixed step
 
-        let (et0, pos0, vel0) = reference[0].clone();
+        let (et0, pos0, vel0) = reference[0];
         let mut state = StateVector {
             position: pos0,
             velocity: vel0,

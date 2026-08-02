@@ -18,7 +18,9 @@ pub enum RoleAuthority {
 #[derive(Debug, Clone, Default)]
 pub enum RoleDuration {
     Task,
-    Shift { hours: f64 },
+    Shift {
+        hours: f64,
+    },
     Tenure,
     #[default]
     Lifetime,
@@ -46,7 +48,9 @@ pub enum Role {
     CouncilMember,
     Magistrate,
     Diplomat,
-    Ruler { polity: GroupId },
+    Ruler {
+        polity: GroupId,
+    },
     Soldier,
     SquadLeader,
     Commander,

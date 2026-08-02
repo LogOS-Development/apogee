@@ -78,7 +78,7 @@ fn parse_horizons_vector_block(text: &str) -> Option<(Vector3<f64>, Vector3<f64>
 
 #[test]
 fn test_apollo_11_style_lunar_orbit() {
-    let gravity = PointMassGravity::default();
+    let gravity = PointMassGravity {};
 
     // Apollo 11 lunar orbit: ~110 km altitude, nearly circular.
     let altitude = 110_000.0;
@@ -162,7 +162,7 @@ fn test_moon_geocentric_orbit_vs_horizons_apollo_era() {
         velocity: moon_start_vel,
     };
 
-    let gravity = PointMassGravity::default();
+    let gravity = PointMassGravity {};
     let mut integrator = Rk4::new(60.0); // 1 minute step
     let derivative_fn = |s: &StateVector| point_mass_derivative(s, &celestial, &gravity);
 

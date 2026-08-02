@@ -6,6 +6,7 @@
 //!   - J2 / spherical-harmonic gravity (Phase 1.3 is still point-mass only)
 //!   - TEME-to-ICRF frame alignment and EOP
 //!   - Historical next-day TLE fixture
+//!
 //! Those improvements are tracked in follow-up issues.
 
 use apogee_common::constants::R_EARTH_EQ;

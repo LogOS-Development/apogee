@@ -108,7 +108,7 @@ fn test_obliquity_vs_erfa_2025() {
     // eps = 4.090358313766700e-01 rad
     let model = NutationPrecessionModel::new();
     let eps = model.mean_obliquity(epoch_2025());
-    let expected = 4.090358313766700e-01;
+    let expected = 4.090_358_313_766_7e-1;
     assert!(
         (eps - expected).abs() < MAS,
         "Obliquity at 2025: diff = {} mas (expected < 1 mas)",
@@ -226,7 +226,7 @@ fn test_nutation_angles_vs_erfa_2030() {
     // deps = -1.360009203634451e-05 rad
     let model = NutationPrecessionModel::new();
     let (dpsi, deps) = model.nutation_angles(epoch_2030());
-    let ref_dpsi = 8.024389619812660e-05;
+    let ref_dpsi = 8.024_389_619_812_66e-5;
     let ref_deps = -1.360009203634451e-05;
 
     let dpsi_err = (dpsi - ref_dpsi).abs() / ARCSEC;
@@ -253,7 +253,7 @@ fn test_equation_of_equinoxes_vs_erfa_j2000() {
     // EE = -6.195892212970470e-05 rad
     let model = NutationPrecessionModel::new();
     let ee = model.equation_of_equinoxes(j2000());
-    let expected = -6.195892212970470e-05;
+    let expected = -6.195_892_212_970_47e-5;
     assert!(
         (ee - expected).abs() < ARCSEC,
         "EE at J2000: {} arcsec error (expected < 1 arcsec)",
@@ -293,8 +293,8 @@ fn test_bpn_matrix_vs_erfa_j2000() {
         2.686690829991369e-05,
         -6.196988685154057e-05,
         9.999999976887036e-01,
-        2.797009083765900e-05,
-        -2.686517495547050e-05,
+        2.797_009_083_765_9e-5,
+        -2.686_517_495_547_05e-5,
         -2.797175571317423e-05,
         9.999999992479216e-01,
     );
@@ -391,7 +391,7 @@ fn test_bpn_matrix_vs_erfa_2030() {
         9.999718351104827e-01,
         -6.883689718603802e-03,
         -2.990618939732927e-03,
-        6.883730602086620e-03,
+        6.883_730_602_086_62e-3,
         9.999763068401158e-01,
         3.377337443596048e-06,
         2.990524833979536e-03,

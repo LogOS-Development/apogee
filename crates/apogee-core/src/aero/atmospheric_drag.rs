@@ -73,7 +73,7 @@ mod tests {
 
     #[test]
     fn test_drag_opposes_velocity() {
-        let drag = AtmosphericDrag::default();
+        let drag = AtmosphericDrag;
         let pos = Vector3::new(R_EARTH_EQ + 400_000.0, 0.0, 0.0);
         let vel = Vector3::new(0.0, 7_500.0, 0.0);
         let acc = drag.acceleration(&pos, &vel, 1e-12, 10.0, 1_000.0);
@@ -83,7 +83,7 @@ mod tests {
 
     #[test]
     fn test_zero_drag_below_surface() {
-        let drag = AtmosphericDrag::default();
+        let drag = AtmosphericDrag;
         let pos = Vector3::new(R_EARTH_EQ - 1000.0, 0.0, 0.0);
         let vel = Vector3::new(0.0, 100.0, 0.0);
         let acc = drag.acceleration(&pos, &vel, 1.225, 10.0, 1_000.0);

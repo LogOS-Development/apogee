@@ -20,9 +20,7 @@ impl LlmGateway {
     }
 
     /// Send a prompt and return the raw response.
-    pub fn query(&self,
-        _prompt: &str,
-    ) -> ApogeeResult<String> {
+    pub fn query(&self, _prompt: &str) -> ApogeeResult<String> {
         // TODO: implement Ollama HTTP client + cloud fallback
         Ok(String::new())
     }
