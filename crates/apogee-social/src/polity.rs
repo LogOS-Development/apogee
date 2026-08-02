@@ -77,9 +77,7 @@ impl PolityDecisionCycle {
     }
 
     /// Run one decision cycle.
-    pub fn run(&self,
-        _directive: &mut PolityDirective,
-    ) {
+    pub fn run(&self, _directive: &mut PolityDirective) {
         // TODO: build prompt, query LLM, parse decisions, update directive
     }
 }

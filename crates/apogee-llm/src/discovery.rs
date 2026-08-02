@@ -10,9 +10,7 @@ impl DiscoveryEvaluator {
     }
 
     /// Given a milestone description, decide if a discovery triggers.
-    pub fn evaluate(&self,
-        _milestone: &str,
-    ) -> bool {
+    pub fn evaluate(&self, _milestone: &str) -> bool {
         // TODO: build prompt, query LLM, parse yes/no
         false
     }

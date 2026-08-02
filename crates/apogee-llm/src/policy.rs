@@ -17,9 +17,7 @@ impl PolicyInterpreter {
     }
 
     /// Convert natural language policy text into mechanical effects.
-    pub fn interpret(&self,
-        _policy_text: &str,
-    ) -> PolicyInterpretation {
+    pub fn interpret(&self, _policy_text: &str) -> PolicyInterpretation {
         // TODO: build prompt, query LLM, parse structured effects
         PolicyInterpretation::default()
     }

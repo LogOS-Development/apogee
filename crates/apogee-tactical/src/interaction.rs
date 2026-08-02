@@ -19,10 +19,7 @@ impl InteractionSystem {
     }
 
     /// Trigger an interaction.
-    pub fn interact(&self,
-        _actor_id: u64,
-        _target: &Interactable,
-    ) -> ApogeeResult<()> {
+    pub fn interact(&self, _actor_id: u64, _target: &Interactable) -> ApogeeResult<()> {
         // TODO: dispatch to door, switch, crafting station, etc.
         Ok(())
     }

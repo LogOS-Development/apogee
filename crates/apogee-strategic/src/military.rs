@@ -104,9 +104,7 @@ impl MilitaryDecisionCycle {
     }
 
     /// Run one military decision cycle.
-    pub fn run(&self,
-        _apparatus: &mut MilitaryApparatus,
-    ) {
+    pub fn run(&self, _apparatus: &mut MilitaryApparatus) {
         // TODO: build prompt, query LLM, parse orders, dispatch units
     }
 }

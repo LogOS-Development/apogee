@@ -22,14 +22,12 @@ impl MilitaryVolunteerSystem {
     }
 
     /// Assign a player actor to an available military unit.
-    pub fn assign(
-        &self,
-        actor: &mut Actor,
-        _request: &VolunteerRequest,
-    ) -> ApogeeResult<()> {
+    pub fn assign(&self, actor: &mut Actor, _request: &VolunteerRequest) -> ApogeeResult<()> {
         // TODO: find unit, assign role, switch actor mind to Hybrid soldier,
         // notify squad leader.
-        actor.current_roles.push(apogee_social::actor::RoleAssignmentStub);
+        actor
+            .current_roles
+            .push(apogee_social::actor::RoleAssignmentStub);
         let _assignment = RoleAssignment {
             role: Role::Soldier,
             context: Default::default(),

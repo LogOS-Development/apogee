@@ -14,9 +14,7 @@ impl LlmMediator {
     }
 
     /// Run one mediation cycle.
-    pub fn mediate(&self,
-        _events: &[RegionEvent],
-    ) -> Vec<String> {
+    pub fn mediate(&self, _events: &[RegionEvent]) -> Vec<String> {
         // TODO: aggregate regional events, build prompt, query LLM, parse effects
         Vec::new()
     }

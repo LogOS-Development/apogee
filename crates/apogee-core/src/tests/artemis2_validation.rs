@@ -1,4 +1,5 @@
 #[cfg(test)]
+#[allow(clippy::module_inception, clippy::type_complexity)]
 mod artemis2_validation {
     use crate::ephemeris::kernel::{BodyState, Kernel, SolarSystemState};
     use crate::gravity::point_mass::PointMassGravity;
@@ -52,7 +53,7 @@ mod artemis2_validation {
         // t0; a full validation would update it during propagation.
         let celestial = build_celestial(&kernel, et0);
 
-        let gravity = PointMassGravity::default();
+        let gravity = PointMassGravity {};
         let mut integrator = Rk4::new(30.0); // 30 s fixed step
 
         let mut state = StateVector {

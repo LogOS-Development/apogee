@@ -92,7 +92,7 @@ mod tests {
 
     #[test]
     fn test_srp_at_1au() {
-        let srp = SolarRadiationPressure::default();
+        let srp = SolarRadiationPressure;
         let acc = srp.acceleration(
             &Position::new(AU, 0.0, 0.0),
             &Position::new(0.0, 0.0, 0.0),
@@ -107,7 +107,7 @@ mod tests {
 
     #[test]
     fn test_eclipse_blocks_srp() {
-        let srp = SolarRadiationPressure::default();
+        let srp = SolarRadiationPressure;
         let sc = Position::new(-(R_EARTH_EQ + 100_000.0), 0.0, 0.0);
         let sun = Position::new(AU, 0.0, 0.0);
         let acc = srp.acceleration(&sc, &sun, 1.0, 1.0, 1.0);

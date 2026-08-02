@@ -75,7 +75,7 @@ mod tests {
 
     #[test]
     fn test_sun_only_at_1au() {
-        let gravity = PointMassGravity::default();
+        let gravity = PointMassGravity {};
         let spacecraft = Vector3::new(apogee_common::constants::AU, 0.0, 0.0);
 
         let celestial = SolarSystemState {
@@ -92,7 +92,7 @@ mod tests {
 
     #[test]
     fn test_earth_dominates_near_earth() {
-        let gravity = PointMassGravity::default();
+        let gravity = PointMassGravity {};
         // Spacecraft 400 km above Earth's equator.
         let r = apogee_common::constants::R_EARTH_EQ + 400_000.0;
         let spacecraft = Vector3::new(r, 0.0, 0.0);
@@ -125,7 +125,7 @@ mod tests {
 
     #[test]
     fn test_unknown_body_is_skipped() {
-        let gravity = PointMassGravity::default();
+        let gravity = PointMassGravity {};
         let spacecraft = Vector3::new(apogee_common::constants::AU, 0.0, 0.0);
 
         let celestial = SolarSystemState {
@@ -145,7 +145,7 @@ mod tests {
     fn test_earth_moon_two_body_cancellation_line() {
         // Spacecraft on the Earth-Moon line, closer to Earth. Net acceleration
         // should point toward the more massive body (Earth) and be continuous.
-        let gravity = PointMassGravity::default();
+        let gravity = PointMassGravity {};
         let moon_distance = 384_400_000.0;
         // Spacecraft 1/4 of the way from Earth to Moon.
         let spacecraft = Vector3::new(moon_distance * 0.25, 0.0, 0.0);
@@ -173,7 +173,7 @@ mod tests {
 
     #[test]
     fn test_singularity_returns_error() {
-        let gravity = PointMassGravity::default();
+        let gravity = PointMassGravity {};
         let spacecraft = Vector3::new(0.0, 0.0, 0.0);
         let celestial = SolarSystemState {
             states: vec![body_state(10, [0.0, 0.0, 0.0])],

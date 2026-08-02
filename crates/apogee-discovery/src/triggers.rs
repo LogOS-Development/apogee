@@ -17,9 +17,7 @@ impl MilestoneEvaluator {
     }
 
     /// Evaluate a milestone and return any triggered discovery IDs.
-    pub fn evaluate(&self,
-        _milestone: &MilestoneEvent,
-    ) -> Vec<u64> {
+    pub fn evaluate(&self, _milestone: &MilestoneEvent) -> Vec<u64> {
         // TODO: invoke LLM to evaluate whether milestone warrants a discovery
         Vec::new()
     }
