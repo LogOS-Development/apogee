@@ -13,8 +13,11 @@
 use hifitime::Epoch;
 use nalgebra::Vector3;
 
+use apogee_common::time::decimal_year;
+
 use crate::magnetosphere::data::{coefficients_at_epoch, IGRF_DEGREE, IGRF_REF_RADIUS_KM};
 use crate::magnetosphere::legendre::schmidt_legendre;
+use crate::magnetosphere::MagneticFieldModel;
 
 /// Geomagnetic field model using IGRF-13 spherical harmonics.
 #[derive(Debug, Clone, Copy, Default)]
@@ -36,13 +39,13 @@ impl Igrf {
     ///
     /// # Arguments
     /// * `position_m` — position in Earth-fixed Cartesian coordinates (m).
-    /// * `epoch` — time of evaluation; `hifitime::Epoch` is converted to
-    ///   fractional years for the IGRF secular-variation extrapolation.
+    /// * `epoch` — time of evaluation; converted to a decimal year for the IGRF
+    ///   secular-variation extrapolation.
     ///
     /// # Returns
     /// Magnetic field vector in ECEF frame (nT).
     pub fn field(&self, position_m: &Vector3<f64>, epoch: Epoch) -> Vector3<f64> {
-        let decimal_year = epoch_to_decimal_year(epoch);
+        let decimal_year = decimal_year(epoch);
         let (g, h) = coefficients_at_epoch(decimal_year);
         self.field_with_coeffs(position_m, &g, &h)
     }
@@ -52,9 +55,15 @@ impl Igrf {
     /// `ap` is the daily Ap index. A positive Ap weakens the axial dipole term,
     /// mimicking the ring-current effect in a coarse, spherical-harmonic way.
     pub fn field_with_ap(&self, position_m: &Vector3<f64>, epoch: Epoch, ap: f64) -> Vector3<f64> {
-        let decimal_year = epoch_to_decimal_year(epoch);
+        let decimal_year = decimal_year(epoch);
         let (mut g, mut h) = coefficients_at_epoch(decimal_year);
-        crate::magnetosphere::disturbance::add_ap_perturbation(&mut g, &mut h, position_m, ap);
+        crate::magnetosphere::disturbance::add_ap_perturbation(
+            self.body_id(),
+            &mut g,
+            &mut h,
+            position_m,
+            ap,
+        );
         self.field_with_coeffs(position_m, &g, &h)
     }
 
@@ -132,32 +141,6 @@ impl Igrf {
     }
 }
 
-/// Convert `hifitime::Epoch` to a fractional-year f64.
-fn epoch_to_decimal_year(epoch: Epoch) -> f64 {
-    let (year, month, day, hour, min, sec, _) = epoch.to_gregorian_utc();
-    let days_in_year = if is_leap_year(year) { 366.0 } else { 365.0 };
-    let day_of_year = day_of_year(year, month, day) as f64;
-    let fractional_day = (hour as f64 * 3600.0 + min as f64 * 60.0 + sec as f64) / 86_400.0;
-    year as f64 + (day_of_year - 1.0 + fractional_day) / days_in_year
-}
-
-fn is_leap_year(year: i32) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
-}
-
-fn day_of_year(year: i32, month: u8, day: u8) -> u16 {
-    let days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let mut doy = 0u16;
-    for m in 1..month {
-        doy += days_per_month[(m - 1) as usize] as u16;
-        if m == 2 && is_leap_year(year) {
-            doy += 1;
-        }
-    }
-    doy += day as u16;
-    doy
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,10 +148,13 @@ mod tests {
 
     #[test]
     fn test_dipole_equator_z_component() {
-        // With only the g_1^0 dipole term, the field at the equator on the
-        // +x axis points along +z in ECEF (southward geomagnetic field line
-        // entering the southern hemisphere). Use a negative g_1^0 to match
-        // Earth orientation; the sign is verified qualitatively.
+        // Sanity check for a pure zonal dipole (g_1^0 only). The field at the
+        // equator on the +x axis points along +z in ECEF (southward field line
+        // entering the southern hemisphere). This mirrors the sign convention in
+        // IGRF, where the axial dipole coefficient g_1^0 is negative.
+        //
+        // Source: IGRF-13 technical documentation, NOAA NGDC / IAGA VMOD,
+        // https://www.ngdc.noaa.gov/IAGA/vmod/igrf.html
         let mut g = [0.0; 105];
         g[1] = -30_000.0; // g_1^0
         let h = [0.0; 105];
@@ -187,12 +173,17 @@ mod tests {
 
     #[test]
     fn test_dipole_matches_closed_form() {
-        // Analytic dipole: V = a (a/r)^2 g_1^0 cosθ, with g_1^0 negative.
-        // In the geocentric basis (outward radial, southward theta, eastward phi):
+        // Closed-form dipole field used as an independent reference.
+        //
+        // For a potential V = a (a/r)^2 g_1^0 cosθ in the geocentric spherical
+        // basis (outward radial r, southward colatitude θ, eastward longitude φ):
         //   B_r     = 2 g_1^0 ρ^3 cosθ
-        //   B_theta =   g_1^0 ρ^3 sinθ
-        //   B_phi   = 0
-        // We then rotate to ECEF and compare.
+        //   B_θ     =   g_1^0 ρ^3 sinθ
+        //   B_φ     = 0
+        // where ρ = a/r.
+        //
+        // Reference: Blakely, R. J., Potential Theory in Gravity and Magnetic
+        // Applications, Cambridge University Press, 1995, §4.2.
         let g_10: f64 = -29_404.8;
         let mut g = [0.0; 105];
         g[1] = g_10;
@@ -234,9 +225,16 @@ mod tests {
     #[test]
     fn test_full_model_matches_ppigrf_fixture() {
         // Reference values generated with ppigrf (Python, MIT license) from the
-        // official IGRF-13 coefficients, expressed in geocentric spherical
-        // components (Br outward, Bθ southward, Bφ eastward). We compare by
+        // official IGRF-13 coefficients.
+        //
+        // Fixture format: latitude (deg), longitude (deg), altitude (km), date,
+        // Br (nT outward), Bθ (nT southward), Bφ (nT eastward). We compare by
         // projecting our ECEF result onto the same geocentric basis.
+        //
+        // Sources:
+        // * ppigrf: https://github.com/dawiggs/ppigrf (MIT license)
+        // * IGRF-13 coefficients: NOAA NGDC / IAGA VMOD,
+        //   https://www.ngdc.noaa.gov/IAGA/vmod/coeffs/igrf13coeffs.txt
         let csv = concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/fixtures/igrf13_reference.csv"

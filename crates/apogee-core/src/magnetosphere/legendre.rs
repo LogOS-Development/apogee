@@ -3,12 +3,24 @@
 //! This is a separate implementation from the gravity module because geomagnetic
 //! models use Schmidt quasi-normalization, whereas gravity uses full
 //! normalization.
+//!
+//! # Sources
+//! * The recurrence relations follow the standard formulation used in IGRF
+//!   implementations. See: Lowes, F. J. & Winch, D. E. (1991), "Differentiation of
+//!   associated Legendre functions," and the NOAA NGDC IGRF source code.
+//! * Normalization convention: Schmidt quasi-normalized, as defined in IAGA
+//!   VMOD technical note 6, <https://www.ngdc.noaa.gov/IAGA/vmod/>.
 
 /// Compute Schmidt quasi-normalized associated Legendre functions `P_n^m(x)`
 /// and their derivatives `dP/dθ` for `x = cos θ` (θ = colatitude).
 ///
 /// Returns triangular arrays indexed as `p[n][m]` for 0 ≤ n ≤ degree,
 /// 0 ≤ m ≤ min(n, order).
+///
+/// # Sources
+/// * Recurrence relations adapted from the IGRF reference implementation
+///   (NOAA NGDC / IAGA VMOD, Fortran/Python, public domain).
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn schmidt_legendre(
     degree: usize,
     order: usize,
@@ -81,4 +93,41 @@ pub(crate) fn schmidt_legendre(
     }
 
     (p, dp)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use approx::assert_relative_eq;
+
+    #[test]
+    fn degree_zero_is_constant() {
+        let (p, dp) = schmidt_legendre(0, 0, 0.5, (1.0 - 0.5_f64.powi(2)).sqrt());
+        assert_relative_eq!(p[0][0], 1.0, epsilon = 1e-12);
+        assert_relative_eq!(dp[0][0], 0.0, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn degree_one_matches_geometry() {
+        let cos_theta = 0.6;
+        let sin_theta = f64::sqrt(1.0 - cos_theta * cos_theta);
+        let (p, dp) = schmidt_legendre(1, 1, cos_theta, sin_theta);
+        // P_1^0 = cosθ, dP/dθ = -sinθ.
+        assert_relative_eq!(p[1][0], cos_theta, epsilon = 1e-12);
+        assert_relative_eq!(dp[1][0], -sin_theta, epsilon = 1e-12);
+        // P_1^1 = sinθ, dP/dθ = cosθ (Schmidt normalization).
+        assert_relative_eq!(p[1][1], sin_theta, epsilon = 1e-12);
+        assert_relative_eq!(dp[1][1], cos_theta, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn associated_legendre_recurrence_is_consistent() {
+        // Compare a degree-2 zonal value against the closed form
+        // P_2(cosθ) = (3 cos²θ - 1) / 2.
+        let cos_theta = 0.4;
+        let sin_theta = f64::sqrt(1.0 - cos_theta * cos_theta);
+        let (p, _dp) = schmidt_legendre(2, 0, cos_theta, sin_theta);
+        let expected = 1.5 * cos_theta * cos_theta - 0.5;
+        assert_relative_eq!(p[2][0], expected, epsilon = 1e-12);
+    }
 }
