@@ -25,7 +25,6 @@
 //!   Sugiura, M. (1965), "Hourly values of equatorial Dst for the IGY".
 
 use apogee_common::NaifId;
-use nalgebra::Vector3;
 
 /// NAIF body ID for Earth. Only Earth is supported by this placeholder; other
 /// bodies silently receive no perturbation.
@@ -38,25 +37,15 @@ const AP_TO_G10_PERTURBATION_NT: f64 = -2.0;
 
 /// Evaluate the IGRF-13 main field plus an Ap-driven degree-1 disturbance.
 ///
-/// `ap` is the daily geomagnetic activity index. `g_main`/`h_main` are the
+/// `ap` is the daily geomagnetic activity index. `g_main` are the
 /// IGRF coefficients at the requested epoch. The perturbation is added only to
 /// the axial dipole term `g_1^0`, keeping the implementation simple and the
 /// spherical-harmonic structure intact.
 ///
-/// # TODO
-/// * Issue #77: define a `MagneticDisturbanceModel` trait with body-specific
-///   configuration and replace this free function.
-pub(crate) fn add_ap_perturbation(
-    body_id: NaifId,
-    g_main: &mut [f64],
-    h_main: &mut [f64],
-    _position_m: &Vector3<f64>,
-    ap: f64,
-) {
-    // h coefficients are unchanged by an axisymmetric ring-current model.
-    let _ = h_main;
-    let _ = _position_m;
-
+/// `h_main` and position dependence are intentionally omitted from the
+/// placeholder; they will be handled by the body-specific
+/// `MagneticDisturbanceModel` trait tracked in issue #77.
+pub(crate) fn add_ap_perturbation(body_id: NaifId, g_main: &mut [f64], ap: f64) {
     if body_id != EARTH_NAIF_ID {
         return;
     }
@@ -72,16 +61,14 @@ mod tests {
     #[test]
     fn earth_receives_ap_perturbation() {
         let mut g = [0.0; 4];
-        let mut h = [0.0; 4];
-        add_ap_perturbation(EARTH_NAIF_ID, &mut g, &mut h, &Vector3::zeros(), 10.0);
+        add_ap_perturbation(EARTH_NAIF_ID, &mut g, 10.0);
         assert_eq!(g[1], 10.0 * AP_TO_G10_PERTURBATION_NT);
     }
 
     #[test]
     fn non_earth_body_is_unperturbed() {
         let mut g = [0.0; 4];
-        let mut h = [0.0; 4];
-        add_ap_perturbation(499, &mut g, &mut h, &Vector3::zeros(), 10.0);
+        add_ap_perturbation(499, &mut g, 10.0);
         assert_eq!(g[1], 0.0);
     }
 }

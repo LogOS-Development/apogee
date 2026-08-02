@@ -56,14 +56,8 @@ impl Igrf {
     /// mimicking the ring-current effect in a coarse, spherical-harmonic way.
     pub fn field_with_ap(&self, position_m: &Vector3<f64>, epoch: Epoch, ap: f64) -> Vector3<f64> {
         let decimal_year = decimal_year(epoch);
-        let (mut g, mut h) = coefficients_at_epoch(decimal_year);
-        crate::magnetosphere::disturbance::add_ap_perturbation(
-            self.body_id(),
-            &mut g,
-            &mut h,
-            position_m,
-            ap,
-        );
+        let (mut g, h) = coefficients_at_epoch(decimal_year);
+        crate::magnetosphere::disturbance::add_ap_perturbation(self.body_id(), &mut g, ap);
         self.field_with_coeffs(position_m, &g, &h)
     }
 
