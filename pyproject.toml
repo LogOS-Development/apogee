@@ -27,13 +27,10 @@ classifiers = [
 # validation, plotting, and reference-data generation tools; the Rust
 # build itself has no Python dependency.
 dependencies = [
-    "numpy>=1.26",
+    "numpy>=2.5.1",
     "matplotlib>=3.8",
-    "pandas>=2.1",
-    # ppigrf is an MIT-licensed IGRF implementation; pin to a recent
-    # release that exposes the API used by scripts/generate_igrf_fixture.py
-    # (callable, returns a tuple of spherical components in nT).
-    "ppigrf>=0.2.0",
+    "pandas>=3.0.5",
+    "ppigrf>=2.1.0",
 ]
 
 [project.urls]
