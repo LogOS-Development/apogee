@@ -12,8 +12,8 @@ env:
   RUSTFLAGS: "-D warnings"
 
 jobs:
-  hwm14:
-    name: HWM14 optional model (Fortran + feature-gated tests)
+  full-test:
+    name: Full test suite including ignored/special tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -33,22 +33,25 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-hwm14-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          key: cargo-nightly-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Fetch external data assets
+        run: ./scripts/fetch_data.sh
 
       - name: Format check
         run: cargo fmt --all -- --check
 
+      - name: Clippy (default workspace)
+        run: cargo clippy --workspace -- -D warnings
+
       - name: Clippy with hwm14 feature
         run: cargo clippy -p apogee-core --features hwm14 -- -D warnings
 
-      - name: Build hwm14-sys crate
-        run: cargo test --manifest-path crates/hwm14-sys/Cargo.toml --no-run
+      - name: Test workspace (including ignored tests)
+        run: cargo test --workspace -- --include-ignored
 
-      - name: Test hwm14-sys crate
-        run: cargo test --manifest-path crates/hwm14-sys/Cargo.toml
-
-      - name: Test apogee-core with hwm14 feature
-        run: cargo test -p apogee-core --features hwm14 --lib
+      - name: Test hwm14-sys (including ignored Fortran tests)
+        run: cargo test --manifest-path crates/hwm14-sys/Cargo.toml -- --include-ignored
 
       - name: Build hwm14_samples example
         run: cargo build --example hwm14_samples -p apogee-core --features hwm14

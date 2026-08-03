@@ -148,6 +148,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "requires gfortran and the vendored HWM14 coefficient files; run with -- --ignored or -- --include-ignored"]
     fn test_hwm14_evaluates_reference_case() {
         // Reference case from pyhwm2014 example: 1993 DOY 323, 12 UT,
         // 300 km, lat -11.95, lon -76.77, ap=35.

@@ -34,7 +34,7 @@
 //! * Memory cost: identical to the wrapped scalar.
 //!
 //! # Example
-//! ```ignore
+//! ```
 //! use apogee_common::units::*;
 //!
 //! let x = Meters::new(10.0);
@@ -42,9 +42,9 @@
 //! let v: Velocity<f64> = x / t;
 //! let a: Acceleration<f64> = v / t;
 //!
-//! // Programmatic SI prefix handling.
-//! let km = Meters::with_prefix(SiPrefix::Kilo, 1.0);  // stored as 1000.0 m
-//! let in_mm = km.with_prefix(SiPrefix::Milli);       // stored as 1_000_000.0 m
+//! // Programmatic SI prefix handling: value is always stored in the base unit.
+//! let km = Meters::new(1.0).with_prefix(SiPrefix::Kilo); // 1000 m
+//! let in_mm = km.strip_prefix(SiPrefix::Milli);        // 1_000_000 mm
 //! ```
 
 use std::fmt;
@@ -228,17 +228,18 @@ impl<T, U> Quantity<T, U> {
     /// scale (`self.value / SiPrefix::Milli.scale()`).
     ///
     /// # Example
-    /// ```ignore
+    /// ```
     /// use apogee_common::units::*;
     ///
-    /// // Convert 1 km (stored as 1000 m) into millimeters: 1_000_000 mm.
-    /// let one_km: Meters<f64> = Meters::new(1.0e3);
-    /// let in_mm = one_km.with_prefix(SiPrefix::Milli);
-    /// assert_eq!(in_mm.into_value(), 1.0e6);
+    /// // Scale a base-unit value by a prefix factor.
+    /// let one_m: Meters<f64> = Meters::new(1.0);
+    /// let in_kilo = one_m.with_prefix(SiPrefix::Kilo);
+    /// assert_eq!(in_kilo.into_value(), 1_000.0);
     ///
-    /// // Convert 1 Mm (megameter) into meters: 1_000_000 m.
-    /// let in_m = Meters::new(1.0).with_prefix(SiPrefix::Mega);
-    /// assert_eq!(in_m.into_value(), 1.0e6);
+    /// // Round-trip: apply a prefix and then strip it.
+    /// let in_mega = one_m.with_prefix(SiPrefix::Mega);
+    /// let back = in_mega.strip_prefix(SiPrefix::Mega);
+    /// assert_eq!(back.into_value(), 1.0);
     /// ```
     #[must_use]
     pub fn with_prefix(self, prefix: SiPrefix) -> Self
