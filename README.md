@@ -42,6 +42,8 @@ cargo build --workspace
 # Run tests
 cargo test --workspace
 
+# Optional feature-gated tests (e.g., HWM14 Fortran model) run nightly;
+# see `.github/workflows/nightly.yml`.
 # Lint
 cargo clippy --workspace -- -D warnings
 cargo fmt --all -- --check
