@@ -10,6 +10,7 @@
 //! - B = frame bias (GCRF → J2000 mean equator)
 //! - P = precession (J2000 → mean equator of date, IAU 2006)
 //! - N = nutation (mean → true equator of date, IAU 2000B)
+//!   N = R_x(ε_A + Δε) · R_z(+Δψ) · R_x(-ε_A)  (ERFA/SOFA convention)
 //! - R = Earth rotation (GMST + equation of equinoxes)
 //! - W = polar motion (from EOP)
 //!
@@ -175,7 +176,7 @@ impl NutationPrecessionModel {
     /// Implements the IAU 2006 precession model using the equinox-based
     /// Euler angles ζ_A, z_A, θ_A:
     ///
-    ///   P = R_z(ζ_A) * R_y(-θ_A) * R_z(z_A)
+    ///   P = R_z(z_A) * R_y(-θ_A) * R_z(ζ_A)
     ///
     /// where R_z and R_y are the standard active rotation matrices.
     ///
@@ -440,11 +441,11 @@ impl NutationPrecessionModel {
 
     /// Nutation matrix N (mean equator of date → true equator of date).
     ///
-    /// Standard rigorous construction:
+    /// ERFA/SOFA construction (matches `eraNum00b`):
     ///
-    ///   N = R_x(-ε_A - Δε) · R_z(-Δψ) · R_x(ε_A)
+    ///   N = R_x(ε_A + Δε) · R_z(+Δψ) · R_x(-ε_A)
     ///
-    /// where R_x and R_z are standard active rotation matrices.
+    /// where R_x and R_z are the standard active rotation matrices.
     ///
     /// Reference:
     /// - IERS Conventions (2010), §5.6
@@ -454,23 +455,23 @@ impl NutationPrecessionModel {
         let (dpsi, deps) = self.nutation_angles(epoch);
         let eps_a = self.mean_obliquity(epoch);
 
-        // R_x(ε_A)
+        // R_x(-ε_A)
         let ceps = eps_a.cos();
         let seps = eps_a.sin();
         let rx_eps = Matrix3::new(1.0, 0.0, 0.0, 0.0, ceps, seps, 0.0, -seps, ceps);
 
-        // R_z(Δψ)
+        // R_z(+Δψ)
         let cdpsi = dpsi.cos();
         let sdpsi = dpsi.sin();
         let rz_dpsi = Matrix3::new(cdpsi, -sdpsi, 0.0, sdpsi, cdpsi, 0.0, 0.0, 0.0, 1.0);
 
-        // R_x(-ε_A - Δε)
+        // R_x(ε_A + Δε)
         let eps_true = eps_a + deps;
         let cet = eps_true.cos();
         let set = eps_true.sin();
         let rx_true = Matrix3::new(1.0, 0.0, 0.0, 0.0, cet, -set, 0.0, set, cet);
 
-        // N = R_x(-ε_A - Δε) R_z(Δψ) R_x(ε_A)
+        // N = R_x(ε_A + Δε) R_z(Δψ) R_x(-ε_A)
         rx_true * rz_dpsi * rx_eps
     }
 
