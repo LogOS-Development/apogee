@@ -1,0 +1,11 @@
+{
+  "name": "nutation_precession",
+  "passed": true,
+  "max_residual": 1.7649881556280889e-09,
+  "max_pixel_diff": null,
+  "notes": [
+    "samples: 31 (2000\u20132030)",
+    "max nutation/obliquity residual: 0.000 arcsec",
+    "max BPN angular diff: 0.000 arcsec"
+  ]
+}
