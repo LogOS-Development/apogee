@@ -24,6 +24,28 @@ pub trait Integrator: Send + std::fmt::Debug {
 pub struct StateVector {
     pub position: apogee_common::Position,
     pub velocity: apogee_common::Velocity,
+    /// Attitude quaternion (body-to-inertial).
+    pub attitude: nalgebra::Quaternion<f64>,
+    /// Angular velocity in body frame (rad/s).
+    pub angular_velocity: nalgebra::Vector3<f64>,
+}
+
+impl StateVector {
+    pub fn from_kinematics(k: &crate::components::kinematics::Kinematics) -> Self {
+        Self {
+            position: k.position,
+            velocity: k.velocity,
+            attitude: k.attitude,
+            angular_velocity: k.angular_velocity,
+        }
+    }
+
+    pub fn write_to_kinematics(&self, k: &mut crate::components::kinematics::Kinematics) {
+        k.position = self.position;
+        k.velocity = self.velocity;
+        k.attitude = self.attitude;
+        k.angular_velocity = self.angular_velocity;
+    }
 }
 
 /// Time derivative of state.
@@ -31,6 +53,10 @@ pub struct StateVector {
 pub struct StateDerivative {
     pub velocity: apogee_common::Velocity,
     pub acceleration: apogee_common::Position,
+    /// Attitude derivative (quaternion time derivative).
+    pub attitude_derivative: nalgebra::Quaternion<f64>,
+    /// Angular acceleration in body frame (rad/s^2).
+    pub angular_acceleration: nalgebra::Vector3<f64>,
 }
 
 /// Result of an integration step.

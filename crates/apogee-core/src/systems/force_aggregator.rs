@@ -11,7 +11,7 @@ use crate::components::kinematics::Kinematics;
 use crate::ephemeris::kernel::SolarSystemState;
 use crate::gravity::PointMassGravity;
 
-/// Aggregated forces on a body.
+/// Aggregated forces and torques on a body.
 #[derive(Debug, Clone, Default)]
 pub struct AggregatedForces {
     /// Gravitational acceleration (m/s²).
@@ -22,12 +22,36 @@ pub struct AggregatedForces {
     pub srp: Vector3<f64>,
     /// Thrust acceleration (m/s²).
     pub thrust: Vector3<f64>,
+    /// External control torque (N m), e.g. from reaction wheels or thrusters.
+    pub control_torque: Vector3<f64>,
 }
 
 impl AggregatedForces {
     /// Sum all force contributions into total acceleration.
     pub fn total(&self) -> Vector3<f64> {
         self.gravity + self.drag + self.srp + self.thrust
+    }
+
+    /// Sum all torque contributions (N m).
+    pub fn torque(&self) -> Vector3<f64> {
+        self.control_torque
+    }
+}
+
+/// Control inputs (force + torque) to apply during a propagation step.
+#[derive(Debug, Clone, Default)]
+pub struct ControlInputs {
+    /// Body-frame torque (N m).
+    pub torque_nm: Vector3<f64>,
+    /// Body-frame force (N). Converted to acceleration using the supplied mass.
+    pub force_n: Vector3<f64>,
+}
+
+impl AggregatedForces {
+    /// Apply control inputs, converting force to acceleration using `mass_kg`.
+    pub fn apply_control(&mut self, inputs: &ControlInputs, mass_kg: f64) {
+        self.control_torque = inputs.torque_nm;
+        self.thrust = inputs.force_n / mass_kg;
     }
 }
 
@@ -103,6 +127,7 @@ pub fn aggregate_forces(
         drag,
         srp,
         thrust: Vector3::zeros(),
+        control_torque: Vector3::zeros(),
     }
 }
 

@@ -59,6 +59,8 @@ mod artemis2_validation {
         let mut state = StateVector {
             position: sc_initial.position,
             velocity: sc_initial.velocity,
+            attitude: nalgebra::Quaternion::identity(),
+            angular_velocity: nalgebra::Vector3::zeros(),
         };
 
         let derivative_fn = |s: &StateVector| point_mass_derivative(s, &celestial, &gravity);

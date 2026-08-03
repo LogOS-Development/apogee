@@ -96,6 +96,8 @@ fn test_apollo_11_style_lunar_orbit() {
     let mut state = StateVector {
         position: spacecraft_position,
         velocity: spacecraft_velocity,
+        attitude: nalgebra::Quaternion::identity(),
+        angular_velocity: nalgebra::Vector3::zeros(),
     };
 
     let celestial = moon_system();
@@ -160,6 +162,8 @@ fn test_moon_geocentric_orbit_vs_horizons_apollo_era() {
     let mut state = StateVector {
         position: moon_start_pos,
         velocity: moon_start_vel,
+        attitude: nalgebra::Quaternion::identity(),
+        angular_velocity: nalgebra::Vector3::zeros(),
     };
 
     let gravity = PointMassGravity {};

@@ -4,6 +4,7 @@
 
 pub mod aero;
 pub mod components;
+pub mod control;
 pub mod ephemeris;
 pub mod frames;
 pub mod gravity;

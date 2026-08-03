@@ -29,19 +29,22 @@ pub fn step_spacecraft(
     day_of_year: u16,
     seconds_utc: f64,
 ) -> IntegrationResult {
-    let mut state = StateVector {
-        position: kinematics.position,
-        velocity: kinematics.velocity,
-    };
+    let mut state = StateVector::from_kinematics(kinematics);
+
+    let inertia = dynamics.inertia;
+    let inertia_inv = inertia
+        .try_inverse()
+        .unwrap_or_else(nalgebra::Matrix3::identity);
+    let _mass_inv = 1.0 / dynamics.mass;
 
     let derivative_fn = |s: &StateVector| {
         // Reconstruct a temporary kinematics from the integrator state so
-        // force models see the trial position/velocity.
+        // force models see the trial position/velocity/attitude/rate.
         let trial_kinematics = Kinematics {
             position: s.position,
             velocity: s.velocity,
-            attitude: kinematics.attitude,
-            angular_velocity: kinematics.angular_velocity,
+            attitude: s.attitude,
+            angular_velocity: s.angular_velocity,
         };
         let forces = aggregate_forces(
             &trial_kinematics,
@@ -52,15 +55,26 @@ pub fn step_spacecraft(
             day_of_year,
             seconds_utc,
         );
+
+        // Translational acceleration = F / m.
+        let acceleration = forces.total();
+
+        // Rotational acceleration: alpha = I^-1 * (tau - omega x (I * omega)).
+        let h = inertia * s.angular_velocity;
+        let gyroscopic = s.angular_velocity.cross(&h);
+        let net_torque = forces.torque() - gyroscopic;
+        let angular_acceleration = inertia_inv * net_torque;
+
         StateDerivative {
             velocity: s.velocity,
-            acceleration: forces.total(),
+            acceleration,
+            attitude_derivative: nalgebra::Quaternion::new(0.0, 0.0, 0.0, 0.0),
+            angular_acceleration,
         }
     };
 
     let result = integrator.step(&mut state, &derivative_fn, dt);
-    kinematics.position = state.position;
-    kinematics.velocity = state.velocity;
+    state.write_to_kinematics(kinematics);
     result
 }
 

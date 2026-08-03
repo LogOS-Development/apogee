@@ -16,5 +16,7 @@ pub fn point_mass_derivative(
     StateDerivative {
         velocity: state.velocity,
         acceleration,
+        attitude_derivative: nalgebra::Quaternion::new(0.0, 0.0, 0.0, 0.0),
+        angular_acceleration: nalgebra::Vector3::zeros(),
     }
 }

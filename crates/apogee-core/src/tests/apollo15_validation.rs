@@ -70,6 +70,8 @@ mod apollo15_validation {
         let mut state = StateVector {
             position: pos0,
             velocity: vel0,
+            attitude: nalgebra::Quaternion::identity(),
+            angular_velocity: nalgebra::Vector3::zeros(),
         };
 
         let derivative_fn = |s: &StateVector| point_mass_derivative(s, &celestial, &gravity);
