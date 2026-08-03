@@ -67,6 +67,19 @@ cargo run -p apogee-server
 | 5     | Gameplay (G4 Complete)     | Planned      |
 | 6     | Hardening (G5 Launch)      | Planned      |
 
+## Visualization
+
+Atmosphere and wind fields can be explored in 3D through two paths:
+
+- **Godot 4 scene** (`godot/scenes/atmosphere_wind_visualizer.tscn`): loads the
+  `apogee-godot` GDExtension and renders density spheres + animated wind arrows
+  for NRLMSISE-00 and Jacchia-Bowman side-by-side. Enable the `hwm14` feature
+  on the GDExtension crate for real HWM14 wind vectors.
+
+- **Python 3D animation** (`scripts/visualize_atmosphere_3d.py`): generates an
+  MP4 of the same multi-model grid, useful for CI/dev environments without the
+  Godot editor. Run with `python3 scripts/visualize_atmosphere_3d.py`.
+
 See `plan.md` for the full development work plan.
 
 ## License
