@@ -12,6 +12,8 @@
 //! Future work: replace this placeholder with the full JB2008 thermospheric
 //! density model if cross-validation requirements demand it.
 
+use apogee_common::units::{Density, Kelvins};
+
 use crate::aero::model::{AtmosphereInput, AtmosphereModel, AtmosphereOutput, SpeciesDensities};
 
 /// Jacchia-Bowman placeholder model.
@@ -21,7 +23,7 @@ pub struct JacchiaBowman;
 impl JacchiaBowman {
     /// Evaluate the model at the given conditions.
     pub fn evaluate(input: &AtmosphereInput) -> AtmosphereOutput {
-        let alt_km = input.altitude_m / 1000.0;
+        let alt_km = input.altitude_m.into_value() / 1000.0;
 
         // Base sea-level density, kg/m³.
         let rho0 = 1.225;
@@ -37,9 +39,9 @@ impl JacchiaBowman {
 
         // Number densities are not computed by this placeholder; leave zeros.
         AtmosphereOutput {
-            density: rho,
-            temperature: t,
-            temperature_alt: t,
+            density: Density::new(rho),
+            temperature: Kelvins::new(t),
+            temperature_alt: Kelvins::new(t),
             number_densities: SpeciesDensities::default(),
         }
     }
@@ -59,12 +61,15 @@ mod tests {
     fn test_density_decreases_with_altitude() {
         let low = AtmosphereInput::at_altitude(100_000.0);
         let high = AtmosphereInput::at_altitude(400_000.0);
-        assert!(JacchiaBowman::evaluate(&low).density > JacchiaBowman::evaluate(&high).density);
+        let low_d = JacchiaBowman::evaluate(&low).density.into_value();
+        let high_d = JacchiaBowman::evaluate(&high).density.into_value();
+        assert!(low_d > high_d);
     }
 
     #[test]
     fn test_density_positive_and_finite() {
         let out = JacchiaBowman::evaluate(&AtmosphereInput::at_altitude(300_000.0));
-        assert!(out.density.is_finite() && out.density > 0.0);
+        let d = out.density.into_value();
+        assert!(d.is_finite() && d > 0.0);
     }
 }

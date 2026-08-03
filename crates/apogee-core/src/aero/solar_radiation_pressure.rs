@@ -1,6 +1,7 @@
 //! Solar radiation pressure model with eclipse detection.
 
 use apogee_common::constants::{AU, R_EARTH_EQ, SRP_1AU};
+use apogee_common::units::{AccelerationVec, Area, Dimensionless, Kilograms};
 use apogee_common::Position;
 use nalgebra::Vector3;
 
@@ -13,33 +14,35 @@ impl SolarRadiationPressure {
     /// the Sun's inertial position, the spacecraft SRP area, reflectivity,
     /// and mass.
     ///
-    /// Returns acceleration in m/s² in the inertial frame.
+    /// Returns the acceleration as [`AccelerationVec`] (m/s²) in the
+    /// inertial frame.
     pub fn acceleration(
         &self,
         spacecraft_position: &Position,
         sun_position: &Position,
-        srp_area_m2: f64,
-        reflectivity: f64,
-        mass: f64,
-    ) -> Vector3<f64> {
+        srp_area: Area<f64>,
+        reflectivity: Dimensionless<f64>,
+        mass: Kilograms<f64>,
+    ) -> AccelerationVec {
         let to_sun = sun_position - spacecraft_position;
         let r = to_sun.norm();
         if r == 0.0 {
-            return Vector3::zeros();
+            return AccelerationVec::from_mps2(Vector3::zeros());
         }
 
         if is_eclipsed(spacecraft_position, sun_position) {
-            return Vector3::zeros();
+            return AccelerationVec::from_mps2(Vector3::zeros());
         }
 
         let flux_factor = AU * AU / (r * r);
         let pressure = SRP_1AU * flux_factor;
         // (1 + reflectivity) factor for flat plate normal to Sun; use as effective
-        // scaling for cannonball model.
-        let force_magnitude = pressure * srp_area_m2 * (1.0 + reflectivity);
+        // scaling for cannonball model. F = P * A * (1 + r) gives newtons; a = F/m.
+        let force_magnitude = pressure * srp_area.into_value() * (1.0 + reflectivity.into_value());
         let direction = to_sun / r;
+        let accel_magnitude = force_magnitude / mass.into_value();
 
-        direction * (force_magnitude / mass)
+        AccelerationVec::from_mps2(direction * accel_magnitude)
     }
 
     /// SRP acceleration using the Sun fixed at origin (heliocentric
@@ -47,16 +50,16 @@ impl SolarRadiationPressure {
     pub fn acceleration_sun_at_origin(
         &self,
         spacecraft_position: &Position,
-        srp_area_m2: f64,
-        reflectivity: f64,
-        mass: f64,
-    ) -> Vector3<f64> {
+        srp_area: Area<f64>,
+        reflectivity: Dimensionless<f64>,
+        mass: Kilograms<f64>,
+    ) -> AccelerationVec {
         // Place the Sun at +1 AU so the spacecraft at origin is on the sunlit
         // side of Earth and not eclipsed.
         self.acceleration(
             spacecraft_position,
             &Position::new(AU, 0.0, 0.0),
-            srp_area_m2,
+            srp_area,
             reflectivity,
             mass,
         )
@@ -96,13 +99,13 @@ mod tests {
         let acc = srp.acceleration(
             &Position::new(AU, 0.0, 0.0),
             &Position::new(0.0, 0.0, 0.0),
-            1.0,
-            1.0,
-            1.0,
+            Area::new(1.0),
+            Dimensionless::new(1.0),
+            Kilograms::new(1.0),
         );
         let expected_magnitude = SRP_1AU * 2.0 / 1.0;
-        assert_relative_eq!(acc.norm(), expected_magnitude, epsilon = 1e-12);
-        assert_relative_eq!(-acc.x, expected_magnitude, epsilon = 1e-12);
+        assert_relative_eq!(acc.raw().norm(), expected_magnitude, epsilon = 1e-12);
+        assert_relative_eq!(-acc.raw().x, expected_magnitude, epsilon = 1e-12);
     }
 
     #[test]
@@ -110,7 +113,13 @@ mod tests {
         let srp = SolarRadiationPressure;
         let sc = Position::new(-(R_EARTH_EQ + 100_000.0), 0.0, 0.0);
         let sun = Position::new(AU, 0.0, 0.0);
-        let acc = srp.acceleration(&sc, &sun, 1.0, 1.0, 1.0);
-        assert_eq!(acc.norm(), 0.0);
+        let acc = srp.acceleration(
+            &sc,
+            &sun,
+            Area::new(1.0),
+            Dimensionless::new(1.0),
+            Kilograms::new(1.0),
+        );
+        assert_eq!(acc.raw().norm(), 0.0);
     }
 }

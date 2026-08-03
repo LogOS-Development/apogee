@@ -10,6 +10,7 @@ use crate::gravity::point_mass::PointMassGravity;
 use crate::integrator::{Integrator, Rk4, StateVector};
 use crate::tests::helpers::point_mass_derivative;
 use apogee_common::constants::GM_MOON;
+use apogee_common::units::Seconds;
 use approx::assert_relative_eq;
 use nalgebra::Vector3;
 
@@ -101,12 +102,12 @@ fn test_apollo_11_style_lunar_orbit() {
     };
 
     let celestial = moon_system();
-    let mut integrator = Rk4::new(10.0); // 10 s fixed step
+    let mut integrator = Rk4::new(Seconds::new(10.0)); // 10 s fixed step
 
     let derivative_fn = |s: &StateVector| point_mass_derivative(s, &celestial, &gravity);
 
     // Propagate for one nominal lunar orbit period.
-    let result = integrator.step(&mut state, &derivative_fn, period_expected);
+    let result = integrator.step(&mut state, &derivative_fn, Seconds::new(period_expected));
     assert!(result.accepted, "integrator did not accept step");
 
     // After one period the spacecraft should be back near its starting
@@ -167,10 +168,10 @@ fn test_moon_geocentric_orbit_vs_horizons_apollo_era() {
     };
 
     let gravity = PointMassGravity {};
-    let mut integrator = Rk4::new(60.0); // 1 minute step
+    let mut integrator = Rk4::new(Seconds::new(60.0)); // 1 minute step
     let derivative_fn = |s: &StateVector| point_mass_derivative(s, &celestial, &gravity);
 
-    let result = integrator.step(&mut state, &derivative_fn, duration_s);
+    let result = integrator.step(&mut state, &derivative_fn, Seconds::new(duration_s));
     assert!(result.accepted);
 
     let position_error_km = (state.position - moon_end_pos).norm() / 1_000.0;

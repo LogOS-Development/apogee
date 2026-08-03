@@ -8,10 +8,12 @@
 //!
 //! where `R` is the body-relative position vector expressed in the spacecraft
 //! body frame, `I` is the inertia tensor in the body frame, and `x` is the
-//! cross product. The result is in N m in the body frame.
+//! cross product. The result is in N m in the body frame, exposed as a
+//! [`TorqueVec`] so the unit tag is visible at the public API surface.
 //!
 //! This is O(1) in the size of the inertia matrix.
 
+use apogee_common::units::TorqueVec;
 use nalgebra::{Matrix3, Vector3};
 
 /// Compute gravity-gradient torque.
@@ -22,12 +24,12 @@ use nalgebra::{Matrix3, Vector3};
 /// * `gm` — gravitational parameter of the attracting body (m^3/s^2).
 ///
 /// # Returns
-/// Torque vector in the body frame (N m).
+/// Torque vector in the body frame, as a [`TorqueVec`] (N·m).
 pub fn gradient_torque(
     position: &Vector3<f64>,
     inertia: &Matrix3<f64>,
     gm: f64,
-) -> Result<Vector3<f64>, String> {
+) -> Result<TorqueVec, String> {
     let r2 = position.norm_squared();
     if r2 == 0.0 {
         return Err("singularity: zero position vector in gravity gradient torque".into());
@@ -35,7 +37,7 @@ pub fn gradient_torque(
     let r5 = r2 * r2 * r2.sqrt();
     let i_r = inertia * position;
     let cross = position.cross(&i_r);
-    Ok(3.0 * gm / r5 * cross)
+    Ok(TorqueVec::from_nm(3.0 * gm / r5 * cross))
 }
 
 #[cfg(test)]
@@ -55,7 +57,7 @@ mod tests {
         let gm = 3.986004415e14; // Earth GM
 
         let torque = gradient_torque(&position, &inertia, gm).unwrap();
-        assert_relative_eq!(torque.norm(), 0.0, epsilon = 1e-15);
+        assert_relative_eq!(torque.raw().norm(), 0.0, epsilon = 1e-15);
     }
 
     #[test]
@@ -71,18 +73,17 @@ mod tests {
         let torque = gradient_torque(&position, &inertia, gm).unwrap();
 
         // I*R = (Ixx*Rx, Iyy*Ry, Izz*Rz) = (7e9, 0, 5e8)
-        // R x I*R = (0, 7e9*5e8 - 7e9*5e8, 0)? No, let's compute:
         // R x I*R = (Ry*Iz*Rz - Rz*Iy*Ry, Rz*Ix*Rx - Rx*Iz*Rz, Rx*Iy*Ry - Ry*Ix*Rx)
         // = (0, 1e6*1000*7e6 - 7e6*500*1e6, 0)
         // = (0, 7e15 - 3.5e15, 0) = (0, 3.5e15, 0)
         // torque = 3*GM/R^5 * (0, 3.5e15, 0), positive y.
         assert!(
-            torque.y > 0.0,
+            torque.raw().y > 0.0,
             "expected positive torque about y, got {}",
-            torque.y
+            torque.raw().y
         );
-        assert_relative_eq!(torque.x, 0.0, epsilon = 1e-10);
-        assert_relative_eq!(torque.z, 0.0, epsilon = 1e-10);
+        assert_relative_eq!(torque.raw().x, 0.0, epsilon = 1e-10);
+        assert_relative_eq!(torque.raw().z, 0.0, epsilon = 1e-10);
     }
 
     #[test]
@@ -92,8 +93,14 @@ mod tests {
         let pos_far = Vector3::new(14_000_000.0, 0.0, 2_000_000.0);
         let gm = 3.986004415e14;
 
-        let tau_near = gradient_torque(&pos_near, &inertia, gm).unwrap().norm();
-        let tau_far = gradient_torque(&pos_far, &inertia, gm).unwrap().norm();
+        let tau_near = gradient_torque(&pos_near, &inertia, gm)
+            .unwrap()
+            .raw()
+            .norm();
+        let tau_far = gradient_torque(&pos_far, &inertia, gm)
+            .unwrap()
+            .raw()
+            .norm();
 
         // Scaling: the cross product R x I*R scales as R^2 when R doubles,
         // while the denominator R^5 scales as 32, so the torque ratio is
@@ -116,7 +123,7 @@ mod tests {
         let pos = Vector3::new(0.0, 7_000_000.0, 0.0);
         let gm = 3.986004415e14;
         let torque = gradient_torque(&pos, &inertia, gm).unwrap();
-        assert_relative_eq!(torque.norm(), 0.0, epsilon = 1e-9);
+        assert_relative_eq!(torque.raw().norm(), 0.0, epsilon = 1e-9);
     }
 
     #[test]
@@ -130,8 +137,14 @@ mod tests {
 
         // With a diagonal inertia this position gives only y torque; the
         // off-diagonal terms create x and z components as well.
-        assert!(torque.x.abs() > 1e-9, "expected x torque from I_xy/I_xz");
-        assert!(torque.y.abs() > 1e-9, "expected y torque");
-        assert!(torque.z.abs() > 1e-9, "expected z torque from I_xz/I_yz");
+        assert!(
+            torque.raw().x.abs() > 1e-9,
+            "expected x torque from I_xy/I_xz"
+        );
+        assert!(torque.raw().y.abs() > 1e-9, "expected y torque");
+        assert!(
+            torque.raw().z.abs() > 1e-9,
+            "expected z torque from I_xz/I_yz"
+        );
     }
 }

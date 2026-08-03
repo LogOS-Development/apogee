@@ -10,6 +10,7 @@
 //! Pipe or redirect the output to a file and plot with your preferred tool, or
 //! use `scripts/plot_nrlmsise00.py` for a ready-made matplotlib figure.
 
+use apogee_common::units::Meters;
 use apogee_core::aero::model::AtmosphereInput;
 use apogee_core::aero::nrlmsise00::Nrlmsise00;
 
@@ -28,7 +29,7 @@ fn main() {
     let mut alt_km = alt_min_km;
     while alt_km <= alt_max_km {
         let input = AtmosphereInput {
-            altitude_m: alt_km * 1000.0,
+            altitude_m: Meters::new(alt_km * 1000.0),
             latitude_rad: 0.0,
             longitude_rad: 0.0,
             day_of_year: 80,
@@ -41,9 +42,9 @@ fn main() {
         println!(
             "{:.2},{:.6e},{:.2},{:.2},{:.6e},{:.6e},{:.6e},{:.6e},{:.6e},{:.6e},{:.6e},{:.6e}",
             alt_km,
-            out.density,
-            out.temperature,
-            out.temperature_alt,
+            out.density.into_value(),
+            out.temperature.into_value(),
+            out.temperature_alt.into_value(),
             out.number_densities.he,
             out.number_densities.o,
             out.number_densities.n2,

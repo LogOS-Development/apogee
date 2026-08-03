@@ -1,5 +1,7 @@
 //! RK4(5) fixed/adaptive integrator — stub.
 
+use apogee_common::units::Seconds;
+
 use super::{IntegrationResult, Integrator, StateDerivative, StateVector};
 
 /// RK4(5) embedded integrator.
@@ -23,7 +25,7 @@ impl Integrator for Rk45 {
         &mut self,
         _state: &mut StateVector,
         _derivative_fn: &dyn Fn(&StateVector) -> StateDerivative,
-        _dt: f64,
+        _dt: Seconds<f64>,
     ) -> IntegrationResult {
         // TODO: implement RK4(5) stages
         IntegrationResult::default()

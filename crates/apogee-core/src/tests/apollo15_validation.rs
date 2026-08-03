@@ -4,6 +4,7 @@ mod apollo15_validation {
     use crate::gravity::point_mass::PointMassGravity;
     use crate::integrator::{Integrator, Rk4, StateVector};
     use crate::tests::helpers::point_mass_derivative;
+    use apogee_common::units::Seconds;
     use nalgebra::Vector3;
 
     /// Apollo 15 reference trajectory fixture. Generated with spiceypy from
@@ -64,7 +65,7 @@ mod apollo15_validation {
 
         let gravity = PointMassGravity {};
         let celestial = moon_only_system();
-        let mut integrator = Rk4::new(10.0); // 10 s fixed step
+        let mut integrator = Rk4::new(Seconds::new(10.0)); // 10 s fixed step
 
         let (et0, pos0, vel0) = reference[0];
         let mut state = StateVector {
@@ -80,7 +81,7 @@ mod apollo15_validation {
         let (et1, pos_ref, vel_ref) = reference.last().unwrap();
         let duration_s = et1 - et0;
 
-        let result = integrator.step(&mut state, &derivative_fn, duration_s);
+        let result = integrator.step(&mut state, &derivative_fn, Seconds::new(duration_s));
         assert!(result.accepted, "integrator did not accept step");
 
         let position_error_km = (state.position - pos_ref).norm() / 1_000.0;

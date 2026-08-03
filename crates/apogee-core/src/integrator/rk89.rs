@@ -1,5 +1,7 @@
 //! RK8(9) adaptive integrator (Dormand-Prince or Verner) — stub.
 
+use apogee_common::units::Seconds;
+
 use super::{IntegrationResult, Integrator, StateDerivative, StateVector};
 
 /// RK8(9) adaptive-step integrator.
@@ -25,7 +27,7 @@ impl Integrator for Rk89 {
         &mut self,
         _state: &mut StateVector,
         _derivative_fn: &dyn Fn(&StateVector) -> StateDerivative,
-        _dt: f64,
+        _dt: Seconds<f64>,
     ) -> IntegrationResult {
         // TODO: implement 8th-order stages with 9th-order error estimate
         IntegrationResult::default()

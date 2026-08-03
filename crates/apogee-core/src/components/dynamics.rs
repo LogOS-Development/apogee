@@ -1,12 +1,13 @@
 //! Dynamic properties: mass, inertia, and spacecraft aerodynamic config.
 
+use apogee_common::units::{Area, Kilograms};
 use nalgebra::Matrix3;
 
 /// Mass and inertia properties of a rigid body.
 #[derive(Debug, Clone)]
 pub struct Dynamics {
-    /// Total mass (kg).
-    pub mass: f64,
+    /// Total mass.
+    pub mass: Kilograms<f64>,
     /// Inertia tensor in body frame (kg m^2).
     pub inertia: Matrix3<f64>,
     /// Center of mass offset from reference point (m).
@@ -16,7 +17,7 @@ pub struct Dynamics {
 impl Default for Dynamics {
     fn default() -> Self {
         Self {
-            mass: 1.0,
+            mass: Kilograms::new(1.0),
             inertia: Matrix3::identity(),
             cg_offset: nalgebra::Vector3::zeros(),
         }
@@ -28,8 +29,8 @@ impl Default for Dynamics {
 pub struct SpacecraftConfig {
     /// Ballistic coefficient for atmospheric drag: Cd * A / m (m²/kg).
     pub ballistic_coefficient: f64,
-    /// Cross-sectional area exposed to solar radiation (m²).
-    pub srp_area_m2: f64,
+    /// Cross-sectional area exposed to solar radiation.
+    pub srp_area: Area<f64>,
     /// Reflectivity coefficient (0.0 = fully absorbing, 1.0 = perfectly reflecting).
     pub reflectivity: f64,
     /// Reference mass used to scale drag area if only Cd*A/m is known (kg).
@@ -40,7 +41,7 @@ impl Default for SpacecraftConfig {
     fn default() -> Self {
         Self {
             ballistic_coefficient: 0.01,
-            srp_area_m2: 10.0,
+            srp_area: Area::new(10.0),
             reflectivity: 1.2,
             reference_mass_kg: 1.0,
         }
@@ -48,9 +49,9 @@ impl Default for SpacecraftConfig {
 }
 
 impl SpacecraftConfig {
-    /// Effective drag area Cd*A (m²) for the current spacecraft mass.
-    pub fn drag_area_m2(&self, mass: f64) -> f64 {
-        self.ballistic_coefficient * mass
+    /// Effective drag area Cd*A for the supplied spacecraft mass.
+    pub fn drag_area(&self, mass: Kilograms<f64>) -> Area<f64> {
+        Area::new(self.ballistic_coefficient * mass.into_value())
     }
 }
 

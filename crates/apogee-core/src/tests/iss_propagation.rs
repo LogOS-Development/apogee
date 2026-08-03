@@ -10,6 +10,7 @@
 //! Those improvements are tracked in follow-up issues.
 
 use apogee_common::constants::R_EARTH_EQ;
+use apogee_common::units::{Area, Kilograms, Seconds};
 use nalgebra::Vector3;
 
 use crate::components::dynamics::{Dynamics, SimulationConfig, SpacecraftConfig};
@@ -40,13 +41,13 @@ fn iss_initial_state() -> (
         angular_velocity: Vector3::zeros(),
     };
     let dynamics = Dynamics {
-        mass: 420_000.0,
+        mass: Kilograms::new(420_000.0),
         inertia: nalgebra::Matrix3::identity() * 1e7,
         cg_offset: Vector3::zeros(),
     };
     let config = SpacecraftConfig {
         ballistic_coefficient: 1e-4,
-        srp_area_m2: 2_500.0,
+        srp_area: Area::new(2_500.0),
         reflectivity: 1.2,
         reference_mass_kg: 420_000.0,
     };
@@ -76,8 +77,8 @@ fn test_iss_one_orbit_energy_conservation() {
         config,
         sim_config,
         &celestial,
-        30.0,
-        5_500.0,
+        Seconds::new(30.0),
+        Seconds::new(5_500.0),
         212,
         0.0,
     );
@@ -109,8 +110,8 @@ fn test_iss_24h_propagation_stays_leo() {
         config,
         sim_config,
         &celestial,
-        60.0,
-        86_400.0,
+        Seconds::new(60.0),
+        Seconds::new(86_400.0),
         212,
         0.0,
     );

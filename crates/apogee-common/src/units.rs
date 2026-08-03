@@ -171,6 +171,7 @@ pub type Dimensionless<T> = Quantity<T, Unit<(Z0, Z0, Z0, Z0, Z0, Z0, Z0)>>;
 pub type Velocity<T> = Quantity<T, Unit<(P1, Z0, N1, Z0, Z0, Z0, Z0)>>;
 pub type Acceleration<T> = Quantity<T, Unit<(P1, Z0, N2, Z0, Z0, Z0, Z0)>>;
 pub type Force<T> = Quantity<T, Unit<(P1, P1, N2, Z0, Z0, Z0, Z0)>>;
+pub type Torque<T> = Quantity<T, Unit<(P2, P1, N2, Z0, Z0, Z0, Z0)>>;
 pub type Pressure<T> = Quantity<T, Unit<(N1, P1, N2, Z0, Z0, Z0, Z0)>>;
 pub type Energy<T> = Quantity<T, Unit<(P2, P1, N2, Z0, Z0, Z0, Z0)>>;
 pub type Power<T> = Quantity<T, Unit<(P2, P1, N3, Z0, Z0, Z0, Z0)>>;
@@ -182,6 +183,7 @@ pub type ElectricCharge<T> = Quantity<T, Unit<(Z0, Z0, P1, P1, Z0, Z0, Z0)>>;
 pub type Voltage<T> = Quantity<T, Unit<(P2, P1, N3, N1, Z0, Z0, Z0)>>;
 pub type Kilometers<T> = Quantity<T, Unit<(P3, Z0, Z0, Z0, Z0, Z0, Z0)>>;
 pub type Nanoteslas<T> = Quantity<T, Unit<(N2, P1, N2, Z0, Z0, Z0, Z0)>>;
+pub type GravitationalParameter<T> = Quantity<T, Unit<(P3, Z0, N2, Z0, Z0, Z0, Z0)>>;
 
 /// A scalar `value` tagged with a compile-time unit `U`.
 ///
@@ -566,6 +568,169 @@ fn format_superscript(exp: i8) -> String {
     }
 }
 
+// --- Vector-quantity newtypes ---
+//
+// nalgebra's `Vector3<S>` requires `S: Scalar` (which implies `One` and `Zero`),
+// so a `Vector3<Acceleration<f64>>` cannot compile. To give force-aggregator
+// models a unit-aware public API without breaking nalgebra geometry operations,
+// each vector quantity is exposed as a thin newtype around `Vector3<f64>` with
+// a raw escape hatch and per-component accessors returning the corresponding
+// `Quantity<T, U>`. This mirrors the pattern established for `MagneticFieldVector`
+// in `apogee-core::magnetosphere`.
+
+use nalgebra::Vector3;
+
+/// Acceleration vector in m/s². Wraps a raw `Vector3<f64>`; the units live in
+/// the accessors.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct AccelerationVec(pub Vector3<f64>);
+
+impl AccelerationVec {
+    /// Wrap a raw m/s² vector.
+    #[must_use]
+    pub const fn from_mps2(raw: Vector3<f64>) -> Self {
+        Self(raw)
+    }
+
+    /// Borrow the raw vector in m/s².
+    #[must_use]
+    pub const fn raw(&self) -> &Vector3<f64> {
+        &self.0
+    }
+
+    /// Sum two acceleration vectors component-wise.
+    #[must_use]
+    pub fn plus(&self, other: &Self) -> Self {
+        Self(self.0 + other.0)
+    }
+
+    /// X component in m/s².
+    #[must_use]
+    pub fn x_mps2(&self) -> Acceleration<f64> {
+        Acceleration::new(self.0.x)
+    }
+
+    /// Y component in m/s².
+    #[must_use]
+    pub fn y_mps2(&self) -> Acceleration<f64> {
+        Acceleration::new(self.0.y)
+    }
+
+    /// Z component in m/s².
+    #[must_use]
+    pub fn z_mps2(&self) -> Acceleration<f64> {
+        Acceleration::new(self.0.z)
+    }
+}
+
+impl From<Vector3<f64>> for AccelerationVec {
+    fn from(raw: Vector3<f64>) -> Self {
+        Self(raw)
+    }
+}
+
+impl From<AccelerationVec> for Vector3<f64> {
+    fn from(v: AccelerationVec) -> Self {
+        v.0
+    }
+}
+
+/// Force vector in N. Wraps a raw `Vector3<f64>`.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct ForceVec(pub Vector3<f64>);
+
+impl ForceVec {
+    /// Wrap a raw N vector.
+    #[must_use]
+    pub const fn from_n(raw: Vector3<f64>) -> Self {
+        Self(raw)
+    }
+
+    /// Borrow the raw vector in N.
+    #[must_use]
+    pub const fn raw(&self) -> &Vector3<f64> {
+        &self.0
+    }
+
+    /// X component in N.
+    #[must_use]
+    pub fn x_n(&self) -> Force<f64> {
+        Force::new(self.0.x)
+    }
+
+    /// Y component in N.
+    #[must_use]
+    pub fn y_n(&self) -> Force<f64> {
+        Force::new(self.0.y)
+    }
+
+    /// Z component in N.
+    #[must_use]
+    pub fn z_n(&self) -> Force<f64> {
+        Force::new(self.0.z)
+    }
+}
+
+impl From<Vector3<f64>> for ForceVec {
+    fn from(raw: Vector3<f64>) -> Self {
+        Self(raw)
+    }
+}
+
+impl From<ForceVec> for Vector3<f64> {
+    fn from(v: ForceVec) -> Self {
+        v.0
+    }
+}
+
+/// Torque vector in N·m. Wraps a raw `Vector3<f64>`.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct TorqueVec(pub Vector3<f64>);
+
+impl TorqueVec {
+    /// Wrap a raw N·m vector.
+    #[must_use]
+    pub const fn from_nm(raw: Vector3<f64>) -> Self {
+        Self(raw)
+    }
+
+    /// Borrow the raw vector in N·m.
+    #[must_use]
+    pub const fn raw(&self) -> &Vector3<f64> {
+        &self.0
+    }
+
+    /// X component in N·m.
+    #[must_use]
+    pub fn x_nm(&self) -> Torque<f64> {
+        Torque::new(self.0.x)
+    }
+
+    /// Y component in N·m.
+    #[must_use]
+    pub fn y_nm(&self) -> Torque<f64> {
+        Torque::new(self.0.y)
+    }
+
+    /// Z component in N·m.
+    #[must_use]
+    pub fn z_nm(&self) -> Torque<f64> {
+        Torque::new(self.0.z)
+    }
+}
+
+impl From<Vector3<f64>> for TorqueVec {
+    fn from(raw: Vector3<f64>) -> Self {
+        Self(raw)
+    }
+}
+
+impl From<TorqueVec> for Vector3<f64> {
+    fn from(v: TorqueVec) -> Self {
+        v.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -771,5 +936,48 @@ mod tests {
         assert_eq!(one.with_prefix(SiPrefix::Deci).into_value(), 1.0e-1);
         assert_eq!(one.with_prefix(SiPrefix::Kilo).into_value(), 1.0e3);
         assert_eq!(one.with_prefix(SiPrefix::Mega).into_value(), 1.0e6);
+    }
+
+    #[test]
+    fn acceleration_vec_wraps_and_exposes_components() {
+        let raw = Vector3::new(1.0, 2.0, 3.0);
+        let a = AccelerationVec::from_mps2(raw);
+        assert_eq!(a.raw(), &raw);
+        assert_eq!(a.x_mps2().into_value(), 1.0);
+        assert_eq!(a.y_mps2().into_value(), 2.0);
+        assert_eq!(a.z_mps2().into_value(), 3.0);
+    }
+
+    #[test]
+    fn acceleration_vec_plus_sums_components() {
+        let a = AccelerationVec::from_mps2(Vector3::new(1.0, 0.0, 0.0));
+        let b = AccelerationVec::from_mps2(Vector3::new(0.0, 2.0, 3.0));
+        let sum = a.plus(&b);
+        assert_eq!(sum.raw(), &Vector3::new(1.0, 2.0, 3.0));
+    }
+
+    #[test]
+    fn force_vec_round_trips_via_from_into() {
+        let raw = Vector3::new(4.0, 5.0, 6.0);
+        let f: ForceVec = raw.into();
+        let back: Vector3<f64> = f.into();
+        assert_eq!(back, raw);
+    }
+
+    #[test]
+    fn torque_vec_exposes_nm_components() {
+        let t = TorqueVec::from_nm(Vector3::new(7.0, 8.0, 9.0));
+        assert_relative_eq!(t.x_nm().into_value(), 7.0);
+        assert_relative_eq!(t.y_nm().into_value(), 8.0);
+        assert_relative_eq!(t.z_nm().into_value(), 9.0);
+    }
+
+    #[test]
+    fn torque_type_unit_is_kg_m2_per_s2() {
+        // Torque = m²·kg/s² (force-arm). Multiply a length-arm by a force and
+        // confirm the resulting type is `Torque`.
+        let arm: Meters<f64> = Meters::new(0.5);
+        let force: Force<f64> = Force::new(10.0);
+        let _t: Torque<f64> = arm * force;
     }
 }
