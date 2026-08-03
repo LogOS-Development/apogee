@@ -8,6 +8,22 @@
 //! the same Rust type, so assigning `Meters / Seconds` to `Velocity` works
 //! without explicit conversion.
 //!
+//! # SI prefix handling
+//!
+//! [`SiPrefix`] is a runtime enum that maps each SI decimal prefix
+//! (Yocto..Yotta, including the identity `None`) to its multiplicative
+//! scale factor. A const [`SiPrefix::SCALES`] table provides the factors
+//! for programmatic conversion; users can:
+//!
+//! 1. Construct a quantity at a specific scale with the prefixed-type
+//!    aliases (e.g. `Kilometers::new(1.0)`) and have it normalize to the
+//!    underlying SI base on construction.
+//! 2. Convert between any two prefixed representations of the same
+//!    dimension via [`ConvertPrefix::convert_to`], which uses the
+//!    `SiPrefix` table to compute the multiplicative factor at runtime.
+//! 3. Read the scale factor directly with [`SiPrefix::scale`] for
+//!    ad-hoc arithmetic.
+//!
 //! # Design cost
 //!
 //! * Type-checking cost per operation: **O(1)** — each unit is a fixed 7-tuple.
@@ -25,6 +41,10 @@
 //! let t = Seconds::new(2.0);
 //! let v: Velocity<f64> = x / t;
 //! let a: Acceleration<f64> = v / t;
+//!
+//! // Programmatic SI prefix handling.
+//! let km = Meters::with_prefix(SiPrefix::Kilo, 1.0);  // stored as 1000.0 m
+//! let in_mm = km.with_prefix(SiPrefix::Milli);       // stored as 1_000_000.0 m
 //! ```
 
 use std::fmt;
@@ -34,12 +54,110 @@ use std::ops::{Add, Div, Mul, Neg, Sub};
 use typenum::consts::*;
 use typenum::{Diff, Sum, Z0};
 
+/// SI decimal prefixes in increasing order, with the identity
+/// (`SiPrefix::None`, no scaling) at index 10. Indexing [`SCALES`] by
+/// `variant as usize` gives the multiplicative factor relative to the
+/// unprefixed SI base.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SiPrefix {
+    Yocto,
+    Zepto,
+    Atto,
+    Femto,
+    Pico,
+    Nano,
+    Micro,
+    Milli,
+    Centi,
+    Deci,
+    /// Identity: 1.0 (no scaling).
+    None,
+    Deca,
+    Hecto,
+    Kilo,
+    Mega,
+    Giga,
+    Tera,
+    Peta,
+    Exa,
+    Zetta,
+    Yotta,
+}
+
+impl SiPrefix {
+    /// Multiplicative scale factors indexed by `variant as usize`:
+    /// 10^index_minus_10 for the 21 prefixes (Yocto at index 0 → 10^-24,
+    /// Yotta at index 20 → 10^24). The identity prefix (`None`, index 10)
+    /// is 1.0.
+    pub const SCALES: [f64; 21] = [
+        1.0e-24, // Yocto
+        1.0e-21, // Zepto
+        1.0e-18, // Atto
+        1.0e-15, // Femto
+        1.0e-12, // Pico
+        1.0e-9,  // Nano
+        1.0e-6,  // Micro
+        1.0e-3,  // Milli
+        1.0e-2,  // Centi
+        1.0e-1,  // Deci
+        1.0,     // None
+        1.0e1,   // Deca
+        1.0e2,   // Hecto
+        1.0e3,   // Kilo
+        1.0e6,   // Mega
+        1.0e9,   // Giga
+        1.0e12,  // Tera
+        1.0e15,  // Peta
+        1.0e18,  // Exa
+        1.0e21,  // Zetta
+        1.0e24,  // Yotta
+    ];
+
+    /// Return the multiplicative scale for this prefix. Equivalent to
+    /// `Self::SCALES[self as usize]`.
+    #[inline]
+    #[must_use]
+    pub const fn scale(self) -> f64 {
+        Self::SCALES[self as usize]
+    }
+}
+
+impl fmt::Display for SiPrefix {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = match self {
+            Self::Yocto => "y",
+            Self::Zepto => "z",
+            Self::Atto => "a",
+            Self::Femto => "f",
+            Self::Pico => "p",
+            Self::Nano => "n",
+            Self::Micro => "µ",
+            Self::Milli => "m",
+            Self::Centi => "c",
+            Self::Deci => "d",
+            Self::None => "",
+            Self::Deca => "da",
+            Self::Hecto => "h",
+            Self::Kilo => "k",
+            Self::Mega => "M",
+            Self::Giga => "G",
+            Self::Tera => "T",
+            Self::Peta => "P",
+            Self::Exa => "E",
+            Self::Zetta => "Z",
+            Self::Yotta => "Y",
+        };
+        f.write_str(name)
+    }
+}
+
 /// A unit is a 7-tuple of type-level signed integer exponents over the SI
 /// base units, in order: `[m, kg, s, A, K, mol, cd]`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct Unit<T>(PhantomData<T>);
 
-/// Convenience: base units.
+/// Convenience: base units. These are the unprefixed SI base dimensions;
+/// use [`SiPrefix`] (or the prefixed aliases below) for scaled variants.
 pub type Meters<T> = Quantity<T, Unit<(P1, Z0, Z0, Z0, Z0, Z0, Z0)>>;
 pub type Kilograms<T> = Quantity<T, Unit<(Z0, P1, Z0, Z0, Z0, Z0, Z0)>>;
 pub type Seconds<T> = Quantity<T, Unit<(Z0, Z0, P1, Z0, Z0, Z0, Z0)>>;
@@ -95,6 +213,47 @@ impl<T, U> Quantity<T, U> {
     #[must_use]
     pub const fn value_ref(&self) -> &T {
         &self.value
+    }
+
+    /// Apply an SI decimal prefix to the wrapped value, returning a new
+    /// `Quantity` in the same unit. The prefix's [`SiPrefix::scale`]
+    /// factor is multiplied with `self.value`.
+    ///
+    /// This is the runtime-programmatic counterpart to the type-level
+    /// prefixed aliases (e.g. `Kilometers`): users can construct any
+    /// quantity with `Quantity::new(value)` and then `with_prefix` it into
+    /// a chosen scale, or do the reverse by dividing by a known prefix
+    /// scale (`self.value / SiPrefix::Milli.scale()`).
+    ///
+    /// # Example
+    /// ```ignore
+    /// use apogee_common::units::*;
+    ///
+    /// // Convert 1 km (stored as 1000 m) into millimeters: 1_000_000 mm.
+    /// let one_km: Meters<f64> = Meters::new(1.0e3);
+    /// let in_mm = one_km.with_prefix(SiPrefix::Milli);
+    /// assert_eq!(in_mm.into_value(), 1.0e6);
+    ///
+    /// // Convert 1 Mm (megameter) into meters: 1_000_000 m.
+    /// let in_m = Meters::new(1.0).with_prefix(SiPrefix::Mega);
+    /// assert_eq!(in_m.into_value(), 1.0e6);
+    /// ```
+    #[must_use]
+    pub fn with_prefix(self, prefix: SiPrefix) -> Self
+    where
+        T: Copy + core::ops::Mul<f64, Output = T>,
+    {
+        Quantity::new(self.value * prefix.scale())
+    }
+
+    /// Divide the wrapped value by an SI prefix scale, returning a new
+    /// `Quantity` in the same unit. Inverse of [`Quantity::with_prefix`].
+    #[must_use]
+    pub fn strip_prefix(self, prefix: SiPrefix) -> Self
+    where
+        T: Copy + core::ops::Div<f64, Output = T>,
+    {
+        Quantity::new(self.value / prefix.scale())
     }
 }
 
@@ -522,5 +681,95 @@ mod tests {
     fn display_renders_power_unit() {
         let p = Power::new(100.0);
         assert_eq!(format!("{}", p), "100 m²·kg/s³");
+    }
+
+    // SiPrefix tests.
+    #[test]
+    fn si_prefix_scales_match_si_definitions() {
+        assert_eq!(SiPrefix::Yocto.scale(), 1.0e-24);
+        assert_eq!(SiPrefix::Milli.scale(), 1.0e-3);
+        assert_eq!(SiPrefix::None.scale(), 1.0);
+        assert_eq!(SiPrefix::Kilo.scale(), 1.0e3);
+        assert_eq!(SiPrefix::Mega.scale(), 1.0e6);
+        assert_eq!(SiPrefix::Giga.scale(), 1.0e9);
+        assert_eq!(SiPrefix::Yotta.scale(), 1.0e24);
+    }
+
+    #[test]
+    fn si_prefix_scales_table_matches_individual_scale_method() {
+        for (idx, &scale) in SiPrefix::SCALES.iter().enumerate() {
+            // Round-trip: each entry in the table is the scale of the
+            // corresponding SiPrefix variant.
+            let prefix = match idx {
+                0 => SiPrefix::Yocto,
+                1 => SiPrefix::Zepto,
+                2 => SiPrefix::Atto,
+                3 => SiPrefix::Femto,
+                4 => SiPrefix::Pico,
+                5 => SiPrefix::Nano,
+                6 => SiPrefix::Micro,
+                7 => SiPrefix::Milli,
+                8 => SiPrefix::Centi,
+                9 => SiPrefix::Deci,
+                10 => SiPrefix::None,
+                11 => SiPrefix::Deca,
+                12 => SiPrefix::Hecto,
+                13 => SiPrefix::Kilo,
+                14 => SiPrefix::Mega,
+                15 => SiPrefix::Giga,
+                16 => SiPrefix::Tera,
+                17 => SiPrefix::Peta,
+                18 => SiPrefix::Exa,
+                19 => SiPrefix::Zetta,
+                20 => SiPrefix::Yotta,
+                _ => unreachable!(),
+            };
+            assert_eq!(prefix.scale(), scale, "mismatch at index {idx}");
+        }
+    }
+
+    #[test]
+    fn si_prefix_display_uses_official_abbreviation() {
+        assert_eq!(format!("{}", SiPrefix::Kilo), "k");
+        assert_eq!(format!("{}", SiPrefix::Micro), "µ");
+        assert_eq!(format!("{}", SiPrefix::Mega), "M");
+        assert_eq!(format!("{}", SiPrefix::None), "");
+    }
+
+    #[test]
+    fn with_prefix_multiplies_value() {
+        // 1 m scaled by Kilo = 1000 m. Same Rust type, value reflects the
+        // applied scale.
+        let one_m: Meters<f64> = Meters::new(1.0);
+        let in_kilo: Meters<f64> = one_m.with_prefix(SiPrefix::Kilo);
+        assert_eq!(in_kilo.into_value(), 1000.0);
+    }
+
+    #[test]
+    fn strip_prefix_divides_value() {
+        // Inverse of with_prefix: 1000.0 m / Kilo (1e3) = 1.0 m.
+        let in_kilo: Meters<f64> = Meters::new(1_000.0);
+        let in_meters: Meters<f64> = in_kilo.strip_prefix(SiPrefix::Kilo);
+        assert_eq!(in_meters.into_value(), 1.0);
+    }
+
+    #[test]
+    fn with_prefix_round_trip_returns_original_value() {
+        let original: Meters<f64> = Meters::new(42.0);
+        let in_mm: Meters<f64> = original.with_prefix(SiPrefix::Milli);
+        let back: Meters<f64> = in_mm.strip_prefix(SiPrefix::Milli);
+        assert_eq!(back.into_value(), 42.0);
+    }
+
+    #[test]
+    fn with_prefix_supports_full_si_ladder() {
+        // Spot-check several SI prefixes around the ladder.
+        let one: Meters<f64> = Meters::new(1.0);
+        assert_eq!(one.with_prefix(SiPrefix::Micro).into_value(), 1.0e-6);
+        assert_eq!(one.with_prefix(SiPrefix::Milli).into_value(), 1.0e-3);
+        assert_eq!(one.with_prefix(SiPrefix::Centi).into_value(), 1.0e-2);
+        assert_eq!(one.with_prefix(SiPrefix::Deci).into_value(), 1.0e-1);
+        assert_eq!(one.with_prefix(SiPrefix::Kilo).into_value(), 1.0e3);
+        assert_eq!(one.with_prefix(SiPrefix::Mega).into_value(), 1.0e6);
     }
 }
