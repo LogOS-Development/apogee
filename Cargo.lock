@@ -24,8 +24,10 @@ dependencies = [
  "approx",
  "hifitime",
  "nalgebra",
+ "num-traits",
  "serde",
  "thiserror 1.0.69",
+ "typenum",
 ]
 
 [[package]]

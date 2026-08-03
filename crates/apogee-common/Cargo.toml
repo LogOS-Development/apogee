@@ -10,6 +10,8 @@ nalgebra = { workspace = true }
 hifitime = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
+num-traits = { workspace = true }
+typenum = { workspace = true }
 
 [dev-dependencies]
 approx = "0.5"
