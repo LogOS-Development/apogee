@@ -17,7 +17,7 @@ use apogee_common::time::decimal_year;
 
 use crate::magnetosphere::data::{coefficients_at_epoch, IGRF_DEGREE, IGRF_REF_RADIUS_KM};
 use crate::magnetosphere::legendre::schmidt_legendre;
-use crate::magnetosphere::MagneticFieldModel;
+use crate::magnetosphere::{MagneticFieldModel, MagneticFieldVector};
 
 /// Geomagnetic field model using IGRF-13 spherical harmonics.
 #[derive(Debug, Clone, Copy, Default)]
@@ -44,17 +44,22 @@ impl Igrf {
     ///
     /// # Returns
     /// Magnetic field vector in ECEF frame (nT).
-    pub fn field(&self, position_m: &Vector3<f64>, epoch: Epoch) -> Vector3<f64> {
+    pub fn field(&self, position_m: &Vector3<f64>, epoch: Epoch) -> MagneticFieldVector {
         let decimal_year = decimal_year(epoch);
         let (g, h) = coefficients_at_epoch(decimal_year);
-        self.field_with_coeffs(position_m, &g, &h)
+        MagneticFieldVector::from_nT(self.field_with_coeffs(position_m, &g, &h))
     }
 
     /// Evaluate the field with a geomagnetic-activity perturbation.
     ///
     /// `ap` is the daily Ap index. A positive Ap weakens the axial dipole term,
     /// mimicking the ring-current effect in a coarse, spherical-harmonic way.
-    pub fn field_with_ap(&self, position_m: &Vector3<f64>, epoch: Epoch, ap: f64) -> Vector3<f64> {
+    pub fn field_with_ap(
+        &self,
+        position_m: &Vector3<f64>,
+        epoch: Epoch,
+        ap: f64,
+    ) -> MagneticFieldVector {
         let decimal_year = decimal_year(epoch);
         let (mut g, mut h) = coefficients_at_epoch(decimal_year);
         crate::magnetosphere::disturbance::add_ap_perturbation(
@@ -64,7 +69,7 @@ impl Igrf {
             position_m,
             ap,
         );
-        self.field_with_coeffs(position_m, &g, &h)
+        MagneticFieldVector::from_nT(self.field_with_coeffs(position_m, &g, &h))
     }
 
     /// Evaluate the field using explicitly supplied coefficient arrays.
