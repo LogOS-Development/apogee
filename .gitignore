@@ -28,3 +28,12 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+# uv.lock is regenerable from pyproject.toml; ignore the lockfile so
+# contributors don't accidentally diverge on resolved versions.
+uv.lock

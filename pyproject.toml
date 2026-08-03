@@ -1,0 +1,46 @@
+[project]
+name = "apogee-scripts"
+version = "0.1.0"
+description = "Python helpers for Apogee validation, plotting, and reference-data generation."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+    { name = "Ryan Ennis" },
+]
+keywords = [
+    "apogee",
+    "space",
+    "astrodynamics",
+    "validation",
+    "plotting",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering",
+    "Operating System :: POSIX :: Linux",
+]
+
+# Runtime dependencies for the project-local Python scripts under
+# scripts/ and crates/apogee-core/tests/scripts/. These cover the
+# validation, plotting, and reference-data generation tools; the Rust
+# build itself has no Python dependency.
+dependencies = [
+    "numpy>=1.26",
+    "matplotlib>=3.8",
+    "pandas>=2.1",
+    # ppigrf is an MIT-licensed IGRF implementation; pin to a recent
+    # release that exposes the API used by scripts/generate_igrf_fixture.py
+    # (callable, returns a tuple of spherical components in nT).
+    "ppigrf>=0.2.0",
+]
+
+[project.urls]
+Repository = "https://github.com/ryansennis/apogee"
+
+# No [build-system] table: this project has no importable Python
+# package. The pyproject.toml is consumed directly by `uv` (via PEP
+# 621 metadata) for `uv sync` and `uv pip install` to install the
+# runtime dependencies declared above. Tooling like `pip` falls back
+# to a metadata-only install.
