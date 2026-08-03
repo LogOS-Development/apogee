@@ -6,6 +6,7 @@
 use nalgebra::Vector3;
 
 pub mod time;
+pub mod units;
 
 /// NAIF-style body identifier (e.g. 10 = Sun, 399 = Earth).
 pub type NaifId = i32;

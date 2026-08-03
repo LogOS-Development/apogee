@@ -26,6 +26,7 @@
 //! * Ring-current proxy: roughly proportional to the Dst index; see
 //!   Sugiura, M. (1965), "Hourly values of equatorial Dst for the IGY".
 
+use apogee_common::units::Nanoteslas;
 use apogee_common::NaifId;
 use nalgebra::Vector3;
 
@@ -36,7 +37,7 @@ const EARTH_NAIF_ID: NaifId = 399;
 /// Empirical scaling from Ap to an equivalent ring-current perturbation of
 /// the dipole coefficient (nT). Negative because increased activity weakens
 /// the main-field dipole at low latitudes.
-const AP_TO_G10_PERTURBATION_NT: f64 = -2.0;
+const AP_TO_G10_PERTURBATION: Nanoteslas<f64> = Nanoteslas::new(-2.0);
 
 /// Evaluate the IGRF-13 main field plus an Ap-driven disturbance.
 ///
@@ -67,7 +68,7 @@ pub(crate) fn add_ap_perturbation(
     let _ = h_main;
 
     // g_1^0 is stored at triangular index n*(n+1)/2 + m = 1 for n=1, m=0.
-    g_main[1] += ap * AP_TO_G10_PERTURBATION_NT;
+    g_main[1] += (AP_TO_G10_PERTURBATION * ap).value;
 
     // Position-dependent modulation would go here under issue #77, e.g.
     // a latitude-weighted ring-current term.
@@ -83,7 +84,7 @@ mod tests {
         let mut g = [0.0; 4];
         let mut h = [0.0; 4];
         add_ap_perturbation(EARTH_NAIF_ID, &mut g, &mut h, &Vector3::zeros(), 10.0);
-        assert_eq!(g[1], 10.0 * AP_TO_G10_PERTURBATION_NT);
+        assert_eq!(g[1], (AP_TO_G10_PERTURBATION * 10.0).value);
         assert_eq!(h[1], 0.0);
     }
 

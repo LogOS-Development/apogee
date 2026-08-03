@@ -13,9 +13,71 @@ pub(crate) mod legendre;
 
 pub use igrf::Igrf;
 
+use apogee_common::units::Nanoteslas;
 use apogee_common::NaifId;
 use hifitime::Epoch;
 use nalgebra::Vector3;
+
+/// A magnetic flux-density vector in nanotesla (nT).
+///
+/// The inner storage is a raw `Vector3<f64>` so it interoperates with nalgebra;
+/// unit-aware accessors return `Nanoteslas<f64>` per component.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct MagneticFieldVector(Vector3<f64>);
+
+impl MagneticFieldVector {
+    /// Wrap a raw nT vector.
+    #[must_use]
+    #[allow(non_snake_case)]
+    pub fn from_nT(raw: Vector3<f64>) -> Self {
+        Self(raw)
+    }
+
+    /// Borrow the raw vector in nT.
+    #[must_use]
+    pub const fn raw(&self) -> &Vector3<f64> {
+        &self.0
+    }
+
+    /// Dot product with a raw direction/measurement vector.
+    #[must_use]
+    pub fn dot(&self, other: &Vector3<f64>) -> f64 {
+        self.0.dot(other)
+    }
+
+    /// X component in nT.
+    #[must_use]
+    #[allow(non_snake_case)]
+    pub fn x_nT(&self) -> Nanoteslas<f64> {
+        Nanoteslas::new(self.0.x)
+    }
+
+    /// Y component in nT.
+    #[must_use]
+    #[allow(non_snake_case)]
+    pub fn y_nT(&self) -> Nanoteslas<f64> {
+        Nanoteslas::new(self.0.y)
+    }
+
+    /// Z component in nT.
+    #[must_use]
+    #[allow(non_snake_case)]
+    pub fn z_nT(&self) -> Nanoteslas<f64> {
+        Nanoteslas::new(self.0.z)
+    }
+}
+
+impl From<Vector3<f64>> for MagneticFieldVector {
+    fn from(raw: Vector3<f64>) -> Self {
+        Self(raw)
+    }
+}
+
+impl From<MagneticFieldVector> for Vector3<f64> {
+    fn from(v: MagneticFieldVector) -> Self {
+        v.0
+    }
+}
 
 /// Fidelity selector for magnetic field models.
 ///
@@ -55,11 +117,12 @@ pub trait MagneticFieldModel: Send + Sync {
     /// NAIF ID of the body whose magnetic field this model evaluates.
     fn body_id(&self) -> NaifId;
 
-    /// Magnetic flux density at a body-fixed position and epoch (nT).
+    /// Magnetic flux density at a body-fixed position and epoch.
     ///
     /// The position is expressed in the body-fixed frame appropriate to the
-    /// model (e.g. ECEF for Earth).
-    fn field(&self, position_m: &Vector3<f64>, epoch: Epoch) -> Vector3<f64>;
+    /// model (e.g. ECEF for Earth) and is in meters. The returned vector is in
+    /// nanotesla.
+    fn field(&self, position_m: &Vector3<f64>, epoch: Epoch) -> MagneticFieldVector;
 }
 
 impl MagneticFieldModel for Igrf {
@@ -67,7 +130,7 @@ impl MagneticFieldModel for Igrf {
         399 // Earth
     }
 
-    fn field(&self, position_m: &Vector3<f64>, epoch: Epoch) -> Vector3<f64> {
+    fn field(&self, position_m: &Vector3<f64>, epoch: Epoch) -> MagneticFieldVector {
         self.field(position_m, epoch)
     }
 }
@@ -106,12 +169,17 @@ impl MagneticFieldCatalog {
     }
 
     /// Evaluate the field for the given body at a body-fixed position and epoch.
-    pub fn field(&self, body_id: NaifId, position_m: &Vector3<f64>, epoch: Epoch) -> Vector3<f64> {
+    pub fn field(
+        &self,
+        body_id: NaifId,
+        position_m: &Vector3<f64>,
+        epoch: Epoch,
+    ) -> MagneticFieldVector {
         self.models
             .iter()
             .find(|m| m.body_id() == body_id)
             .map(|m| m.field(position_m, epoch))
-            .unwrap_or_else(Vector3::zeros)
+            .unwrap_or_else(|| MagneticFieldVector::from_nT(Vector3::zeros()))
     }
 
     /// Return the registered body IDs.
@@ -130,7 +198,7 @@ mod tests {
         let pos = Vector3::new(1.0, 0.0, 0.0);
         let epoch = Epoch::from_gregorian_utc(2024, 1, 1, 0, 0, 0, 0);
         let b = catalog.field(499, &pos, epoch);
-        assert_eq!(b, Vector3::zeros());
+        assert_eq!(b.raw(), &Vector3::zeros());
     }
 
     #[test]
