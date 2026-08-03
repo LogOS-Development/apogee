@@ -5,14 +5,23 @@
 # Idempotent: safe to re-run.
 #
 # Usage:
-#   ./scripts/setup.sh           # full setup
-#   ./scripts/setup.sh --skip-data # skip ./scripts/fetch_data.sh
-#   ./scripts/setup.sh --minimal   # skip data fetch and coverage tools
+#   ./scripts/setup.sh              # full setup (run in subshell)
+#   ./scripts/setup.sh --skip-data  # skip ./scripts/fetch_data.sh
+#   ./scripts/setup.sh --minimal    # skip data fetch and coverage tools
+#   source ./scripts/setup.sh       # setup + activate venv in current shell
 #
 set -euo pipefail
 
+# Detect if the script is being sourced. If so, after completing setup we
+# will activate the uv-managed virtualenv in the caller's shell.
+SOURCED=false
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+    SOURCED=true
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+VENV_DIR="$ROOT_DIR/.venv"
 
 SKIP_DATA=false
 MINIMAL=false
@@ -21,7 +30,7 @@ while [[ $# -gt 0 ]]; do
         --skip-data) SKIP_DATA=true ;;
         --minimal)   SKIP_DATA=true; MINIMAL=true ;;
         -h|--help)
-            sed -n '2,12p' "$0"
+            sed -n '2,15p' "$0"
             exit 0
             ;;
         *) echo "Unknown option: $1"; exit 1 ;;
@@ -135,6 +144,12 @@ fi
 log "Creating/syncing Python virtualenv with uv..."
 uv sync
 
+if [[ -d "$VENV_DIR" ]]; then
+    log "Virtualenv ready at $VENV_DIR"
+else
+    warn "Expected virtualenv at $VENV_DIR not found"
+fi
+
 log "Verifying Python dependencies..."
 uv run python - <<'PY'
 import numpy
@@ -163,9 +178,25 @@ echo "========================================="
 log "Apogee setup complete!"
 echo "========================================="
 echo ""
+
+if [[ "$SOURCED" == true && -d "$VENV_DIR" ]]; then
+    log "Activating virtualenv in current shell..."
+    # shellcheck source=/dev/null
+    source "$VENV_DIR/bin/activate"
+    log "Virtualenv active. Run 'deactivate' to exit."
+else
+    echo "Activate the virtualenv with:"
+    echo "  source $VENV_DIR/bin/activate"
+    echo "  # or use 'uv run' for one-off commands:"
+    echo "  uv run python scripts/..."
+fi
+
+echo ""
 echo "What you can do now:"
 echo "  cargo build --workspace       # Build all Rust crates"
 echo "  cargo test --workspace        # Run Rust tests"
 echo "  cargo run -p apogee-server    # Run the headless server"
-echo "  uv run python scripts/...    # Run Python helper scripts"
+echo "  python scripts/...           # Run Python helper scripts (after activating venv)"
 echo ""
+
+# When sourced, do not exit so the activation survives in the caller's shell.
