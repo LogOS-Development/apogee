@@ -4,6 +4,8 @@
 //! full multi-rate / adaptive integrator will be introduced in a follow-up
 //! Phase 1.5 issue.
 
+use apogee_common::units::Seconds;
+
 use crate::components::dynamics::{Dynamics, SimulationConfig, SpacecraftConfig};
 use crate::components::kinematics::Kinematics;
 use crate::ephemeris::kernel::SolarSystemState;
@@ -25,7 +27,7 @@ pub fn step_spacecraft(
     sim_config: &SimulationConfig,
     celestial: &SolarSystemState,
     integrator: &mut Rk4,
-    dt: f64,
+    dt: Seconds<f64>,
     day_of_year: u16,
     seconds_utc: f64,
 ) -> IntegrationResult {
@@ -35,7 +37,7 @@ pub fn step_spacecraft(
     let inertia_inv = inertia
         .try_inverse()
         .unwrap_or_else(nalgebra::Matrix3::identity);
-    let _mass_inv = 1.0 / dynamics.mass;
+    let _mass_inv = 1.0 / dynamics.mass.into_value();
 
     let derivative_fn = |s: &StateVector| {
         // Reconstruct a temporary kinematics from the integrator state so
@@ -56,18 +58,24 @@ pub fn step_spacecraft(
             seconds_utc,
         );
 
-        // Translational acceleration = F / m.
+        // Translational acceleration = F / m. The unit-aware newtype collapses
+        // to a raw vector for the integrator's hot path; the type tag is
+        // preserved in `AggregatedForces` at the API surface.
         let acceleration = forces.total();
 
         // Rotational acceleration: alpha = I^-1 * (tau - omega x (I * omega)).
         let h = inertia * s.angular_velocity;
         let gyroscopic = s.angular_velocity.cross(&h);
-        let net_torque = forces.torque() - gyroscopic;
-        let angular_acceleration = inertia_inv * net_torque;
+        let net_torque_raw = forces.torque().raw() - gyroscopic;
+        let angular_acceleration = inertia_inv * net_torque_raw;
 
         StateDerivative {
             velocity: s.velocity,
-            acceleration,
+            // `acceleration` is m/s², but the integrator field is the same
+            // SI base as `Position` (m); the convention is that the field
+            // carries m/s² in the integrand role, even though the alias is
+            // reused to keep the integrator allocation-free.
+            acceleration: *acceleration.raw(),
             attitude_derivative: nalgebra::Quaternion::new(0.0, 0.0, 0.0, 0.0),
             angular_acceleration,
         }
@@ -89,15 +97,22 @@ pub fn propagate(
     config: &SpacecraftConfig,
     sim_config: &SimulationConfig,
     celestial: &SolarSystemState,
-    dt: f64,
-    duration_s: f64,
+    dt: Seconds<f64>,
+    duration_s: Seconds<f64>,
     mut day_of_year: u16,
     mut seconds_utc: f64,
 ) {
     let mut integrator = Rk4::new(dt);
-    let mut elapsed = 0.0;
-    while elapsed < duration_s {
-        let step = (duration_s - elapsed).min(dt);
+    let mut elapsed = 0.0_f64;
+    let total = duration_s.into_value();
+    while elapsed < total {
+        let remaining = total - elapsed;
+        let dt_value = dt.into_value();
+        let step = if remaining < dt_value {
+            remaining
+        } else {
+            dt_value
+        };
         step_spacecraft(
             kinematics,
             dynamics,
@@ -105,7 +120,7 @@ pub fn propagate(
             sim_config,
             celestial,
             &mut integrator,
-            step,
+            Seconds::new(step),
             day_of_year,
             seconds_utc,
         );
@@ -121,6 +136,7 @@ pub fn propagate(
 #[cfg(test)]
 mod tests {
     use apogee_common::constants::{GM_EARTH, R_EARTH_EQ};
+    use apogee_common::units::{Area, Kilograms};
     use nalgebra::Vector3;
 
     use super::*;
@@ -136,11 +152,16 @@ mod tests {
             angular_velocity: Vector3::zeros(),
         };
         let dynamics = Dynamics {
-            mass: 1_000.0,
+            mass: Kilograms::new(1_000.0),
             inertia: nalgebra::Matrix3::identity(),
             cg_offset: Vector3::zeros(),
         };
-        let config = SpacecraftConfig::default();
+        let config = SpacecraftConfig {
+            ballistic_coefficient: 0.0,
+            srp_area: Area::new(0.0),
+            reflectivity: 0.0,
+            reference_mass_kg: 1_000.0,
+        };
         let sim_config = SimulationConfig::default();
         let celestial = SolarSystemState {
             states: vec![crate::ephemeris::kernel::BodyState {
@@ -157,8 +178,8 @@ mod tests {
             &config,
             &sim_config,
             &celestial,
-            60.0,
-            3_600.0,
+            Seconds::new(60.0),
+            Seconds::new(3_600.0),
             80,
             0.0,
         );

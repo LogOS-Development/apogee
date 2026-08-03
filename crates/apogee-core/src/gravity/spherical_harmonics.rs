@@ -4,6 +4,7 @@
 //! the gravitational acceleration from a set of Stokes coefficients (C/S)
 //! up to a configured degree and order.
 
+use apogee_common::units::AccelerationVec;
 use apogee_common::{constants::GM_EARTH, constants::R_EARTH_EQ, ApogeeError, ApogeeResult};
 use nalgebra::Vector3;
 use std::io::{BufRead, BufReader, Read};
@@ -108,8 +109,10 @@ impl SphericalHarmonics {
     /// position, using the full configured degree and order.
     ///
     /// For this phase the position is assumed to already be in the body-fixed
-    /// frame (no EOP rotation). The acceleration is returned in the same frame.
-    pub fn acceleration(&self, position: &Vector3<f64>) -> ApogeeResult<Vector3<f64>> {
+    /// frame (no EOP rotation). The acceleration is returned in the same frame,
+    /// wrapped in [`AccelerationVec`] so the m/s² unit tag is visible at the
+    /// public API surface.
+    pub fn acceleration(&self, position: &Vector3<f64>) -> ApogeeResult<AccelerationVec> {
         self.acceleration_with_degree(position, self.degree, self.order)
     }
 
@@ -123,7 +126,7 @@ impl SphericalHarmonics {
         position: &Vector3<f64>,
         max_degree: usize,
         max_order: usize,
-    ) -> ApogeeResult<Vector3<f64>> {
+    ) -> ApogeeResult<AccelerationVec> {
         let r = position.norm();
         if r == 0.0 {
             return Err(ApogeeError::Gravity(
@@ -185,7 +188,7 @@ impl SphericalHarmonics {
         let ay = a_r * cos_phi * sin_lambda - a_phi * sin_phi * sin_lambda + a_lambda * cos_lambda;
         let az = a_r * sin_phi + a_phi * cos_phi;
 
-        Ok(Vector3::new(ax, ay, az))
+        Ok(AccelerationVec::from_mps2(Vector3::new(ax, ay, az)))
     }
 
     /// Select an effective degree and order for a given radius ratio.
@@ -334,7 +337,7 @@ mod tests {
         model.c[2][0] = -0.484169317386951e-03;
         let pos = Vector3::new(R_EARTH_EQ + 400_000.0, 0.0, 0.0);
 
-        let a_sh = model.acceleration(&pos).unwrap();
+        let a_sh = *model.acceleration(&pos).unwrap().raw();
         let a_closed = j2_closed_form(&pos, model.gm, model.reference_radius, model.c[2][0]);
 
         assert_relative_eq!(a_sh.x, a_closed.x, epsilon = 1e-9);
@@ -348,7 +351,7 @@ mod tests {
         model.c[2][0] = -0.484169317386951e-03;
         let pos = Vector3::new(0.0, 0.0, R_EARTH_EQ + 400_000.0);
 
-        let a_sh = model.acceleration(&pos).unwrap();
+        let a_sh = *model.acceleration(&pos).unwrap().raw();
         let a_closed = j2_closed_form(&pos, model.gm, model.reference_radius, model.c[2][0]);
 
         assert_relative_eq!(a_sh.x, a_closed.x, epsilon = 1e-12);
@@ -362,9 +365,9 @@ mod tests {
         let pos = Vector3::new(R_EARTH_EQ + 400_000.0, 0.0, 0.0);
         let a = model.acceleration(&pos).unwrap();
         let expected = -GM_EARTH / pos.norm_squared();
-        assert_relative_eq!(a.x, expected, epsilon = 1e-9);
-        assert_relative_eq!(a.y, 0.0, epsilon = 1e-15);
-        assert_relative_eq!(a.z, 0.0, epsilon = 1e-15);
+        assert_relative_eq!(a.raw().x, expected, epsilon = 1e-9);
+        assert_relative_eq!(a.raw().y, 0.0, epsilon = 1e-15);
+        assert_relative_eq!(a.raw().z, 0.0, epsilon = 1e-15);
     }
 
     #[test]
@@ -394,9 +397,9 @@ mod tests {
         // radial-inward direction, so the sum of the inward components equals
         // twice the central acceleration.
         let central = -GM_EARTH / r.powi(2);
-        assert_relative_eq!(a_a.x + a_b.y, 2.0 * central, epsilon = 1e-5);
-        assert_relative_eq!(a_a.z, 0.0, epsilon = 1e-12);
-        assert_relative_eq!(a_b.z, 0.0, epsilon = 1e-12);
+        assert_relative_eq!(a_a.raw().x + a_b.raw().y, 2.0 * central, epsilon = 1e-5);
+        assert_relative_eq!(a_a.raw().z, 0.0, epsilon = 1e-12);
+        assert_relative_eq!(a_b.raw().z, 0.0, epsilon = 1e-12);
     }
 
     #[test]
@@ -435,13 +438,13 @@ mod tests {
         let a4 = model4.acceleration(&pos).unwrap();
 
         // Difference is radial and orders of magnitude smaller than central.
-        let diff = (a4 - a2).norm();
+        let diff = (a4.raw() - a2.raw()).norm();
         assert!(
             diff > 1e-12 && diff < 1e-2,
             "unexpected J4-scale difference: {diff}"
         );
-        assert_relative_eq!((a4 - a2).x, 0.0, epsilon = 1e-15);
-        assert_relative_eq!((a4 - a2).y, 0.0, epsilon = 1e-15);
+        assert_relative_eq!((a4.raw() - a2.raw()).x, 0.0, epsilon = 1e-15);
+        assert_relative_eq!((a4.raw() - a2.raw()).y, 0.0, epsilon = 1e-15);
     }
 
     #[test]

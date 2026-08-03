@@ -1,5 +1,7 @@
 //! Multi-rate integrator: RK8(9) outer, RK4(5) inner.
 
+use apogee_common::units::Seconds;
+
 pub mod rk4;
 pub mod rk45;
 pub mod rk89;
@@ -15,7 +17,7 @@ pub trait Integrator: Send + std::fmt::Debug {
         &mut self,
         state: &mut StateVector,
         derivative_fn: &dyn Fn(&StateVector) -> StateDerivative,
-        dt: f64,
+        dt: Seconds<f64>,
     ) -> IntegrationResult;
 }
 
@@ -64,7 +66,8 @@ pub struct StateDerivative {
 pub struct IntegrationResult {
     pub accepted: bool,
     pub error_estimate: f64,
-    pub step_taken: f64,
+    /// Total integration time covered by this step, as a [`Seconds<f64>`].
+    pub step_taken: Seconds<f64>,
 }
 
 /// Multi-rate integrator: separate rates for translation, attitude, modal.

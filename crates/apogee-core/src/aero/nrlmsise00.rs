@@ -6,6 +6,8 @@
 //! low-level `NrlmsiseInput` / `NrlmsiseOutput` and provides a default-switch
 //! configuration that evaluates the full model (all perturbations enabled).
 
+use apogee_common::units::{Density, Kelvins};
+
 use crate::aero::model::{AtmosphereInput, AtmosphereModel, AtmosphereOutput, SpeciesDensities};
 use crate::aero::nrlmsise00_brahe::{gtd7, NrlmsiseFlags, NrlmsiseInput, NrlmsiseOutput};
 
@@ -41,7 +43,7 @@ impl Nrlmsise00 {
             year: 0,
             doy: input.day_of_year as i32,
             sec: input.seconds_utc,
-            alt: input.altitude_m / 1000.0,
+            alt: input.altitude_m.into_value() / 1000.0,
             g_lat: input.latitude_rad.to_degrees(),
             g_lon: input.longitude_rad.to_degrees(),
             lst: local_solar_time(input),
@@ -55,9 +57,9 @@ impl Nrlmsise00 {
         gtd7(&mut model_input, &mut flags, &mut model_output);
 
         AtmosphereOutput {
-            density: model_output.d[5],
-            temperature: model_output.t[0],
-            temperature_alt: model_output.t[1],
+            density: Density::new(model_output.d[5]),
+            temperature: Kelvins::new(model_output.t[0]),
+            temperature_alt: Kelvins::new(model_output.t[1]),
             number_densities: SpeciesDensities {
                 he: model_output.d[0],
                 o: model_output.d[1],
@@ -107,8 +109,8 @@ mod tests {
     fn test_evaluate_returns_finite_density() {
         let input = AtmosphereInput::at_altitude(400_000.0);
         let out = Nrlmsise00::evaluate_simple(&input);
-        assert!(out.density.is_finite() && out.density > 0.0);
-        assert!(out.temperature > 500.0);
-        assert!(out.temperature_alt > 500.0);
+        assert!(out.density.into_value().is_finite() && out.density.into_value() > 0.0);
+        assert!(out.temperature.into_value() > 500.0);
+        assert!(out.temperature_alt.into_value() > 500.0);
     }
 }

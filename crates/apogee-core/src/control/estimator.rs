@@ -5,6 +5,7 @@
 //! a magnetometer (body-frame magnetic field vector). Process model is a simple
 //! gyro-driven quaternion propagation.
 
+use apogee_common::units::Seconds;
 use nalgebra::{DMatrix, DVector, Matrix3, Quaternion, UnitQuaternion, Vector3};
 
 use crate::control::integrate_attitude;
@@ -66,7 +67,8 @@ impl AttitudeEkf {
     }
 
     /// Propagation step using gyro measurement `omega_meas` (body rad/s) over dt.
-    pub fn predict(&mut self, omega_meas: &Vector3<f64>, dt: f64) {
+    pub fn predict(&mut self, omega_meas: &Vector3<f64>, dt: Seconds<f64>) {
+        let dt_value = dt.into_value();
         let omega_est = omega_meas - self.estimate.gyro_bias;
         let q = self.estimate.attitude.quaternion();
         let q_next = integrate_attitude(q, &omega_est, dt);
@@ -76,15 +78,15 @@ impl AttitudeEkf {
         let omega_cross = skew_symmetric(&omega_est);
         let mut f = Matrix6::identity();
         f.fixed_view_mut::<3, 3>(0, 0)
-            .copy_from(&(-omega_cross * dt));
+            .copy_from(&(-omega_cross * dt_value));
         f.fixed_view_mut::<3, 3>(0, 3)
-            .copy_from(&(-Matrix3::identity() * dt));
+            .copy_from(&(-Matrix3::identity() * dt_value));
 
         // Process noise Q
-        let q_theta =
-            self.noise.gyro_arw.powi(2) * dt + self.noise.gyro_bias_rw.powi(2) * dt.powi(3) / 3.0;
-        let q_beta = self.noise.gyro_bias_rw.powi(2) * dt;
-        let q_cross = self.noise.gyro_bias_rw.powi(2) * dt.powi(2) / 2.0;
+        let q_theta = self.noise.gyro_arw.powi(2) * dt_value
+            + self.noise.gyro_bias_rw.powi(2) * dt_value.powi(3) / 3.0;
+        let q_beta = self.noise.gyro_bias_rw.powi(2) * dt_value;
+        let q_cross = self.noise.gyro_bias_rw.powi(2) * dt_value.powi(2) / 2.0;
         let mut q = Matrix6::zeros();
         q.fixed_view_mut::<3, 3>(0, 0)
             .copy_from(&(q_theta * Matrix3::identity()));
@@ -208,7 +210,7 @@ mod tests {
             covariance: Matrix6::identity() * 1e-3,
         };
         let mut ekf = AttitudeEkf::new(est, EkfNoise::default());
-        ekf.predict(&Vector3::new(0.01, 0.0, 0.0), 1.0);
+        ekf.predict(&Vector3::new(0.01, 0.0, 0.0), Seconds::new(1.0));
         assert_relative_eq!(ekf.estimate().attitude.norm(), 1.0, epsilon = 1e-9);
     }
 

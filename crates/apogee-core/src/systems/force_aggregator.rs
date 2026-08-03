@@ -1,5 +1,6 @@
 //! Force aggregator system: collects gravity + drag + SRP forces.
 
+use apogee_common::units::{AccelerationVec, Dimensionless, Kilograms, TorqueVec};
 use apogee_common::Position;
 use nalgebra::Vector3;
 
@@ -15,25 +16,27 @@ use crate::gravity::PointMassGravity;
 #[derive(Debug, Clone, Default)]
 pub struct AggregatedForces {
     /// Gravitational acceleration (m/s²).
-    pub gravity: Vector3<f64>,
+    pub gravity: AccelerationVec,
     /// Atmospheric drag acceleration (m/s²).
-    pub drag: Vector3<f64>,
+    pub drag: AccelerationVec,
     /// Solar radiation pressure acceleration (m/s²).
-    pub srp: Vector3<f64>,
+    pub srp: AccelerationVec,
     /// Thrust acceleration (m/s²).
-    pub thrust: Vector3<f64>,
-    /// External control torque (N m), e.g. from reaction wheels or thrusters.
-    pub control_torque: Vector3<f64>,
+    pub thrust: AccelerationVec,
+    /// External control torque (N·m), e.g. from reaction wheels or thrusters.
+    pub control_torque: TorqueVec,
 }
 
 impl AggregatedForces {
     /// Sum all force contributions into total acceleration.
-    pub fn total(&self) -> Vector3<f64> {
-        self.gravity + self.drag + self.srp + self.thrust
+    pub fn total(&self) -> AccelerationVec {
+        // Sum component-wise via raw escape hatches, then re-wrap.
+        let raw = self.gravity.raw() + self.drag.raw() + self.srp.raw() + self.thrust.raw();
+        AccelerationVec::from_mps2(raw)
     }
 
-    /// Sum all torque contributions (N m).
-    pub fn torque(&self) -> Vector3<f64> {
+    /// Sum all torque contributions (N·m).
+    pub fn torque(&self) -> TorqueVec {
         self.control_torque
     }
 }
@@ -41,7 +44,7 @@ impl AggregatedForces {
 /// Control inputs (force + torque) to apply during a propagation step.
 #[derive(Debug, Clone, Default)]
 pub struct ControlInputs {
-    /// Body-frame torque (N m).
+    /// Body-frame torque (N·m).
     pub torque_nm: Vector3<f64>,
     /// Body-frame force (N). Converted to acceleration using the supplied mass.
     pub force_n: Vector3<f64>,
@@ -49,9 +52,10 @@ pub struct ControlInputs {
 
 impl AggregatedForces {
     /// Apply control inputs, converting force to acceleration using `mass_kg`.
-    pub fn apply_control(&mut self, inputs: &ControlInputs, mass_kg: f64) {
-        self.control_torque = inputs.torque_nm;
-        self.thrust = inputs.force_n / mass_kg;
+    pub fn apply_control(&mut self, inputs: &ControlInputs, mass: Kilograms<f64>) {
+        self.control_torque = TorqueVec::from_nm(inputs.torque_nm);
+        let accel = inputs.force_n / mass.into_value();
+        self.thrust = AccelerationVec::from_mps2(accel);
     }
 }
 
@@ -80,13 +84,13 @@ pub fn aggregate_forces(
 ) -> AggregatedForces {
     let gravity = PointMassGravity
         .acceleration(&kinematics.position, celestial)
-        .unwrap_or_else(|_| Vector3::zeros());
+        .unwrap_or_else(|_| AccelerationVec::from_mps2(Vector3::zeros()));
 
     let drag = {
         let model = Nrlmsise00;
         let latlon = ecef_lat_lon_from_inertial(&kinematics.position, day_of_year, seconds_utc);
         let input = AtmosphereInput {
-            altitude_m: latlon.altitude_m,
+            altitude_m: apogee_common::units::Meters::new(latlon.altitude_m),
             latitude_rad: latlon.latitude_rad,
             longitude_rad: latlon.longitude_rad,
             day_of_year,
@@ -95,7 +99,7 @@ pub fn aggregate_forces(
             f107a: sim_config.f107a,
             ap: sim_config.ap,
         };
-        let drag_area = config.drag_area_m2(dynamics.mass);
+        let drag_area = config.drag_area(dynamics.mass);
         AtmosphericDrag.acceleration_with_model(
             &kinematics.position,
             &kinematics.velocity,
@@ -116,8 +120,8 @@ pub fn aggregate_forces(
         SolarRadiationPressure.acceleration(
             &kinematics.position,
             &sun_pos,
-            config.srp_area_m2,
-            config.reflectivity,
+            config.srp_area,
+            Dimensionless::new(config.reflectivity),
             dynamics.mass,
         )
     };
@@ -126,8 +130,8 @@ pub fn aggregate_forces(
         gravity,
         drag,
         srp,
-        thrust: Vector3::zeros(),
-        control_torque: Vector3::zeros(),
+        thrust: AccelerationVec::from_mps2(Vector3::zeros()),
+        control_torque: TorqueVec::from_nm(Vector3::zeros()),
     }
 }
 
@@ -161,6 +165,7 @@ fn ecef_lat_lon_from_inertial(
 #[cfg(test)]
 mod tests {
     use apogee_common::constants::{GM_EARTH, R_EARTH_EQ};
+    use apogee_common::units::{Area, Kilograms};
     use nalgebra::Vector3;
 
     use super::*;
@@ -181,13 +186,13 @@ mod tests {
     fn test_aggregate_forces_finite() {
         let kinematics = make_iss_state();
         let dynamics = Dynamics {
-            mass: 420_000.0,
+            mass: Kilograms::new(420_000.0),
             inertia: nalgebra::Matrix3::identity(),
             cg_offset: Vector3::zeros(),
         };
         let config = SpacecraftConfig {
             ballistic_coefficient: 1e-4,
-            srp_area_m2: 2_500.0,
+            srp_area: Area::new(2_500.0),
             reflectivity: 1.2,
             reference_mass_kg: 420_000.0,
         };
@@ -209,7 +214,7 @@ mod tests {
             12.0 * 3600.0,
         );
         let total = forces.total();
-        assert!(total.iter().all(|v| v.is_finite()));
-        assert!(forces.gravity.norm() > 0.0);
+        assert!(total.raw().iter().all(|v| v.is_finite()));
+        assert!(forces.gravity.raw().norm() > 0.0);
     }
 }

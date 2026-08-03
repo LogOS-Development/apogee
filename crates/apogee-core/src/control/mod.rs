@@ -17,12 +17,13 @@ pub use estimator::*;
 pub use magnetorquers::*;
 pub use state_machine::*;
 
+use apogee_common::units::Seconds;
 use nalgebra::{Quaternion, UnitQuaternion, Vector3};
 
 /// Combined commanded control output for one spacecraft.
 #[derive(Debug, Clone, Default)]
 pub struct ControlOutput {
-    /// Net body-frame torque to apply (N m).
+    /// Net body-frame torque to apply (N·m).
     pub torque_nm: Vector3<f64>,
     /// Net body-frame force to apply (N). Typically zero for attitude-only GNC.
     pub force_n: Vector3<f64>,
@@ -61,9 +62,9 @@ pub fn quaternion_error(
 pub fn integrate_attitude(
     q: &Quaternion<f64>,
     omega_rad_s: &Vector3<f64>,
-    dt: f64,
+    dt: Seconds<f64>,
 ) -> Quaternion<f64> {
-    let half_dt = dt * 0.5;
+    let half_dt = dt.into_value() * 0.5;
     let delta = Quaternion::new(
         0.0,
         omega_rad_s.x * half_dt,

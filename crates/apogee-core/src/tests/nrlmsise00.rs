@@ -81,7 +81,7 @@ const CASES: &[ReferenceCase] = &[
 fn test_nrlmsise00_matches_pymsis_density() {
     for case in CASES {
         let input = AtmosphereInput {
-            altitude_m: case.alt_m,
+            altitude_m: apogee_common::units::Meters::new(case.alt_m),
             latitude_rad: case.lat_rad,
             longitude_rad: case.lon_rad,
             day_of_year: case.doy,
@@ -91,9 +91,10 @@ fn test_nrlmsise00_matches_pymsis_density() {
             ap: case.ap,
         };
         let out = Nrlmsise00::evaluate_simple(&input);
+        let density_value = out.density.into_value();
         assert!(
             relative_eq!(
-                out.density,
+                density_value,
                 case.expected_density,
                 epsilon = case.expected_density * 0.05
             ),
@@ -101,7 +102,7 @@ fn test_nrlmsise00_matches_pymsis_density() {
             case.alt_m / 1000.0,
             case.lat_rad.to_degrees(),
             case.expected_density,
-            out.density
+            density_value
         );
     }
 }
@@ -110,7 +111,7 @@ fn test_nrlmsise00_matches_pymsis_density() {
 fn test_nrlmsise00_matches_pymsis_temperature() {
     for case in CASES {
         let input = AtmosphereInput {
-            altitude_m: case.alt_m,
+            altitude_m: apogee_common::units::Meters::new(case.alt_m),
             latitude_rad: case.lat_rad,
             longitude_rad: case.lon_rad,
             day_of_year: case.doy,
@@ -120,9 +121,10 @@ fn test_nrlmsise00_matches_pymsis_temperature() {
             ap: case.ap,
         };
         let out = Nrlmsise00::evaluate_simple(&input);
+        let temperature_value = out.temperature_alt.into_value();
         assert!(
             relative_eq!(
-                out.temperature_alt,
+                temperature_value,
                 case.expected_temperature_alt,
                 epsilon = 5.0
             ),
@@ -130,7 +132,7 @@ fn test_nrlmsise00_matches_pymsis_temperature() {
             case.alt_m / 1000.0,
             case.lat_rad.to_degrees(),
             case.expected_temperature_alt,
-            out.temperature_alt
+            temperature_value
         );
     }
 }
@@ -138,7 +140,7 @@ fn test_nrlmsise00_matches_pymsis_temperature() {
 #[test]
 fn test_nrlmsise00_evaluates_at_iss_altitude() {
     let input = AtmosphereInput {
-        altitude_m: 408_000.0,
+        altitude_m: apogee_common::units::Meters::new(408_000.0),
         latitude_rad: 51.6f64.to_radians(),
         longitude_rad: 0.0,
         day_of_year: 80,
@@ -148,6 +150,7 @@ fn test_nrlmsise00_evaluates_at_iss_altitude() {
         ap: 4.0,
     };
     let out = Nrlmsise00::evaluate_simple(&input);
-    assert!(out.density.is_finite() && out.density > 1e-15);
-    assert!(out.temperature_alt > 600.0);
+    let density_value = out.density.into_value();
+    assert!(density_value.is_finite() && density_value > 1e-15);
+    assert!(out.temperature_alt.into_value() > 600.0);
 }

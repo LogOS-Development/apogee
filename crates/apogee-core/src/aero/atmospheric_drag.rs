@@ -1,6 +1,7 @@
 //! Atmospheric drag force model.
 
 use apogee_common::constants::R_EARTH_EQ;
+use apogee_common::units::{AccelerationVec, Area, Density, Kilograms};
 use apogee_common::Position;
 use nalgebra::Vector3;
 
@@ -17,16 +18,19 @@ impl AtmosphericDrag {
     /// - `spacecraft_position`: inertial position (m)
     /// - `spacecraft_velocity`: inertial velocity (m/s)
     /// - `density`: atmospheric mass density (kg/m³)
-    /// - `drag_area`: Cd * A (m²)
+    /// - `drag_area`: cross-sectional area exposed to the flow (m²)
     /// - `mass`: spacecraft mass (kg)
+    ///
+    /// Returns the drag acceleration as [`AccelerationVec`] (m/s²) in the
+    /// inertial frame.
     pub fn acceleration(
         &self,
         spacecraft_position: &Position,
         spacecraft_velocity: &Vector3<f64>,
-        density: f64,
-        drag_area_m2: f64,
-        mass: f64,
-    ) -> Vector3<f64> {
+        density: Density<f64>,
+        drag_area: Area<f64>,
+        mass: Kilograms<f64>,
+    ) -> AccelerationVec {
         // Approximate Earth rotation velocity at equator; inertial atmosphere is
         // assumed co-rotating for this simple model.
         let omega_earth = Vector3::new(0.0, 0.0, 7.2921159e-5);
@@ -36,13 +40,15 @@ impl AtmosphericDrag {
         // Effective velocity relative to rotating atmosphere.
         let vel_rel = spacecraft_velocity - omega_earth.cross(spacecraft_position);
         let v_rel = vel_rel.norm();
-        if v_rel == 0.0 || density <= 0.0 || altitude_m < 0.0 {
-            return Vector3::zeros();
+        let density_value = density.into_value();
+        if v_rel == 0.0 || density_value <= 0.0 || altitude_m < 0.0 {
+            return AccelerationVec::from_mps2(Vector3::zeros());
         }
 
-        let force_magnitude = 0.5 * density * v_rel * v_rel * drag_area_m2;
-        let accel_magnitude = force_magnitude / mass;
-        -vel_rel / v_rel * accel_magnitude
+        // F_drag = 0.5 * rho * v^2 * Cd*A  (N).  Divide by mass to get m/s².
+        let force_magnitude = 0.5 * density_value * v_rel * v_rel * drag_area.into_value();
+        let accel_magnitude = force_magnitude / mass.into_value();
+        AccelerationVec::from_mps2(-vel_rel / v_rel * accel_magnitude)
     }
 
     /// Compute drag acceleration using an atmosphere model to obtain density.
@@ -52,15 +58,15 @@ impl AtmosphericDrag {
         spacecraft_velocity: &Vector3<f64>,
         model: &M,
         input: &AtmosphereInput,
-        drag_area_m2: f64,
-        mass: f64,
-    ) -> Vector3<f64> {
+        drag_area: Area<f64>,
+        mass: Kilograms<f64>,
+    ) -> AccelerationVec {
         let output = model.evaluate(input);
         self.acceleration(
             spacecraft_position,
             spacecraft_velocity,
             output.density,
-            drag_area_m2,
+            drag_area,
             mass,
         )
     }
@@ -76,9 +82,15 @@ mod tests {
         let drag = AtmosphericDrag;
         let pos = Vector3::new(R_EARTH_EQ + 400_000.0, 0.0, 0.0);
         let vel = Vector3::new(0.0, 7_500.0, 0.0);
-        let acc = drag.acceleration(&pos, &vel, 1e-12, 10.0, 1_000.0);
-        assert!(acc.norm() > 0.0);
-        assert!(acc.dot(&vel) < 0.0);
+        let acc = drag.acceleration(
+            &pos,
+            &vel,
+            Density::new(1e-12),
+            Area::new(10.0),
+            Kilograms::new(1_000.0),
+        );
+        assert!(acc.raw().norm() > 0.0);
+        assert!(acc.raw().dot(&vel) < 0.0);
     }
 
     #[test]
@@ -86,7 +98,13 @@ mod tests {
         let drag = AtmosphericDrag;
         let pos = Vector3::new(R_EARTH_EQ - 1000.0, 0.0, 0.0);
         let vel = Vector3::new(0.0, 100.0, 0.0);
-        let acc = drag.acceleration(&pos, &vel, 1.225, 10.0, 1_000.0);
-        assert_eq!(acc.norm(), 0.0);
+        let acc = drag.acceleration(
+            &pos,
+            &vel,
+            Density::new(1.225),
+            Area::new(10.0),
+            Kilograms::new(1_000.0),
+        );
+        assert_eq!(acc.raw().norm(), 0.0);
     }
 }

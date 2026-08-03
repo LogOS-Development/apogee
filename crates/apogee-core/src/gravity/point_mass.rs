@@ -5,6 +5,7 @@
 //! ephemeris service.
 
 use crate::ephemeris::kernel::{BodyState, SolarSystemState};
+use apogee_common::units::AccelerationVec;
 use apogee_common::{gravitational_parameter, Position};
 use nalgebra::Vector3;
 
@@ -26,13 +27,15 @@ impl PointMassGravity {
     ///   a_i = GM_i * (r_i - r) / |r_i - r|^3
     ///
     /// where `r` is the spacecraft position and `r_i` is the body position.
+    /// The returned vector carries an m/s² unit tag at the public API surface
+    /// while the internal math remains on raw `Vector3<f64>`.
     ///
     /// This is O(N) in the number of celestial bodies.
     pub fn acceleration(
         &self,
         position: &Position,
         celestial: &SolarSystemState,
-    ) -> Result<Vector3<f64>, String> {
+    ) -> Result<AccelerationVec, String> {
         let mut acc = Vector3::zeros();
 
         for BodyState {
@@ -53,10 +56,13 @@ impl PointMassGravity {
                 ));
             }
             let r3 = r2 * r2.sqrt();
+            // GM has units m³/s², dividing by m³ (delta/r3) yields m/s². The
+            // type tag is preserved in the wrapper; the underlying arithmetic
+            // is dimensionally consistent.
             acc += gm * delta / r3;
         }
 
-        Ok(acc)
+        Ok(AccelerationVec::from_mps2(acc))
     }
 }
 
@@ -83,11 +89,14 @@ mod tests {
         };
 
         let acc = gravity.acceleration(&spacecraft, &celestial).unwrap();
+        let raw = acc.raw();
         let expected = -apogee_common::constants::GM_SUN / apogee_common::constants::AU.powi(2);
 
-        assert_relative_eq!(acc.x, expected, epsilon = 1e-6);
-        assert_relative_eq!(acc.y, 0.0, epsilon = 1e-15);
-        assert_relative_eq!(acc.z, 0.0, epsilon = 1e-15);
+        assert_relative_eq!(raw.x, expected, epsilon = 1e-6);
+        assert_relative_eq!(raw.y, 0.0, epsilon = 1e-15);
+        assert_relative_eq!(raw.z, 0.0, epsilon = 1e-15);
+        // Unit tag survives the conversion.
+        assert_relative_eq!(acc.x_mps2().into_value(), expected, epsilon = 1e-6);
     }
 
     #[test]
@@ -111,16 +120,16 @@ mod tests {
 
         // Total magnitude is slightly larger than the Earth-only radial
         // acceleration because of the orthogonal Sun contribution.
-        let total_mag = acc.norm();
+        let total_mag = acc.raw().norm();
         assert!(
             total_mag > earth_acc && total_mag < earth_acc * 1.01,
             "unexpected acceleration magnitude: {} m/s^2",
             total_mag
         );
         // x component is Earth pull.
-        assert_relative_eq!(acc.x, -earth_acc, epsilon = 1e-6);
+        assert_relative_eq!(acc.raw().x, -earth_acc, epsilon = 1e-6);
         // y component is small Sun pull toward +y.
-        assert!(acc.y > 0.0 && acc.y < 0.01);
+        assert!(acc.raw().y > 0.0 && acc.raw().y < 0.01);
     }
 
     #[test]
@@ -138,7 +147,7 @@ mod tests {
         let acc = gravity.acceleration(&spacecraft, &celestial).unwrap();
         // Only the Sun contributes.
         let expected = -apogee_common::constants::GM_SUN / apogee_common::constants::AU.powi(2);
-        assert_relative_eq!(acc.x, expected, epsilon = 1e-6);
+        assert_relative_eq!(acc.raw().x, expected, epsilon = 1e-6);
     }
 
     #[test]
@@ -159,16 +168,20 @@ mod tests {
         let acc = gravity.acceleration(&spacecraft, &celestial).unwrap();
 
         // Net pull is toward Earth (negative x) because Earth dominates.
-        assert!(acc.x < 0.0, "expected net pull toward Earth, got {}", acc.x);
-        assert_relative_eq!(acc.y, 0.0, epsilon = 1e-15);
-        assert_relative_eq!(acc.z, 0.0, epsilon = 1e-15);
+        assert!(
+            acc.raw().x < 0.0,
+            "expected net pull toward Earth, got {}",
+            acc.raw().x
+        );
+        assert_relative_eq!(acc.raw().y, 0.0, epsilon = 1e-15);
+        assert_relative_eq!(acc.raw().z, 0.0, epsilon = 1e-15);
 
         // Verify by closed-form two-body sum.
         let r_se = moon_distance * 0.25;
         let r_sm = moon_distance * 0.75;
         let earth_acc = -apogee_common::constants::GM_EARTH / r_se.powi(2);
         let moon_acc = apogee_common::constants::GM_MOON / r_sm.powi(2);
-        assert_relative_eq!(acc.x, earth_acc + moon_acc, epsilon = 1e-9);
+        assert_relative_eq!(acc.raw().x, earth_acc + moon_acc, epsilon = 1e-9);
     }
 
     #[test]

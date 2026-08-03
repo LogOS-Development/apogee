@@ -5,6 +5,7 @@ mod artemis2_validation {
     use crate::gravity::point_mass::PointMassGravity;
     use crate::integrator::{Integrator, Rk4, StateVector};
     use crate::tests::helpers::point_mass_derivative;
+    use apogee_common::units::Seconds;
     use nalgebra::Vector3;
 
     /// Path to the Artemis 2 SPK fixture.
@@ -54,7 +55,7 @@ mod artemis2_validation {
         let celestial = build_celestial(&kernel, et0);
 
         let gravity = PointMassGravity {};
-        let mut integrator = Rk4::new(30.0); // 30 s fixed step
+        let mut integrator = Rk4::new(Seconds::new(30.0)); // 30 s fixed step
 
         let mut state = StateVector {
             position: sc_initial.position,
@@ -64,7 +65,7 @@ mod artemis2_validation {
         };
 
         let derivative_fn = |s: &StateVector| point_mass_derivative(s, &celestial, &gravity);
-        let result = integrator.step(&mut state, &derivative_fn, duration_s);
+        let result = integrator.step(&mut state, &derivative_fn, Seconds::new(duration_s));
         assert!(result.accepted);
 
         let position_error_km = (state.position - sc_reference.position).norm() / 1_000.0;

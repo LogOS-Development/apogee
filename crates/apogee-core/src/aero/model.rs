@@ -5,11 +5,13 @@
 //! latitude, plus space-weather indices; outputs are total mass density,
 //! temperature, and (optionally) number densities for major species.
 
+use apogee_common::units::{Density, Kelvins, Meters};
+
 /// Geodetic location and local conditions used by atmosphere models.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AtmosphereInput {
-    /// Altitude above the ellipsoid, metres.
-    pub altitude_m: f64,
+    /// Altitude above the ellipsoid.
+    pub altitude_m: Meters<f64>,
     /// Geodetic latitude, radians.
     pub latitude_rad: f64,
     /// Geodetic longitude, radians.
@@ -31,7 +33,7 @@ impl AtmosphereInput {
     /// equator with default indices.
     pub fn at_altitude(altitude_m: f64) -> Self {
         Self {
-            altitude_m,
+            altitude_m: Meters::new(altitude_m),
             latitude_rad: 0.0,
             longitude_rad: 0.0,
             day_of_year: 80,
@@ -59,12 +61,12 @@ pub struct SpeciesDensities {
 /// Atmospheric density and temperature output.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct AtmosphereOutput {
-    /// Total mass density, kg/m³.
-    pub density: f64,
-    /// Exospheric temperature, K.
-    pub temperature: f64,
-    /// Temperature at the requested altitude, K.
-    pub temperature_alt: f64,
+    /// Total mass density.
+    pub density: Density<f64>,
+    /// Exospheric temperature.
+    pub temperature: Kelvins<f64>,
+    /// Temperature at the requested altitude.
+    pub temperature_alt: Kelvins<f64>,
     /// Number densities for individual species, m⁻³.
     pub number_densities: SpeciesDensities,
 }
