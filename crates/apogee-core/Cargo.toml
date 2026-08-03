@@ -17,6 +17,16 @@ flate2 = "1.0"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking"] }
 regex = "1.10"
 urlencoding = "2.1"
+hwm14-sys = { path = "../hwm14-sys", optional = true }
+
+[features]
+default = []
+hwm14 = ["dep:hwm14-sys"]
+
+[[example]]
+name = "hwm14_samples"
+required-features = ["hwm14"]
 
 [dev-dependencies]
 approx = "0.5"
+hwm14-sys = { path = "../hwm14-sys" }

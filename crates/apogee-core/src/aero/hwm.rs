@@ -71,6 +71,54 @@ impl HorizontalWindModel for Hwm {
     }
 }
 
+/// HWM14 empirical horizontal wind model (Fortran via FFI).
+///
+/// Available only when the `hwm14` feature is enabled. The model coefficient
+/// files are vendored and extracted to a temporary directory on first use.
+#[cfg(feature = "hwm14")]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Hwm14;
+
+#[cfg(feature = "hwm14")]
+impl Hwm14 {
+    /// Evaluate HWM14 for the given input.
+    pub fn evaluate(input: &WindInput) -> WindOutput {
+        let iyd = two_digit_year_and_doy(input.day_of_year);
+        let sec = input.local_solar_time_hours * 3600.0; // HWM14 expects UT seconds; using LST as approximation
+        let (meridional, zonal) = hwm14_sys::Hwm14::evaluate(
+            iyd,
+            sec,
+            input.altitude_m / 1000.0,
+            input.latitude_rad.to_degrees(),
+            input.longitude_rad.to_degrees(),
+            input.local_solar_time_hours,
+            -1.0,
+            -1.0,
+            input.ap,
+        );
+        WindOutput {
+            east_mps: zonal,
+            north_mps: meridional,
+            up_mps: 0.0,
+        }
+    }
+}
+
+#[cfg(feature = "hwm14")]
+impl HorizontalWindModel for Hwm14 {
+    fn evaluate(&self, input: &WindInput) -> WindOutput {
+        Self::evaluate(input)
+    }
+}
+
+#[cfg(feature = "hwm14")]
+fn two_digit_year_and_doy(doy: u16) -> i32 {
+    // HWM14's iyd is yyddd. The model is not sensitive to the year for
+    // climatological winds, so we use a neutral reference year (1993).
+    let year = 93;
+    year * 1000 + i32::from(doy)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

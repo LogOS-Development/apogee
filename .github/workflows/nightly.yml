@@ -1,0 +1,80 @@
+name: Nightly
+
+on:
+  schedule:
+    # Run every day at 06:00 UTC.
+    - cron: '0 6 * * *'
+  # Allow manual triggering for debugging.
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  full-test:
+    name: Full test suite including ignored/special tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Install Fortran compiler
+        run: sudo apt-get update && sudo apt-get install -y gfortran
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-nightly-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Fetch external data assets
+        run: ./scripts/fetch_data.sh
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (default workspace)
+        run: cargo clippy --workspace -- -D warnings
+
+      - name: Clippy with hwm14 feature
+        run: cargo clippy -p apogee-core --features hwm14 -- -D warnings
+
+      - name: Test workspace (including ignored tests)
+        run: cargo test --workspace -- --include-ignored
+
+      - name: Test hwm14-sys (including ignored Fortran tests)
+        run: cargo test --manifest-path crates/hwm14-sys/Cargo.toml -- --include-ignored
+
+      - name: Build hwm14_samples example
+        run: cargo build --example hwm14_samples -p apogee-core --features hwm14
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: 'latest'
+
+      - name: Sync Python environment
+        run: uv sync
+
+      - name: Run HWM14 validation script
+        run: python3 scripts/validate_hwm14.py
+
+      - name: Upload validation plots
+        uses: actions/upload-artifact@v4
+        with:
+          name: hwm14-validation-plots
+          path: plots/hwm14
+          retention-days: 7
