@@ -5,6 +5,8 @@
 
 use std::path::PathBuf;
 
+use hifitime::Epoch;
+
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -43,6 +45,24 @@ fn test_real_iers_leap_second_dat_loads() {
     // Known historical offsets (from IERS Bulletin C).
     assert_eq!(table.tai_utc_at_mjd(41_317), 10); // 1972-01-01
     assert_eq!(table.tai_utc_at_mjd(57_754), 37); // 2017-01-01 onwards
+}
+
+#[test]
+fn test_clock_service_from_data_dir() {
+    let data_dir = data_dir();
+    let leap_path = data_dir.join("time").join("Leap_Second.dat");
+    let eop_path = data_dir.join("eop").join("eopc04.txt");
+    if !leap_path.exists() || !eop_path.exists() {
+        // Data files not fetched yet; skip gracefully in CI.
+        return;
+    }
+    let svc = crate::frames::ClockService::from_data_dir(&data_dir).unwrap();
+    assert!(svc.has_eop());
+    assert!(svc.has_leap_table());
+
+    // At J2000 (2000-01-01 12:00 UTC), TAI-UTC should be 32 s.
+    let j2000_utc = Epoch::from_gregorian_utc(2000, 1, 1, 12, 0, 0, 0);
+    assert_eq!(svc.tai_utc_offset(j2000_utc), 32);
 }
 
 #[test]
