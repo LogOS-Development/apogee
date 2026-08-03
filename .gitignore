@@ -9,15 +9,7 @@ godot/build/
 godot/export_presets.cfg
 
 # Data files (large, fetched via script)
-data/ephemeris/*.bsp
-data/ephemeris/*.bpc
-data/gravity/*.egm
-data/gravity/*.gem
-data/spaceweather/*.csv
-data/spaceweather/*.json
-data/time/*.txt
-data/eop/*.dat
-data/eop/*.csv
+data/
 
 # OS
 .DS_Store

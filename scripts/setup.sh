@@ -12,6 +12,16 @@
 #
 set -euo pipefail
 
+# Refuse to run as root. The script installs per-user tooling (rustup, uv,
+# cargo crates, and a .venv in the project directory) and running it with sudo
+# leaves the install owned by root while the caller's shell cannot use it.
+if [[ $EUID -eq 0 ]]; then
+    echo "Error: do not run this script as root or with sudo." >&2
+    echo "It installs per-user tools and a project-local .venv." >&2
+    echo "Run instead: ./scripts/setup.sh  (or: source ./scripts/setup.sh)" >&2
+    exit 1
+fi
+
 # Detect if the script is being sourced. If so, after completing setup we
 # will activate the uv-managed virtualenv in the caller's shell.
 SOURCED=false
@@ -60,27 +70,22 @@ cd "$ROOT_DIR"
 log "Checking base dependencies (curl, git, build-essential, pkg-config)..."
 if command_exists apt-get; then
     if ! dpkg -s build-essential pkg-config curl git >/dev/null 2>&1; then
-        if [[ ! -t 0 ]] || ! sudo -n true 2>/dev/null; then
-            warn "System packages missing but no interactive sudo. Install manually:"
-            warn "  sudo apt-get update && sudo apt-get install -y build-essential pkg-config curl git"
-        else
-            log "Installing system packages via apt (may prompt for sudo)..."
-            sudo apt-get update
-            sudo apt-get install -y build-essential pkg-config curl git
-        fi
+        log "Installing system packages via apt..."
+        sudo apt-get update
+        sudo apt-get install -y build-essential pkg-config curl git
     else
         info "System packages already present"
     fi
 elif command_exists dnf; then
     if ! rpm -q gcc gcc-c++ pkgconfig curl git >/dev/null 2>&1; then
-        log "Installing system packages via dnf (may prompt for sudo)..."
+        log "Installing system packages via dnf..."
         sudo dnf install -y gcc gcc-c++ pkgconfig curl git
     else
         info "System packages already present"
     fi
 elif command_exists pacman; then
     if ! pacman -Q base-devel pkgconf curl git >/dev/null 2>&1; then
-        log "Installing system packages via pacman (may prompt for sudo)..."
+        log "Installing system packages via pacman..."
         sudo pacman -S --needed base-devel pkgconf curl git
     else
         info "System packages already present"

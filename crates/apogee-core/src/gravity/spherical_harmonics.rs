@@ -57,10 +57,12 @@ impl SphericalHarmonics {
         }
     }
 
-    /// Load EGM2008 coefficients from a tide-free .gz or plain text file.
+    /// Load EGM2008 coefficients from a tide-free .gz, ICGEM .gfc,
+    /// or plain text file.
     ///
-    /// The expected format is whitespace-separated lines:
+    /// Accepted line formats:
     ///   degree order C S
+    ///   gfc degree order C S [sigma_C] [sigma_S]
     /// Lines outside the requested `degree`/`order` are ignored.
     pub fn load_egm2008(path: &str, degree: usize, order: usize) -> ApogeeResult<Self> {
         let file = std::fs::File::open(path)
@@ -84,21 +86,39 @@ impl SphericalHarmonics {
             if parts.len() < 4 {
                 continue;
             }
-            let n: usize = parts[0]
-                .parse()
-                .map_err(|e| ApogeeError::Gravity(format!("invalid degree: {e}")))?;
-            let m: usize = parts[1]
-                .parse()
-                .map_err(|e| ApogeeError::Gravity(format!("invalid order: {e}")))?;
+            // Allow both plain "degree order C S" and ICGEM "gfc degree order C S ...".
+            let (n, m, c_nm, s_nm) = if parts.len() >= 5 && parts[0].eq_ignore_ascii_case("gfc") {
+                let n: usize = parts[1]
+                    .parse()
+                    .map_err(|e| ApogeeError::Gravity(format!("invalid degree: {e}")))?;
+                let m: usize = parts[2]
+                    .parse()
+                    .map_err(|e| ApogeeError::Gravity(format!("invalid order: {e}")))?;
+                let c_nm: f64 = parts[3]
+                    .parse()
+                    .map_err(|e| ApogeeError::Gravity(format!("invalid C coefficient: {e}")))?;
+                let s_nm: f64 = parts[4]
+                    .parse()
+                    .map_err(|e| ApogeeError::Gravity(format!("invalid S coefficient: {e}")))?;
+                (n, m, c_nm, s_nm)
+            } else {
+                let n: usize = parts[0]
+                    .parse()
+                    .map_err(|e| ApogeeError::Gravity(format!("invalid degree: {e}")))?;
+                let m: usize = parts[1]
+                    .parse()
+                    .map_err(|e| ApogeeError::Gravity(format!("invalid order: {e}")))?;
+                let c_nm: f64 = parts[2]
+                    .parse()
+                    .map_err(|e| ApogeeError::Gravity(format!("invalid C coefficient: {e}")))?;
+                let s_nm: f64 = parts[3]
+                    .parse()
+                    .map_err(|e| ApogeeError::Gravity(format!("invalid S coefficient: {e}")))?;
+                (n, m, c_nm, s_nm)
+            };
             if n == 0 || n > degree || m > n.min(order) {
                 continue;
             }
-            let c_nm: f64 = parts[2]
-                .parse()
-                .map_err(|e| ApogeeError::Gravity(format!("invalid C coefficient: {e}")))?;
-            let s_nm: f64 = parts[3]
-                .parse()
-                .map_err(|e| ApogeeError::Gravity(format!("invalid S coefficient: {e}")))?;
             model.c[n][m] = c_nm;
             model.s[n][m] = s_nm;
         }

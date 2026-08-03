@@ -47,7 +47,8 @@ verify_file() {
     log "OK: $(basename "$path") ($size bytes)"
 }
 
-# Download with curl, only if file doesn't exist
+# Download with curl, only if file doesn't exist. Refuses HTML error pages
+# (e.g. 404 served as text/html) by checking the first bytes.
 download() {
     local url="$1"
     local dest="$2"
@@ -58,7 +59,13 @@ download() {
     fi
 
     log "Downloading: $(basename "$dest")"
-    curl -L -s -o "$dest" "$url" || fail "Download failed: $url"
+    curl -L -f -s -o "$dest" "$url" || fail "Download failed: $url"
+
+    # Reject HTML error pages that slipped through.
+    if file "$dest" | grep -q 'HTML'; then
+        rm -f "$dest"
+        fail "Downloaded file is HTML, not data: $url"
+    fi
 }
 
 echo "========================================="
@@ -80,10 +87,12 @@ verify_file "$DATA_DIR/ephemeris/de441.bsp" 1000000
 
 # --- 2. EGM2008 Gravity Model ---
 log "=== EGM2008 Gravity Model ==="
+# The original NGA .gz URL is permanently gone. Use the ICGEM .gfc mirror,
+# which the spherical-harmonics loader now supports.
 download \
-    "https://earth-info.nga.mil/wp-content/uploads/2023/12/EGM2008_2190_TideFree.gz" \
-    "$DATA_DIR/gravity/EGM2008_2190_TideFree.gz"
-verify_file "$DATA_DIR/gravity/EGM2008_2190_TideFree.gz" 100000
+    "https://icgem.gfz-potsdam.de/getmodel/gfc/c50128797a9cb62e936337c890e4425f03f0461d7329b09a8cc8561504465340/EGM2008.gfc" \
+    "$DATA_DIR/gravity/EGM2008_2190_TideFree.gfc"
+verify_file "$DATA_DIR/gravity/EGM2008_2190_TideFree.gfc" 100000000
 
 # --- 3. Leap Second Table ---
 log "=== Leap Second Table ==="
