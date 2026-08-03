@@ -71,7 +71,20 @@ Sample TLEs	Celestrak / Space-Track	TLE format	tests/fixtures/
 Deliverable: Download script that fetches and validates all data. CI test verifies data integrity (file hashes, format parsing).
 
 Exit criterion: ./scripts/fetch_data.sh populates data/ with validated files. CI test confirms.
-0.3 Continuous Integration Foundation
+0.3 Symbolic Units Library (Foundation Add-on)
+
+Task: apogee-units module in apogee-common
+- Compile-time unit system using symbolic exponents on SI base units (m, kg, s, A, K, mol, cd).
+- Quantity<T, U> phantom-type wrapper with +, -, *, /, sqrt, pow.
+- Display implementation that renders symbolic unit expressions (e.g., m·s⁻²).
+- No runtime unit table; all unit derivation computed at compile time via const type-level arithmetic.
+- Add unit tests for base units, derived units (velocity, acceleration, force, pressure), and inverse operations.
+
+Validation: cargo test --workspace passes; cargo fmt --check passes; cargo clippy --all-targets -- -D warnings passes.
+
+Rationale: The core propagator mixes physical domains (position, velocity, force, density, pressure) using raw f64s. A lightweight symbolic unit layer makes interfaces self-documenting and catches dimensional errors at compile time without affecting runtime performance.
+
+0.4 Continuous Integration Foundation
 # .github/workflows/ci.yml (conceptual)
 jobs:
   test:
