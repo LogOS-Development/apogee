@@ -50,7 +50,8 @@ fn propagate_mars() -> Vec<PropagationSample> {
 }
 
 #[test]
-#[ignore = "requires DE441 kernel and golden snapshots"]
+#[ignore = "requires DE441 kernel and golden snapshots; slow"]
+#[ntest::timeout(300_000)]
 fn mars_propagation_golden_snapshots_match() {
     let samples = propagate_mars();
     assert!(

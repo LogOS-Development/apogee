@@ -12,8 +12,9 @@ env:
   RUSTFLAGS: "-D warnings"
 
 jobs:
-  full-test:
-    name: Full test suite including ignored/special tests
+  # Fast tests: everything except the heavy kernel/golden tests.
+  full-test-fast:
+    name: Fast test suite including ignored tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -47,11 +48,83 @@ jobs:
       - name: Clippy with hwm14 feature
         run: cargo clippy -p apogee-core --features hwm14 -- -D warnings
 
-      - name: Test workspace (including ignored tests)
-        run: cargo test --workspace -- --include-ignored
+      - name: Test workspace (including ignored tests, excluding slow kernel tests)
+        run: cargo test --workspace -- --include-ignored --skip mars_propagation_golden_snapshots_match --skip de441_mars_barycenter_vs_horizons
 
       - name: Test hwm14-sys (including ignored Fortran tests)
         run: cargo test --manifest-path crates/hwm14-sys/Cargo.toml -- --include-ignored
+
+      - name: Build hwm14_samples example
+        run: cargo build --example hwm14_samples -p apogee-core --features hwm14
+
+  # Slow kernel/golden tests run separately with a generous timeout so they do
+  # not cancel the fast job if they hang.
+  slow-golden-tests:
+    name: Slow DE441/golden snapshot tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-nightly-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Fetch external data assets
+        run: ./scripts/fetch_data.sh
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: 'latest'
+
+      - name: Sync Python environment
+        run: uv sync
+
+      - name: Test DE441 probe and Mars golden snapshots
+        run: cargo test --workspace -- --ignored mars_propagation_golden_snapshots_match de441_mars_barycenter_vs_horizons
+
+  validation-plots:
+    name: HWM14 validation plots
+    runs-on: ubuntu-latest
+    needs: full-test-fast
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Install Fortran compiler
+        run: sudo apt-get update && sudo apt-get install -y gfortran
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-nightly-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Fetch external data assets
+        run: ./scripts/fetch_data.sh
 
       - name: Build hwm14_samples example
         run: cargo build --example hwm14_samples -p apogee-core --features hwm14
