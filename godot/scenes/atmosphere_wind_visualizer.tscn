@@ -17,15 +17,15 @@ albedo_color = Color(0.2, 0.4, 0.8, 1)
 
 [sub_resource type="SphereMesh" id="earth_mesh"]
 material = SubResource("earth_material")
-radius = 6371.0
-height = 12742.0
+radius = 1.0
+height = 2.0
 
 [sub_resource type="Environment" id="env"]
-ambient_light_source = 3
-ambient_light_color = Color(1, 1, 1, 1)
+background_mode = 1
+ambient_light_source = 2
+ambient_light_color = Color(0.4, 0.4, 0.5, 1)
 ambient_light_energy = 0.5
 background_color = Color(0.05, 0.05, 0.1, 1)
-background_mode = 3
 
 [sub_resource type="StandardMaterial3D" id="sun_material"]
 shading_mode = 0
@@ -33,8 +33,8 @@ albedo_color = Color(1, 1, 0.8, 1)
 
 [sub_resource type="SphereMesh" id="sun_mesh"]
 material = SubResource("sun_material")
-radius = 300.0
-height = 600.0
+radius = 0.05
+height = 0.1
 
 [node name="AtmosphereWindVisualizer" type="Node3D"]
 script = ExtResource("1_visualizer")
@@ -43,7 +43,7 @@ script = ExtResource("1_visualizer")
 environment = SubResource("env")
 
 [node name="Camera3D" type="Camera3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 0.707107, 0.707107, 0, -0.707107, 0.707107, 0, 9000, 9000)
+transform = Transform3D(1, 0, 0, 0, 0.707107, 0.707107, 0, -0.707107, 0.707107, 0, 2.5, 2.5)
 current = true
 fov = 60.0
 
@@ -52,16 +52,16 @@ transform = Transform3D(0.707107, -0.5, 0.5, 0, 0.707107, 0.707107, -0.707107, -
 light_energy = 2.0
 
 [node name="SunMarker" type="MeshInstance3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 10000, 10000, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 3, 3, 0)
 mesh = SubResource("sun_mesh")
 
 [node name="Earth" type="MeshInstance3D" parent="."]
 mesh = SubResource("earth_mesh")
 
 [node name="AtmosphereGridSampler" type="AtmosphereGridSampler" parent="."]
-lat_steps = 5
-lon_steps = 10
-alt_steps = 5
+lat_steps = 9
+lon_steps = 18
+alt_steps = 10
 altitude_min_km = 100.0
 altitude_max_km = 500.0
 day_of_year = 80
@@ -95,11 +95,20 @@ offset_right = 300.0
 offset_bottom = 48.0
 text = "Model: NRLMSISE-00"
 
-[node name="Instructions" type="Label" parent="UI"]
+[node name="StatusLabel" type="Label" parent="UI"]
 layout_mode = 1
 anchors_preset = 0
 offset_left = 16.0
 offset_top = 56.0
+offset_right = 600.0
+offset_bottom = 88.0
+text = "Status"
+
+[node name="Instructions" type="Label" parent="UI"]
+layout_mode = 1
+anchors_preset = 0
+offset_left = 16.0
+offset_top = 96.0
 offset_right = 380.0
-offset_bottom = 120.0
-text = "Space: toggle model\nR: resample\nEsc: quit"
+offset_bottom = 260.0
+text = "Space: toggle model\nR: resample\n1/2/3: toggle Density/Wind/Earth\nLeft drag: orbit\nRight drag: pan\nScroll: zoom\nShift+scroll: faster zoom\nHome: reset camera\nPlay/Pause/Rewind/DOY/UTC: controls\nEsc: quit"
