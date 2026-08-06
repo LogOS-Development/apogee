@@ -68,6 +68,7 @@ dependencies = [
  "apogee-common",
  "apogee-core",
  "godot",
+ "hifitime",
  "nalgebra",
  "thiserror 1.0.69",
 ]

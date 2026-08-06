@@ -3,6 +3,7 @@
 use godot::prelude::*;
 
 mod atmosphere_visualizer;
+mod solar_system;
 
 struct ApogeeGodot;
 

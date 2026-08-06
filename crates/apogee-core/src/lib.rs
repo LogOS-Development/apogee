@@ -10,6 +10,7 @@ pub mod frames;
 pub mod gravity;
 pub mod integrator;
 pub mod magnetosphere;
+pub mod solar_system;
 pub mod systems;
 pub mod tle;
 
