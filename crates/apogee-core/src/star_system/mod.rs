@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use apogee_common::constants::AU;
 use apogee_common::math::modulo;
 use apogee_common::units::GravitationalParameter;
-use apogee_common::units::{PositionVector, VelocityVector, AccelerationVector};
+use apogee_common::units::{PositionVector, VelocityVector, AccelerationVector, AngularVelocityVector};
 use hifitime::Epoch;
 
 /// A celestial body with barycentric state, physical parameters, and orientation.
@@ -38,9 +38,9 @@ pub struct CelestialBody {
     pub velocity: VelocityVector,
     /// Barycentric acceleration in meters per second squared, SSB J2000 equatorial.
     pub acceleration: AccelerationVector,
-    /// Body-fixed rotation pole (unit vector in J2000 equatorial frame).
-    pub rotation_axis: PositionVector,
-    /// Current rotation angle about `rotation_axis` (radians).
+    /// Angular velocity vector (rad/s) — magnitude is spin rate, direction is rotation pole.
+    pub angular_velocity: AngularVelocityVector,
+    /// Current rotation angle about `angular_velocity` (radians).
     pub rotation_angle: f64,
 }
 
@@ -60,6 +60,16 @@ impl CelestialBody {
     /// Scalar distance from this body to an observer at `origin` (meters).
     pub fn distance_to(&self, origin: &PositionVector) -> f64 {
         self.position.distance_to(origin)
+    }
+
+    /// Relative velocity of `origin` with respect to this body (m/s).
+    pub fn velocity_to(&self, origin: &VelocityVector) -> VelocityVector {
+        VelocityVector::new(origin.value() - self.velocity.value())
+    }
+
+    /// Relative acceleration of `origin` with respect to this body (m/s²).
+    pub fn acceleration_to(&self, origin: &AccelerationVector) -> AccelerationVector {
+        AccelerationVector::new(origin.value() - self.acceleration.value())
     }
 }
 
@@ -133,7 +143,7 @@ impl StarSystem {
             lambda_rad.cos(),
         )
         .normalize();
-        let earth_rotation_axis = PositionVector::new(earth_pole);
+        let earth_rotation_axis = AngularVelocityVector::new(earth_pole);
 
         let mut bodies = HashMap::new();
         bodies.insert(
@@ -145,7 +155,7 @@ impl StarSystem {
                 position: sun_position_m,
                 velocity: VelocityVector::default(),
                 acceleration: AccelerationVector::default(),
-                rotation_axis: PositionVector::new(nalgebra::Vector3::z()),
+                angular_velocity: AngularVelocityVector::new(nalgebra::Vector3::z()),
                 rotation_angle: 0.0,
             },
         );
@@ -158,7 +168,7 @@ impl StarSystem {
                 position: earth_position_m,
                 velocity: VelocityVector::default(),
                 acceleration: AccelerationVector::default(),
-                rotation_axis: earth_rotation_axis,
+                angular_velocity: earth_rotation_axis,
                 rotation_angle: earth_rotation_rad,
             },
         );
