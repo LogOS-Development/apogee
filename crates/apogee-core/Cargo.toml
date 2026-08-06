@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+build = "build.rs"
 
 [dependencies]
 apogee-common = { workspace = true }
@@ -17,11 +18,15 @@ flate2 = "1.0"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking"] }
 regex = "1.10"
 urlencoding = "2.1"
-hwm14-sys = { path = "../hwm14-sys", optional = true }
+# HWM14 FFI: only needed when the `hwm14` feature compiles the vendored
+# Fortran model (build.rs links libgfortran + libquadmath statically).
+
+[build-dependencies]
+# No build-dependencies; build.rs invokes gfortran/ar directly.
 
 [features]
 default = []
-hwm14 = ["dep:hwm14-sys"]
+hwm14 = []
 
 [[example]]
 name = "hwm14_samples"
@@ -29,5 +34,4 @@ required-features = ["hwm14"]
 
 [dev-dependencies]
 approx = "0.5"
-hwm14-sys = { path = "../hwm14-sys" }
 ntest = { workspace = true }

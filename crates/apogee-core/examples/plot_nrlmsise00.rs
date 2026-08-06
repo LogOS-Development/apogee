@@ -7,8 +7,7 @@
 //!   altitude_km, density_kg_m3, temperature_exo_k, temperature_alt_k,
 //!   he_m3, o_m3, n2_m3, o2_m3, ar_m3, h_m3, n_m3, anomalous_o_m3
 //!
-//! Pipe or redirect the output to a file and plot with your preferred tool, or
-//! use `scripts/plot_nrlmsise00.py` for a ready-made matplotlib figure.
+//! Pipe or redirect the output to a file and plot with your preferred tool.
 
 use apogee_common::units::Meters;
 use apogee_core::aero::model::AtmosphereInput;

@@ -13,9 +13,6 @@ members = [
     "crates/apogee-llm",
 ]
 
-# hwm14-sys is intentionally not a workspace member: it is only pulled in when
-# the `hwm14` feature is enabled on apogee-core, and it requires gfortran.
-
 [workspace.package]
 version = "0.1.0"
 edition = "2021"

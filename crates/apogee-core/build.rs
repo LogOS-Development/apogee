@@ -1,12 +1,37 @@
-use std::env;
-use std::path::PathBuf;
-use std::process::Command;
+//! Build script for apogee-core.
+//!
+//! When the `hwm14` feature is enabled, compiles the vendored NRL HWM14
+//! Fortran source and C-ABI wrapper into a static library and links the
+//! gfortran runtime. A working `gfortran` is required in that case.
+//!
+//! Without the feature the build script is a no-op (aside from the
+//! `rerun-if-changed` guards), so the crate builds on systems without a
+//! Fortran compiler.
 
 fn main() {
+    // Always re-run if the build script itself changes.
+    println!("cargo:rerun-if-changed=build.rs");
+
+    #[cfg(not(feature = "hwm14"))]
+    {}
+
+    #[cfg(feature = "hwm14")]
+    {
+        compile_hwm14();
+    }
+}
+
+#[cfg(feature = "hwm14")]
+fn compile_hwm14() {
+    use std::env;
+    use std::path::PathBuf;
+    use std::process::Command;
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
-    let vendor = PathBuf::from(&manifest_dir).join("vendor");
-    let assets = PathBuf::from(&manifest_dir).join("assets");
+    let vendor = PathBuf::from(&manifest_dir)
+        .join("external")
+        .join("hwm14")
+        .join("vendor");
 
     // Compile the NRL HWM14 Fortran source and the C-ABI wrapper.
     let hwm14_src = vendor.join("hwm14.f90");
@@ -52,18 +77,22 @@ fn main() {
     // Re-run build if the Fortran source or wrapper changes.
     println!("cargo:rerun-if-changed={}", hwm14_src.display());
     println!("cargo:rerun-if-changed={}", wrapper_src.display());
-
-    // Embed the data-file directory as a compile-time constant.
-    println!("cargo:rustc-env=HWM14_ASSETS_DIR={}", assets.display());
 }
 
+#[cfg(feature = "hwm14")]
 fn fortran_compile(src: &std::path::Path, obj: &std::path::Path, flags: &str, err_msg: &str) {
+    use std::env;
+    use std::process::Command;
     let fc = env::var("FC").unwrap_or_else(|_| "gfortran".into());
+    let out_dir = env::var("OUT_DIR").unwrap();
     let status = Command::new(&fc)
         .args([
             "-c",
             "-fPIC",
             flags,
+            // Redirect .mod files to OUT_DIR so they don't pollute the
+            // crate root.
+            &format!("-J{out_dir}"),
             "-o",
             obj.to_str().unwrap(),
             src.to_str().unwrap(),

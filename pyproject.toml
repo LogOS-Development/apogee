@@ -1,7 +1,7 @@
 [project]
 name = "apogee-scripts"
 version = "0.1.0"
-description = "Python helpers for Apogee validation, plotting, and reference-data generation."
+description = "Python helpers for Apogee reference-data generation."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
@@ -12,8 +12,6 @@ keywords = [
     "apogee",
     "space",
     "astrodynamics",
-    "validation",
-    "plotting",
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -23,19 +21,15 @@ classifiers = [
 ]
 
 # Runtime dependencies for the project-local Python scripts under
-# scripts/ and crates/apogee-core/tests/scripts/. These cover the
-# validation, plotting, and reference-data generation tools; the Rust
-# build itself has no Python dependency.
+# scripts/ (currently just generate_igrf_fixture.py). The Rust build
+# itself has no Python dependency.
 dependencies = [
-    "numpy>=2.5.1",
-    "matplotlib>=3.8",
     "pandas>=3.0.5",
     "ppigrf>=2.1.0",
-    "pyerfa>=2.0.1",
 ]
 
 [project.urls]
-Repository = "https://github.com/ryansennis/apogee"
+Repository = "https://github.com/LogOS-Development/apogee"
 
 # No [build-system] table: this project has no importable Python
 # package. The pyproject.toml is consumed directly by `uv` (via PEP

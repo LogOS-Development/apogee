@@ -13,8 +13,8 @@ use apogee_common::constants::R_EARTH_EQ;
 use apogee_common::units::{Area, Kilograms, Seconds};
 use nalgebra::Vector3;
 
-use crate::components::dynamics::{Dynamics, SimulationConfig, SpacecraftConfig};
 use crate::components::kinematics::Kinematics;
+use crate::components::rigid_body::{RigidBody, SimulationConfig, SpacecraftConfig};
 use crate::ephemeris::kernel::{BodyState, SolarSystemState};
 use crate::systems::step::propagate;
 use crate::tle::Tle;
@@ -28,7 +28,7 @@ const ISS_TLE: &str = "ISS (ZARYA)             \r\n\
 fn iss_initial_state() -> (
     Tle,
     Kinematics,
-    Dynamics,
+    RigidBody,
     SpacecraftConfig,
     SimulationConfig,
 ) {
@@ -40,7 +40,7 @@ fn iss_initial_state() -> (
         attitude: nalgebra::Quaternion::identity(),
         angular_velocity: Vector3::zeros(),
     };
-    let dynamics = Dynamics {
+    let rigid_body = RigidBody {
         mass: Kilograms::new(420_000.0),
         inertia: nalgebra::Matrix3::identity() * 1e7,
         cg_offset: Vector3::zeros(),
@@ -52,7 +52,7 @@ fn iss_initial_state() -> (
         reference_mass_kg: 420_000.0,
     };
     let sim_config = SimulationConfig::default();
-    (tle, kinematics, dynamics, config, sim_config)
+    (tle, kinematics, rigid_body, config, sim_config)
 }
 
 fn earth_only_celestial() -> SolarSystemState {
@@ -67,13 +67,13 @@ fn earth_only_celestial() -> SolarSystemState {
 
 #[test]
 fn test_iss_one_orbit_energy_conservation() {
-    let (_tle, mut kinematics, ref dynamics, ref config, ref sim_config) = iss_initial_state();
+    let (_tle, mut kinematics, ref rigid_body, ref config, ref sim_config) = iss_initial_state();
     let celestial = earth_only_celestial();
 
     let e0 = specific_energy(&kinematics.position, &kinematics.velocity);
     propagate(
         &mut kinematics,
-        dynamics,
+        rigid_body,
         config,
         sim_config,
         &celestial,
@@ -101,12 +101,12 @@ fn test_iss_one_orbit_energy_conservation() {
 
 #[test]
 fn test_iss_24h_propagation_stays_leo() {
-    let (_tle, mut kinematics, ref dynamics, ref config, ref sim_config) = iss_initial_state();
+    let (_tle, mut kinematics, ref rigid_body, ref config, ref sim_config) = iss_initial_state();
     let celestial = earth_only_celestial();
 
     propagate(
         &mut kinematics,
-        dynamics,
+        rigid_body,
         config,
         sim_config,
         &celestial,

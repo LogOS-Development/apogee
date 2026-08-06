@@ -1,11 +1,11 @@
-//! Dynamic properties: mass, inertia, and spacecraft aerodynamic config.
+//! Rigid-body properties: mass, inertia, and spacecraft aerodynamic config.
 
 use apogee_common::units::{Area, Kilograms};
 use nalgebra::Matrix3;
 
 /// Mass and inertia properties of a rigid body.
 #[derive(Debug, Clone)]
-pub struct Dynamics {
+pub struct RigidBody {
     /// Total mass.
     pub mass: Kilograms<f64>,
     /// Inertia tensor in body frame (kg m^2).
@@ -14,7 +14,7 @@ pub struct Dynamics {
     pub cg_offset: nalgebra::Vector3<f64>,
 }
 
-impl Default for Dynamics {
+impl Default for RigidBody {
     fn default() -> Self {
         Self {
             mass: Kilograms::new(1.0),
@@ -89,7 +89,7 @@ mod tests {
 
     #[test]
     fn dynamics_default() {
-        let d = Dynamics::default();
+        let d = RigidBody::default();
         assert_relative_eq!(d.mass.value, 1.0);
         assert_relative_eq!(d.inertia[(0, 0)], 1.0);
         assert_relative_eq!(d.cg_offset.norm(), 0.0);

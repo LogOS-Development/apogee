@@ -5,7 +5,11 @@ pub mod hwm;
 pub mod jacchia_bowman;
 pub mod model;
 pub mod nrlmsise00;
+
+/// Vendored NRLMSISE-00 implementation (adapted from the Brahe project).
+#[path = "../../external/nrlmsise00_brahe/mod.rs"]
 pub mod nrlmsise00_brahe;
+
 pub mod solar_radiation_pressure;
 pub mod space_weather;
 

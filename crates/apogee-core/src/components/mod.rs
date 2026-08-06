@@ -1,9 +1,9 @@
 //! ECS component definitions for the simulation.
 
-pub mod dynamics;
 pub mod kinematics;
+pub mod rigid_body;
 pub mod spacecraft;
 
-pub use dynamics::*;
 pub use kinematics::*;
+pub use rigid_body::*;
 pub use spacecraft::*;

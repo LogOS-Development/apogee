@@ -7,8 +7,8 @@ use nalgebra::Vector3;
 use crate::aero::model::AtmosphereInput;
 use crate::aero::nrlmsise00::Nrlmsise00;
 use crate::aero::{AtmosphericDrag, SolarRadiationPressure};
-use crate::components::dynamics::{SimulationConfig, SpacecraftConfig};
 use crate::components::kinematics::Kinematics;
+use crate::components::rigid_body::{SimulationConfig, SpacecraftConfig};
 use crate::ephemeris::kernel::SolarSystemState;
 use crate::gravity::PointMassGravity;
 
@@ -73,7 +73,7 @@ impl AggregatedForces {
 #[allow(clippy::too_many_arguments)]
 pub fn aggregate_forces(
     kinematics: &Kinematics,
-    dynamics: &crate::components::dynamics::Dynamics,
+    rigid_body: &crate::components::rigid_body::RigidBody,
     config: &SpacecraftConfig,
     sim_config: &SimulationConfig,
     celestial: &SolarSystemState,
@@ -97,14 +97,14 @@ pub fn aggregate_forces(
             f107a: sim_config.f107a,
             ap: sim_config.ap,
         };
-        let drag_area = config.drag_area(dynamics.mass);
+        let drag_area = config.drag_area(rigid_body.mass);
         AtmosphericDrag.acceleration_with_model(
             &kinematics.position,
             &kinematics.velocity,
             &model,
             &input,
             drag_area,
-            dynamics.mass,
+            rigid_body.mass,
         )
     };
 
@@ -120,7 +120,7 @@ pub fn aggregate_forces(
             &sun_pos,
             config.srp_area,
             Dimensionless::new(config.reflectivity),
-            dynamics.mass,
+            rigid_body.mass,
         )
     };
 
@@ -167,7 +167,7 @@ mod tests {
     use nalgebra::Vector3;
 
     use super::*;
-    use crate::components::dynamics::Dynamics;
+    use crate::components::rigid_body::RigidBody;
     use approx::assert_relative_eq;
 
     fn make_iss_state() -> Kinematics {
@@ -184,7 +184,7 @@ mod tests {
     #[test]
     fn test_aggregate_forces_finite() {
         let kinematics = make_iss_state();
-        let dynamics = Dynamics {
+        let rigid_body = RigidBody {
             mass: Kilograms::new(420_000.0),
             inertia: nalgebra::Matrix3::identity(),
             cg_offset: Vector3::zeros(),
@@ -205,7 +205,7 @@ mod tests {
         };
         let forces = aggregate_forces(
             &kinematics,
-            &dynamics,
+            &rigid_body,
             &config,
             &sim_config,
             &celestial,

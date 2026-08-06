@@ -6,8 +6,8 @@
 
 use apogee_common::units::Seconds;
 
-use crate::components::dynamics::{Dynamics, SimulationConfig, SpacecraftConfig};
 use crate::components::kinematics::Kinematics;
+use crate::components::rigid_body::{RigidBody, SimulationConfig, SpacecraftConfig};
 use crate::ephemeris::kernel::SolarSystemState;
 use crate::integrator::{IntegrationResult, Integrator, Rk4, StateDerivative, StateVector};
 use crate::systems::force_aggregator::aggregate_forces;
@@ -22,7 +22,7 @@ use crate::systems::force_aggregator::aggregate_forces;
 #[allow(clippy::too_many_arguments)]
 pub fn step_spacecraft(
     kinematics: &mut Kinematics,
-    dynamics: &Dynamics,
+    rigid_body: &RigidBody,
     config: &SpacecraftConfig,
     sim_config: &SimulationConfig,
     celestial: &SolarSystemState,
@@ -33,11 +33,11 @@ pub fn step_spacecraft(
 ) -> IntegrationResult {
     let mut state = StateVector::from_kinematics(kinematics);
 
-    let inertia = dynamics.inertia;
+    let inertia = rigid_body.inertia;
     let inertia_inv = inertia
         .try_inverse()
         .unwrap_or_else(nalgebra::Matrix3::identity);
-    let _mass_inv = 1.0 / dynamics.mass.into_value();
+    let _mass_inv = 1.0 / rigid_body.mass.into_value();
 
     let derivative_fn = |s: &StateVector| {
         // Reconstruct a temporary kinematics from the integrator state so
@@ -50,7 +50,7 @@ pub fn step_spacecraft(
         };
         let forces = aggregate_forces(
             &trial_kinematics,
-            dynamics,
+            rigid_body,
             config,
             sim_config,
             celestial,
@@ -93,7 +93,7 @@ pub fn step_spacecraft(
 #[allow(clippy::too_many_arguments)]
 pub fn propagate(
     kinematics: &mut Kinematics,
-    dynamics: &Dynamics,
+    rigid_body: &RigidBody,
     config: &SpacecraftConfig,
     sim_config: &SimulationConfig,
     celestial: &SolarSystemState,
@@ -115,7 +115,7 @@ pub fn propagate(
         };
         step_spacecraft(
             kinematics,
-            dynamics,
+            rigid_body,
             config,
             sim_config,
             celestial,
@@ -151,7 +151,7 @@ mod tests {
             attitude: nalgebra::Quaternion::identity(),
             angular_velocity: Vector3::zeros(),
         };
-        let dynamics = Dynamics {
+        let rigid_body = RigidBody {
             mass: Kilograms::new(1_000.0),
             inertia: nalgebra::Matrix3::identity(),
             cg_offset: Vector3::zeros(),
@@ -174,7 +174,7 @@ mod tests {
         let e0 = orbital_energy(&kinematics.position, &kinematics.velocity);
         propagate(
             &mut kinematics,
-            &dynamics,
+            &rigid_body,
             &config,
             &sim_config,
             &celestial,
