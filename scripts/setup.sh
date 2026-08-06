@@ -157,12 +157,9 @@ fi
 
 log "Verifying Python dependencies..."
 uv run python - <<'PY'
-import numpy
 import pandas
-import matplotlib
 import ppigrf
-print(f"numpy={numpy.__version__} pandas={pandas.__version__} "
-      f"matplotlib={matplotlib.__version__} ppigrf=OK")
+print(f"pandas={pandas.__version__} ppigrf=OK")
 PY
 
 # ─────────────────────────────────────────────────────────────────

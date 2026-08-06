@@ -65,7 +65,7 @@ fn main() {
 
                     #[cfg(feature = "hwm14")]
                     let (east, north, up) = {
-                        use apogee_core::aero::hwm::{HorizontalWindModel, Hwm14};
+                        use apogee_core::aero::hwm::Hwm14;
                         let wind_input = apogee_core::aero::WindInput {
                             altitude_m: alt_km * 1000.0,
                             latitude_rad: lat_rad,

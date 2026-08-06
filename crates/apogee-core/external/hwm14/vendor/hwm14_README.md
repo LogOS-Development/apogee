@@ -1,4 +1,4 @@
-# hwm14-sys
+# hwm14 (vendored NRL HWM14 Fortran)
 
 Rust FFI bindings to the NRL Horizontal Wind Model 14 (HWM14).
 
