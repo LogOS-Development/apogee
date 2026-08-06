@@ -37,7 +37,7 @@ pub fn gradient_torque(
     let r5 = r2 * r2 * r2.sqrt();
     let i_r = inertia * position;
     let cross = position.cross(&i_r);
-    Ok(TorqueVec::from_nm(3.0 * gm / r5 * cross))
+    Ok(TorqueVec::new(3.0 * gm / r5 * cross))
 }
 
 #[cfg(test)]

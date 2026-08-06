@@ -49,8 +49,9 @@
 
 use std::fmt;
 use std::marker::PhantomData;
-use std::ops::{Add, Div, Mul, Neg, Sub};
+use std::ops::{Add, Deref, DerefMut, Div, Mul, Neg, Sub};
 
+use nalgebra::Vector3;
 use typenum::consts::*;
 use typenum::{Diff, Sum, Z0};
 
@@ -167,7 +168,10 @@ pub type Moles<T> = Quantity<T, Unit<(Z0, Z0, Z0, Z0, Z0, P1, Z0)>>;
 pub type Candelas<T> = Quantity<T, Unit<(Z0, Z0, Z0, Z0, Z0, Z0, P1)>>;
 pub type Dimensionless<T> = Quantity<T, Unit<(Z0, Z0, Z0, Z0, Z0, Z0, Z0)>>;
 
-/// Convenience: derived units.
+/// Convenience: derived units. These are dimensionally equivalent to the
+/// corresponding base-unit operations (e.g. `Meters / Seconds` collapses to
+/// `Velocity`), but are spelled out explicitly because Rust type aliases cannot
+/// carry the required trait bounds for inference.
 pub type Velocity<T> = Quantity<T, Unit<(P1, Z0, N1, Z0, Z0, Z0, Z0)>>;
 pub type Acceleration<T> = Quantity<T, Unit<(P1, Z0, N2, Z0, Z0, Z0, Z0)>>;
 pub type Force<T> = Quantity<T, Unit<(P1, P1, N2, Z0, Z0, Z0, Z0)>>;
@@ -193,6 +197,331 @@ pub type GravitationalParameter<T> = Quantity<T, Unit<(P3, Z0, N2, Z0, Z0, Z0, Z
 pub struct Quantity<T, U> {
     pub value: T,
     _unit: PhantomData<U>,
+}
+
+// --- Dimension-only unit aliases for vector quantities ---
+//
+// These are bare `Unit<T>` markers used by `Vector3Quantity<U>` to record
+// physical dimension. The default scale is SI base units (m, m/s, m/s², N,
+// N·m); callers convert at output boundaries using [`SiPrefix`] or project
+// constants such as `crate::constants::AU`.
+
+/// Dimension marker for length (m¹).
+pub type LengthDim = Unit<(P1, Z0, Z0, Z0, Z0, Z0, Z0)>;
+/// Dimension marker for velocity (m¹·s⁻¹).
+pub type VelocityDim = Unit<(P1, Z0, N1, Z0, Z0, Z0, Z0)>;
+/// Dimension marker for acceleration (m¹·s⁻²).
+pub type AccelerationDim = Unit<(P1, Z0, N2, Z0, Z0, Z0, Z0)>;
+/// Dimension marker for force (m¹·kg¹·s⁻²).
+pub type ForceDim = Unit<(P1, P1, N2, Z0, Z0, Z0, Z0)>;
+/// Dimension marker for torque (m²·kg¹·s⁻²).
+pub type TorqueDim = Unit<(P2, P1, N2, Z0, Z0, Z0, Z0)>;
+
+// --- Vector-quantity newtypes ---
+//
+// nalgebra's `Vector3<S>` requires `S: Scalar` (which implies `One` and `Zero`),
+// so a `Vector3<Acceleration<f64>>` cannot compile. To give force-aggregator
+// and celestial models a unit-aware public API without breaking nalgebra
+// geometry operations, each vector quantity is exposed as a thin newtype
+// around `Vector3<f64>` with a named escape hatch and per-component accessors
+// returning the corresponding `Quantity<f64, U>`. Values are stored in SI base
+// units; conversions happen at crate boundaries.
+
+/// A vector of `f64` components tagged with a compile-time unit dimension `U`.
+///
+/// The dimension is part of the type, so assigning a velocity vector to a
+/// position field is a compile-time error. The wrapper dereferences to the raw
+/// `Vector3<f64>` so nalgebra operations (`+`, `-`, `.dot()`, `.norm()`,
+/// `.normalize()`) work directly. Components and constructor values are in SI
+/// base units unless the caller applies a prefix or conversion constant.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Vector3Quantity<U> {
+    value: Vector3<f64>,
+    _unit: PhantomData<U>,
+}
+
+impl<U> Vector3Quantity<U> {
+    /// Wrap a raw `Vector3<f64>`.
+    #[must_use]
+    pub const fn new(value: Vector3<f64>) -> Self {
+        Self {
+            value,
+            _unit: PhantomData,
+        }
+    }
+
+    /// Borrow the raw vector.
+    #[must_use]
+    pub const fn value(&self) -> &Vector3<f64> {
+        &self.value
+    }
+
+    /// Borrow the raw vector (alias for [`Self::value`] for parity with the
+    /// magnetosphere domain-newtype pattern).
+    #[must_use]
+    pub const fn raw(&self) -> &Vector3<f64> {
+        &self.value
+    }
+
+    /// Sum two same-dimension vectors component-wise.
+    #[must_use]
+    pub fn plus(&self, other: &Self) -> Self {
+        Self::new(self.value + other.value)
+    }
+
+    /// Euclidean distance to another same-dimension vector.
+    #[must_use]
+    pub fn distance_to(&self, other: &Self) -> f64 {
+        (self.value - other.value).norm()
+    }
+
+    /// X component wrapped as a scalar [`Quantity`].
+    #[must_use]
+    pub fn x(&self) -> Quantity<f64, U> {
+        Quantity::new(self.value.x)
+    }
+
+    /// Y component wrapped as a scalar [`Quantity`].
+    #[must_use]
+    pub fn y(&self) -> Quantity<f64, U> {
+        Quantity::new(self.value.y)
+    }
+
+    /// Z component wrapped as a scalar [`Quantity`].
+    #[must_use]
+    pub fn z(&self) -> Quantity<f64, U> {
+        Quantity::new(self.value.z)
+    }
+}
+
+impl<U> Deref for Vector3Quantity<U> {
+    type Target = Vector3<f64>;
+    fn deref(&self) -> &Self::Target {
+        &self.value
+    }
+}
+
+impl<U> DerefMut for Vector3Quantity<U> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.value
+    }
+}
+
+impl<U> From<Vector3<f64>> for Vector3Quantity<U> {
+    fn from(value: Vector3<f64>) -> Self {
+        Self::new(value)
+    }
+}
+
+impl<U> From<Vector3Quantity<U>> for Vector3<f64> {
+    fn from(v: Vector3Quantity<U>) -> Self {
+        v.value
+    }
+}
+
+impl<U> Add for Vector3Quantity<U> {
+    type Output = Self;
+    fn add(self, rhs: Self) -> Self::Output {
+        Self::new(self.value + rhs.value)
+    }
+}
+
+impl<U> Sub for Vector3Quantity<U> {
+    type Output = Self;
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self::new(self.value - rhs.value)
+    }
+}
+
+impl<U> Neg for Vector3Quantity<U> {
+    type Output = Self;
+    fn neg(self) -> Self::Output {
+        Self::new(-self.value)
+    }
+}
+
+impl<U> Mul<f64> for Vector3Quantity<U> {
+    type Output = Self;
+    fn mul(self, rhs: f64) -> Self::Output {
+        Self::new(self.value * rhs)
+    }
+}
+
+impl<U> Div<f64> for Vector3Quantity<U> {
+    type Output = Self;
+    fn div(self, rhs: f64) -> Self::Output {
+        Self::new(self.value / rhs)
+    }
+}
+
+/// Position vector in meters.
+pub type PositionVec = Vector3Quantity<LengthDim>;
+/// Velocity vector in m/s.
+pub type VelocityVec = Vector3Quantity<VelocityDim>;
+/// Acceleration vector in m/s².
+pub type AccelerationVec = Vector3Quantity<AccelerationDim>;
+/// Force vector in N.
+pub type ForceVec = Vector3Quantity<ForceDim>;
+/// Torque vector in N·m.
+pub type TorqueVec = Vector3Quantity<TorqueDim>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scalar_quantity_wraps_value() {
+        let m = Meters::new(5.0);
+        assert_eq!(m.into_value(), 5.0);
+        assert_eq!(*m.value_ref(), 5.0);
+    }
+
+    #[test]
+    fn same_unit_addition_preserves_dimension() {
+        let a = Meters::new(3.0);
+        let b = Meters::new(2.0);
+        let sum = a + b;
+        assert_eq!(sum.into_value(), 5.0);
+    }
+
+    #[test]
+    fn velocity_from_distance_over_time() {
+        let x = Meters::new(10.0);
+        let t = Seconds::new(2.0);
+        let v: Velocity<f64> = x / t;
+        assert_eq!(v.into_value(), 5.0);
+    }
+
+    #[test]
+    fn acceleration_from_velocity_over_time() {
+        let v: Velocity<f64> = Velocity::new(10.0);
+        let t = Seconds::new(2.0);
+        let a: Acceleration<f64> = v / t;
+        assert_eq!(a.into_value(), 5.0);
+    }
+
+    #[test]
+    fn scalar_mul_and_div_preserve_unit() {
+        let f = Force::new(6.0);
+        let doubled = f * 2.0;
+        let halved = f / 2.0;
+        assert_eq!(doubled.into_value(), 12.0);
+        assert_eq!(halved.into_value(), 3.0);
+    }
+
+    #[test]
+    fn sqrt_of_area_is_length() {
+        let area = Area::new(25.0);
+        let length: Meters<f64> = area.sqrt();
+        assert_eq!(length.into_value(), 5.0);
+    }
+
+    #[test]
+    fn display_renders_inverse_unit_with_negative_superscript() {
+        let f = Frequency::new(60.0);
+        assert_eq!(format!("{}", f), "60 s⁻¹");
+    }
+
+    #[test]
+    fn display_renders_acceleration_unit() {
+        let a = Acceleration::new(9.8);
+        assert_eq!(format!("{}", a), "9.8 m/s²");
+    }
+
+    #[test]
+    fn display_renders_force_unit() {
+        let f = Force::new(100.0);
+        assert_eq!(format!("{}", f), "100 m·kg/s²");
+    }
+
+    #[test]
+    fn display_renders_power_unit() {
+        let p = Power::new(100.0);
+        assert_eq!(format!("{}", p), "100 m²·kg/s³");
+    }
+
+    #[test]
+    fn prefix_scale_table_is_ordered() {
+        assert_eq!(SiPrefix::Yocto.scale(), 1.0e-24);
+        assert_eq!(SiPrefix::None.scale(), 1.0);
+        assert_eq!(SiPrefix::Yotta.scale(), 1.0e24);
+    }
+
+    #[test]
+    fn with_prefix_rescales_same_unit() {
+        let one_m: Meters<f64> = Meters::new(1.0);
+        let in_kilo = one_m.with_prefix(SiPrefix::Kilo);
+        assert_eq!(in_kilo.into_value(), 1_000.0);
+        let back = in_kilo.strip_prefix(SiPrefix::Kilo);
+        assert_eq!(back.into_value(), 1.0);
+    }
+
+    #[test]
+    fn vector_quantity_derefs_to_raw_vector() {
+        let p = PositionVec::new(Vector3::new(1.0, 2.0, 3.0));
+        assert_eq!(p.norm(), (14.0_f64).sqrt());
+        assert_eq!(p.value(), &Vector3::new(1.0, 2.0, 3.0));
+    }
+
+    #[test]
+    fn vector_quantity_components_have_scalar_unit() {
+        let a = AccelerationVec::new(Vector3::new(1.0, 2.0, 3.0));
+        assert_eq!(a.x().into_value(), 1.0);
+        assert_eq!(a.y().into_value(), 2.0);
+        assert_eq!(a.z().into_value(), 3.0);
+    }
+
+    #[test]
+    fn vector_quantity_add_and_sub_require_same_dimension() {
+        let a = AccelerationVec::new(Vector3::new(1.0, 0.0, 0.0));
+        let b = AccelerationVec::new(Vector3::new(0.0, 2.0, 3.0));
+        let sum = a + b;
+        assert_eq!(sum.value(), &Vector3::new(1.0, 2.0, 3.0));
+
+        let diff = a - b;
+        assert_eq!(diff.value(), &Vector3::new(1.0, -2.0, -3.0));
+    }
+
+    #[test]
+    fn vector_quantity_scalar_mul_and_div() {
+        let v = VelocityVec::new(Vector3::new(1.0, 2.0, 3.0));
+        let doubled = v * 2.0;
+        assert_eq!(doubled.value(), &Vector3::new(2.0, 4.0, 6.0));
+        let halved = v / 2.0;
+        assert_eq!(halved.value(), &Vector3::new(0.5, 1.0, 1.5));
+    }
+
+    #[test]
+    fn position_and_velocity_are_distinct_types() {
+        let p = PositionVec::new(Vector3::new(1.0, 0.0, 0.0));
+        let v = VelocityVec::new(Vector3::new(1.0, 0.0, 0.0));
+
+        // Both dereference to the same raw value.
+        assert_eq!(p.value(), v.value());
+
+        // Subtraction within the same dimension works.
+        let _ = p - PositionVec::new(Vector3::zeros());
+        let _ = v - VelocityVec::new(Vector3::zeros());
+
+        // The following would be a compile-time error (dimensions differ):
+        // let _ = p - v;
+    }
+
+    #[test]
+    fn force_vec_plus_sums_components() {
+        let a = ForceVec::new(Vector3::new(1.0, 0.0, 0.0));
+        let b = ForceVec::new(Vector3::new(0.0, 2.0, 3.0));
+        let sum = a.plus(&b);
+        assert_eq!(sum.value(), &Vector3::new(1.0, 2.0, 3.0));
+    }
+
+    #[test]
+    fn torque_vec_round_trips_via_from_into() {
+        let raw = Vector3::new(4.0, 5.0, 6.0);
+        let t: TorqueVec = raw.into();
+        let back: Vector3<f64> = t.into();
+        assert_eq!(back, raw);
+    }
 }
 
 impl<T, U> Quantity<T, U> {
@@ -566,419 +895,5 @@ fn format_superscript(exp: i8) -> String {
         8 => "⁸".to_string(),
         9 => "⁹".to_string(),
         _ => format!("^{}", exp),
-    }
-}
-
-// --- Vector-quantity newtypes ---
-//
-// nalgebra's `Vector3<S>` requires `S: Scalar` (which implies `One` and `Zero`),
-// so a `Vector3<Acceleration<f64>>` cannot compile. To give force-aggregator
-// models a unit-aware public API without breaking nalgebra geometry operations,
-// each vector quantity is exposed as a thin newtype around `Vector3<f64>` with
-// a raw escape hatch and per-component accessors returning the corresponding
-// `Quantity<T, U>`. This mirrors the pattern established for `MagneticFieldVector`
-// in `apogee-core::magnetosphere`.
-
-use nalgebra::Vector3;
-
-/// Acceleration vector in m/s². Wraps a raw `Vector3<f64>`; the units live in
-/// the accessors.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct AccelerationVec(pub Vector3<f64>);
-
-impl AccelerationVec {
-    /// Wrap a raw m/s² vector.
-    #[must_use]
-    pub const fn from_mps2(raw: Vector3<f64>) -> Self {
-        Self(raw)
-    }
-
-    /// Borrow the raw vector in m/s².
-    #[must_use]
-    pub const fn raw(&self) -> &Vector3<f64> {
-        &self.0
-    }
-
-    /// Sum two acceleration vectors component-wise.
-    #[must_use]
-    pub fn plus(&self, other: &Self) -> Self {
-        Self(self.0 + other.0)
-    }
-
-    /// X component in m/s².
-    #[must_use]
-    pub fn x_mps2(&self) -> Acceleration<f64> {
-        Acceleration::new(self.0.x)
-    }
-
-    /// Y component in m/s².
-    #[must_use]
-    pub fn y_mps2(&self) -> Acceleration<f64> {
-        Acceleration::new(self.0.y)
-    }
-
-    /// Z component in m/s².
-    #[must_use]
-    pub fn z_mps2(&self) -> Acceleration<f64> {
-        Acceleration::new(self.0.z)
-    }
-}
-
-impl From<Vector3<f64>> for AccelerationVec {
-    fn from(raw: Vector3<f64>) -> Self {
-        Self(raw)
-    }
-}
-
-impl From<AccelerationVec> for Vector3<f64> {
-    fn from(v: AccelerationVec) -> Self {
-        v.0
-    }
-}
-
-/// Force vector in N. Wraps a raw `Vector3<f64>`.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct ForceVec(pub Vector3<f64>);
-
-impl ForceVec {
-    /// Wrap a raw N vector.
-    #[must_use]
-    pub const fn from_n(raw: Vector3<f64>) -> Self {
-        Self(raw)
-    }
-
-    /// Borrow the raw vector in N.
-    #[must_use]
-    pub const fn raw(&self) -> &Vector3<f64> {
-        &self.0
-    }
-
-    /// X component in N.
-    #[must_use]
-    pub fn x_n(&self) -> Force<f64> {
-        Force::new(self.0.x)
-    }
-
-    /// Y component in N.
-    #[must_use]
-    pub fn y_n(&self) -> Force<f64> {
-        Force::new(self.0.y)
-    }
-
-    /// Z component in N.
-    #[must_use]
-    pub fn z_n(&self) -> Force<f64> {
-        Force::new(self.0.z)
-    }
-}
-
-impl From<Vector3<f64>> for ForceVec {
-    fn from(raw: Vector3<f64>) -> Self {
-        Self(raw)
-    }
-}
-
-impl From<ForceVec> for Vector3<f64> {
-    fn from(v: ForceVec) -> Self {
-        v.0
-    }
-}
-
-/// Torque vector in N·m. Wraps a raw `Vector3<f64>`.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct TorqueVec(pub Vector3<f64>);
-
-impl TorqueVec {
-    /// Wrap a raw N·m vector.
-    #[must_use]
-    pub const fn from_nm(raw: Vector3<f64>) -> Self {
-        Self(raw)
-    }
-
-    /// Borrow the raw vector in N·m.
-    #[must_use]
-    pub const fn raw(&self) -> &Vector3<f64> {
-        &self.0
-    }
-
-    /// X component in N·m.
-    #[must_use]
-    pub fn x_nm(&self) -> Torque<f64> {
-        Torque::new(self.0.x)
-    }
-
-    /// Y component in N·m.
-    #[must_use]
-    pub fn y_nm(&self) -> Torque<f64> {
-        Torque::new(self.0.y)
-    }
-
-    /// Z component in N·m.
-    #[must_use]
-    pub fn z_nm(&self) -> Torque<f64> {
-        Torque::new(self.0.z)
-    }
-}
-
-impl From<Vector3<f64>> for TorqueVec {
-    fn from(raw: Vector3<f64>) -> Self {
-        Self(raw)
-    }
-}
-
-impl From<TorqueVec> for Vector3<f64> {
-    fn from(v: TorqueVec) -> Self {
-        v.0
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use approx::assert_relative_eq;
-
-    #[test]
-    fn base_units_wrap_values() {
-        let m: Meters<f64> = Meters::new(5.0);
-        let kg: Kilograms<f64> = Kilograms::new(2.0);
-        let s: Seconds<f64> = Seconds::new(3.0);
-        assert_eq!(m.into_value(), 5.0);
-        assert_eq!(kg.into_value(), 2.0);
-        assert_eq!(s.into_value(), 3.0);
-    }
-
-    #[test]
-    fn addition_requires_same_unit() {
-        let a = Meters::new(3.0);
-        let b = Meters::new(4.0);
-        assert_eq!((a + b).into_value(), 7.0);
-    }
-
-    #[test]
-    fn subtraction_requires_same_unit() {
-        let a = Seconds::new(10.0);
-        let b = Seconds::new(3.0);
-        assert_eq!((a - b).into_value(), 7.0);
-    }
-
-    #[test]
-    fn negation_preserves_unit() {
-        let v = Velocity::new(5.0);
-        assert_eq!((-v).into_value(), -5.0);
-    }
-
-    #[test]
-    fn multiplication_combines_units() {
-        let v = Velocity::new(10.0); // m/s
-        let t = Seconds::new(2.0); // s
-        let d: Meters<f64> = v * t;
-        assert_eq!(d.into_value(), 20.0);
-    }
-
-    #[test]
-    fn division_combines_units() {
-        let d = Meters::new(100.0);
-        let t = Seconds::new(10.0);
-        let v: Velocity<f64> = d / t;
-        assert_eq!(v.into_value(), 10.0);
-    }
-
-    #[test]
-    fn scalar_multiplication_preserves_unit() {
-        let f = Force::new(5.0);
-        let scaled = f * 2.0;
-        assert_eq!(scaled.into_value(), 10.0);
-    }
-
-    #[test]
-    fn scalar_division_preserves_unit() {
-        let p = Pressure::new(10.0);
-        let halved = p / 2.0;
-        assert_eq!(halved.into_value(), 5.0);
-    }
-
-    #[test]
-    fn derived_units_from_base() {
-        let m = Meters::new(10.0);
-        let s = Seconds::new(2.0);
-        let a: Acceleration<f64> = m / (s * s);
-        assert_eq!(a.into_value(), 2.5);
-    }
-
-    #[test]
-    fn sqrt_of_area_is_length() {
-        let area = Area::new(16.0);
-        let side: Meters<f64> = area.sqrt();
-        assert_relative_eq!(side.into_value(), 4.0, epsilon = 1e-12);
-    }
-
-    #[test]
-    fn display_renders_base_unit() {
-        let m = Meters::new(5.0);
-        assert_eq!(format!("{}", m), "5 m");
-    }
-
-    #[test]
-    fn display_renders_derived_unit() {
-        let a = Acceleration::new(9.81);
-        assert_eq!(format!("{}", a), "9.81 m/s²");
-    }
-
-    #[test]
-    fn display_renders_inverse_unit() {
-        let f = Frequency::new(60.0);
-        assert_eq!(format!("{}", f), "60 s⁻¹");
-    }
-
-    #[test]
-    fn display_renders_dimensionless() {
-        let d = Dimensionless::new(0.5);
-        assert_eq!(format!("{}", d), "0.5 (dimensionless)");
-    }
-
-    #[test]
-    fn display_renders_complex_derived_unit() {
-        // Newton = m·kg/s²
-        let n = Force::new(1.0);
-        assert_eq!(format!("{}", n), "1 m·kg/s²");
-    }
-
-    #[test]
-    fn display_renders_power_unit() {
-        let p = Power::new(100.0);
-        assert_eq!(format!("{}", p), "100 m²·kg/s³");
-    }
-
-    // SiPrefix tests.
-    #[test]
-    fn si_prefix_scales_match_si_definitions() {
-        assert_eq!(SiPrefix::Yocto.scale(), 1.0e-24);
-        assert_eq!(SiPrefix::Milli.scale(), 1.0e-3);
-        assert_eq!(SiPrefix::None.scale(), 1.0);
-        assert_eq!(SiPrefix::Kilo.scale(), 1.0e3);
-        assert_eq!(SiPrefix::Mega.scale(), 1.0e6);
-        assert_eq!(SiPrefix::Giga.scale(), 1.0e9);
-        assert_eq!(SiPrefix::Yotta.scale(), 1.0e24);
-    }
-
-    #[test]
-    fn si_prefix_scales_table_matches_individual_scale_method() {
-        for (idx, &scale) in SiPrefix::SCALES.iter().enumerate() {
-            // Round-trip: each entry in the table is the scale of the
-            // corresponding SiPrefix variant.
-            let prefix = match idx {
-                0 => SiPrefix::Yocto,
-                1 => SiPrefix::Zepto,
-                2 => SiPrefix::Atto,
-                3 => SiPrefix::Femto,
-                4 => SiPrefix::Pico,
-                5 => SiPrefix::Nano,
-                6 => SiPrefix::Micro,
-                7 => SiPrefix::Milli,
-                8 => SiPrefix::Centi,
-                9 => SiPrefix::Deci,
-                10 => SiPrefix::None,
-                11 => SiPrefix::Deca,
-                12 => SiPrefix::Hecto,
-                13 => SiPrefix::Kilo,
-                14 => SiPrefix::Mega,
-                15 => SiPrefix::Giga,
-                16 => SiPrefix::Tera,
-                17 => SiPrefix::Peta,
-                18 => SiPrefix::Exa,
-                19 => SiPrefix::Zetta,
-                20 => SiPrefix::Yotta,
-                _ => unreachable!(),
-            };
-            assert_eq!(prefix.scale(), scale, "mismatch at index {idx}");
-        }
-    }
-
-    #[test]
-    fn si_prefix_display_uses_official_abbreviation() {
-        assert_eq!(format!("{}", SiPrefix::Kilo), "k");
-        assert_eq!(format!("{}", SiPrefix::Micro), "µ");
-        assert_eq!(format!("{}", SiPrefix::Mega), "M");
-        assert_eq!(format!("{}", SiPrefix::None), "");
-    }
-
-    #[test]
-    fn with_prefix_multiplies_value() {
-        // 1 m scaled by Kilo = 1000 m. Same Rust type, value reflects the
-        // applied scale.
-        let one_m: Meters<f64> = Meters::new(1.0);
-        let in_kilo: Meters<f64> = one_m.with_prefix(SiPrefix::Kilo);
-        assert_eq!(in_kilo.into_value(), 1000.0);
-    }
-
-    #[test]
-    fn strip_prefix_divides_value() {
-        // Inverse of with_prefix: 1000.0 m / Kilo (1e3) = 1.0 m.
-        let in_kilo: Meters<f64> = Meters::new(1_000.0);
-        let in_meters: Meters<f64> = in_kilo.strip_prefix(SiPrefix::Kilo);
-        assert_eq!(in_meters.into_value(), 1.0);
-    }
-
-    #[test]
-    fn with_prefix_round_trip_returns_original_value() {
-        let original: Meters<f64> = Meters::new(42.0);
-        let in_mm: Meters<f64> = original.with_prefix(SiPrefix::Milli);
-        let back: Meters<f64> = in_mm.strip_prefix(SiPrefix::Milli);
-        assert_eq!(back.into_value(), 42.0);
-    }
-
-    #[test]
-    fn with_prefix_supports_full_si_ladder() {
-        // Spot-check several SI prefixes around the ladder.
-        let one: Meters<f64> = Meters::new(1.0);
-        assert_eq!(one.with_prefix(SiPrefix::Micro).into_value(), 1.0e-6);
-        assert_eq!(one.with_prefix(SiPrefix::Milli).into_value(), 1.0e-3);
-        assert_eq!(one.with_prefix(SiPrefix::Centi).into_value(), 1.0e-2);
-        assert_eq!(one.with_prefix(SiPrefix::Deci).into_value(), 1.0e-1);
-        assert_eq!(one.with_prefix(SiPrefix::Kilo).into_value(), 1.0e3);
-        assert_eq!(one.with_prefix(SiPrefix::Mega).into_value(), 1.0e6);
-    }
-
-    #[test]
-    fn acceleration_vec_wraps_and_exposes_components() {
-        let raw = Vector3::new(1.0, 2.0, 3.0);
-        let a = AccelerationVec::from_mps2(raw);
-        assert_eq!(a.raw(), &raw);
-        assert_eq!(a.x_mps2().into_value(), 1.0);
-        assert_eq!(a.y_mps2().into_value(), 2.0);
-        assert_eq!(a.z_mps2().into_value(), 3.0);
-    }
-
-    #[test]
-    fn acceleration_vec_plus_sums_components() {
-        let a = AccelerationVec::from_mps2(Vector3::new(1.0, 0.0, 0.0));
-        let b = AccelerationVec::from_mps2(Vector3::new(0.0, 2.0, 3.0));
-        let sum = a.plus(&b);
-        assert_eq!(sum.raw(), &Vector3::new(1.0, 2.0, 3.0));
-    }
-
-    #[test]
-    fn force_vec_round_trips_via_from_into() {
-        let raw = Vector3::new(4.0, 5.0, 6.0);
-        let f: ForceVec = raw.into();
-        let back: Vector3<f64> = f.into();
-        assert_eq!(back, raw);
-    }
-
-    #[test]
-    fn torque_vec_exposes_nm_components() {
-        let t = TorqueVec::from_nm(Vector3::new(7.0, 8.0, 9.0));
-        assert_relative_eq!(t.x_nm().into_value(), 7.0);
-        assert_relative_eq!(t.y_nm().into_value(), 8.0);
-        assert_relative_eq!(t.z_nm().into_value(), 9.0);
-    }
-
-    #[test]
-    fn torque_type_unit_is_kg_m2_per_s2() {
-        // Torque = m²·kg/s² (force-arm). Multiply a length-arm by a force and
-        // confirm the resulting type is `Torque`.
-        let arm: Meters<f64> = Meters::new(0.5);
-        let force: Force<f64> = Force::new(10.0);
-        let _t: Torque<f64> = arm * force;
     }
 }

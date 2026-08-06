@@ -42,13 +42,13 @@ impl AtmosphericDrag {
         let v_rel = vel_rel.norm();
         let density_value = density.into_value();
         if v_rel == 0.0 || density_value <= 0.0 || altitude_m < 0.0 {
-            return AccelerationVec::from_mps2(Vector3::zeros());
+            return AccelerationVec::new(Vector3::zeros());
         }
 
         // F_drag = 0.5 * rho * v^2 * Cd*A  (N).  Divide by mass to get m/s².
         let force_magnitude = 0.5 * density_value * v_rel * v_rel * drag_area.into_value();
         let accel_magnitude = force_magnitude / mass.into_value();
-        AccelerationVec::from_mps2(-vel_rel / v_rel * accel_magnitude)
+        AccelerationVec::new(-vel_rel / v_rel * accel_magnitude)
     }
 
     /// Compute drag acceleration using an atmosphere model to obtain density.

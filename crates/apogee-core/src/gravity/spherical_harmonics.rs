@@ -208,7 +208,7 @@ impl SphericalHarmonics {
         let ay = a_r * cos_phi * sin_lambda - a_phi * sin_phi * sin_lambda + a_lambda * cos_lambda;
         let az = a_r * sin_phi + a_phi * cos_phi;
 
-        Ok(AccelerationVec::from_mps2(Vector3::new(ax, ay, az)))
+        Ok(AccelerationVec::new(Vector3::new(ax, ay, az)))
     }
 
     /// Select an effective degree and order for a given radius ratio.

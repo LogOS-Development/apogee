@@ -5,6 +5,8 @@
 
 use nalgebra::Vector3;
 
+pub mod dynamics;
+pub mod math;
 pub mod time;
 pub mod units;
 
@@ -53,6 +55,9 @@ pub mod constants {
     /// explicitness and discoverability alongside other project constants.
     #[allow(clippy::approx_constant)]
     pub const PI: f64 = 3.141592653589793;
+
+    /// Seconds in one day.
+    pub const SECONDS_PER_DAY: f64 = 86_400.0;
 
     /// Gravitational constant (m^3 kg^-1 s^-2).
     pub const G: f64 = 6.67430e-11;

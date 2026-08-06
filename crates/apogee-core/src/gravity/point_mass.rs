@@ -62,7 +62,7 @@ impl PointMassGravity {
             acc += gm * delta / r3;
         }
 
-        Ok(AccelerationVec::from_mps2(acc))
+        Ok(AccelerationVec::new(acc))
     }
 }
 
@@ -96,7 +96,7 @@ mod tests {
         assert_relative_eq!(raw.y, 0.0, epsilon = 1e-15);
         assert_relative_eq!(raw.z, 0.0, epsilon = 1e-15);
         // Unit tag survives the conversion.
-        assert_relative_eq!(acc.x_mps2().into_value(), expected, epsilon = 1e-6);
+        assert_relative_eq!(acc.x().into_value(), expected, epsilon = 1e-6);
     }
 
     #[test]

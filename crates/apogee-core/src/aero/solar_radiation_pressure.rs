@@ -27,11 +27,11 @@ impl SolarRadiationPressure {
         let to_sun = sun_position - spacecraft_position;
         let r = to_sun.norm();
         if r == 0.0 {
-            return AccelerationVec::from_mps2(Vector3::zeros());
+            return AccelerationVec::new(Vector3::zeros());
         }
 
         if is_eclipsed(spacecraft_position, sun_position) {
-            return AccelerationVec::from_mps2(Vector3::zeros());
+            return AccelerationVec::new(Vector3::zeros());
         }
 
         let flux_factor = AU * AU / (r * r);
@@ -42,7 +42,7 @@ impl SolarRadiationPressure {
         let direction = to_sun / r;
         let accel_magnitude = force_magnitude / mass.into_value();
 
-        AccelerationVec::from_mps2(direction * accel_magnitude)
+        AccelerationVec::new(direction * accel_magnitude)
     }
 
     /// SRP acceleration using the Sun fixed at origin (heliocentric
