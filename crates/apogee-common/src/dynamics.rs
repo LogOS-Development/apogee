@@ -131,13 +131,6 @@ impl ForceVector {
     pub fn from_xyz(x: f64, y: f64, z: f64) -> Self {
         Self::new(Vector3::new(x, y, z))
     }
-
-    /// Sum two force vectors component-wise.
-    #[inline]
-    #[must_use]
-    pub fn plus(&self, other: &Self) -> Self {
-        Self::new(self.vector + other.vector)
-    }
 }
 
 impl TorqueVector {
@@ -146,13 +139,6 @@ impl TorqueVector {
     #[must_use]
     pub fn from_xyz(x: f64, y: f64, z: f64) -> Self {
         Self::new(Vector3::new(x, y, z))
-    }
-
-    /// Sum two torque vectors component-wise.
-    #[inline]
-    #[must_use]
-    pub fn plus(&self, other: &Self) -> Self {
-        Self::new(self.vector + other.vector)
     }
 }
 
