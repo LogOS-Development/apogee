@@ -99,7 +99,9 @@ func _max_density() -> float:
 func _max_wind_speed() -> float:
 	return sampler.max_wind_speed()
 
-func _unhandled_input(event: InputEvent) -> void:
+func _input(event: InputEvent) -> void:
+	var hovered: Control = get_viewport().gui_get_hovered_control()
+
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_WHEEL_UP:
 			_cam_distance = maxf(_cam_distance - 0.2 * (1.5 if event.shift_pressed else 1.0), 1.2)
@@ -108,28 +110,29 @@ func _unhandled_input(event: InputEvent) -> void:
 			_cam_distance += 0.2 * (1.5 if event.shift_pressed else 1.0)
 			_update_camera_transform()
 		elif event.button_index == MOUSE_BUTTON_LEFT or event.button_index == MOUSE_BUTTON_RIGHT:
-			if event.pressed:
+			# Only start a camera drag if the mouse is not over a UI Control.
+			if event.pressed and hovered == null:
 				_drag_button = event.button_index
 				_mouse_pos = event.position
-			else:
+			elif not event.pressed:
 				_drag_button = -1
 	elif event is InputEventMouseMotion:
 		_mouse_pos = event.position
 		if _drag_button == MOUSE_BUTTON_LEFT:
-			# Orbit
 			var dx: float = event.relative.x * 0.005
 			var dy: float = event.relative.y * 0.005
 			_cam_yaw -= dx
 			_cam_pitch = clampf(_cam_pitch - dy, deg_to_rad(5.0), deg_to_rad(85.0))
 			_update_camera_transform()
 		elif _drag_button == MOUSE_BUTTON_RIGHT:
-			# Pan in camera plane
 			var cam_basis := camera.global_transform.basis
 			var scale := 0.003 * _cam_distance
 			_cam_pan += cam_basis.x * (-event.relative.x * scale)
 			_cam_pan += cam_basis.y * (event.relative.y * scale)
 			_update_camera_transform()
-	elif event is InputEventKey and event.pressed:
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed:
 		match event.keycode:
 			KEY_SPACE:
 				_switch_model()
@@ -395,76 +398,90 @@ func _update_mouse_overlay() -> void:
 # -----------------------------------------------------------------------------
 func _build_ui() -> void:
 	var ui := $UI
-	var x := 16.0
-	var y := 200.0
-	var btn_w := 80.0
-	var btn_h := 30.0
-	var gap := 10.0
+
+	# Playback controls container: auto-layout, no overlap, stays at top-left with safe margins.
+	var panel := PanelContainer.new()
+	panel.position = Vector2(16, 270)
+	panel.size = Vector2(360, 0)  # width fixed, height driven by content
+	panel.z_index = 10
+	var panel_style := StyleBoxFlat.new()
+	panel_style.bg_color = Color(0.0, 0.0, 0.0, 0.5)
+	panel_style.corner_radius_top_left = 6
+	panel_style.corner_radius_top_right = 6
+	panel_style.corner_radius_bottom_left = 6
+	panel_style.corner_radius_bottom_right = 6
+	panel.add_theme_stylebox_override("panel", panel_style)
+	ui.add_child(panel)
+
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 10)
+	margin.add_theme_constant_override("margin_top", 10)
+	margin.add_theme_constant_override("margin_right", 10)
+	margin.add_theme_constant_override("margin_bottom", 10)
+	panel.add_child(margin)
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 8)
+	margin.add_child(vbox)
+
+	# Row 1: Play, Rewind, DOY
+	var row1 := HBoxContainer.new()
+	row1.add_theme_constant_override("separation", 8)
+	vbox.add_child(row1)
 
 	_play_button = Button.new()
 	_play_button.text = "Play"
-	_play_button.position = Vector2(x, y)
-	_play_button.size = Vector2(btn_w, btn_h)
+	_play_button.custom_minimum_size = Vector2(80, 30)
 	_play_button.pressed.connect(_on_play_pause)
-	ui.add_child(_play_button)
+	row1.add_child(_play_button)
 
 	var rewind_btn := Button.new()
 	rewind_btn.text = "Rewind"
-	rewind_btn.position = Vector2(x + btn_w + gap, y)
-	rewind_btn.size = Vector2(btn_w, btn_h)
+	rewind_btn.custom_minimum_size = Vector2(80, 30)
 	rewind_btn.pressed.connect(_on_rewind)
-	ui.add_child(rewind_btn)
+	row1.add_child(rewind_btn)
 
 	var doy_lbl := Label.new()
 	doy_lbl.text = "DOY"
-	doy_lbl.position = Vector2(x + 2 * (btn_w + gap), y)
-	doy_lbl.size = Vector2(40, btn_h)
-	ui.add_child(doy_lbl)
+	doy_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	doy_lbl.custom_minimum_size = Vector2(36, 30)
+	row1.add_child(doy_lbl)
 
 	_doy_box = SpinBox.new()
 	_doy_box.min_value = 1
 	_doy_box.max_value = 366
 	_doy_box.value = _sim_doy
-	_doy_box.position = Vector2(x + 2 * (btn_w + gap) + 40, y)
-	_doy_box.size = Vector2(90, btn_h)
+	_doy_box.custom_minimum_size = Vector2(90, 30)
 	_doy_box.value_changed.connect(_on_doy_changed)
-	ui.add_child(_doy_box)
+	row1.add_child(_doy_box)
 
-	var row2 := y + btn_h + gap
-
+	# Row 2: speed
 	_speed_label = Label.new()
 	_speed_label.text = _format_speed_label()
-	_speed_label.position = Vector2(x, row2)
-	_speed_label.size = Vector2(300, 24)
-	ui.add_child(_speed_label)
+	vbox.add_child(_speed_label)
 
 	_speed_slider = HSlider.new()
 	_speed_slider.min_value = 0.0
 	_speed_slider.max_value = SECONDS_PER_DAY
 	_speed_slider.value = _speed_sim_s_per_real_s
-	_speed_slider.step = 60.0
-	_speed_slider.position = Vector2(x, row2 + 24)
-	_speed_slider.size = Vector2(300, 16)
+	_speed_slider.step = 1.0
+	_speed_slider.custom_minimum_size = Vector2(300, 16)
 	_speed_slider.value_changed.connect(_on_speed_changed)
-	ui.add_child(_speed_slider)
+	vbox.add_child(_speed_slider)
 
-	var row3 := row2 + 50
-
+	# Row 3: time
 	_time_label = Label.new()
 	_time_label.text = _format_time_label()
-	_time_label.position = Vector2(x, row3)
-	_time_label.size = Vector2(300, 24)
-	ui.add_child(_time_label)
+	vbox.add_child(_time_label)
 
 	_time_slider = HSlider.new()
 	_time_slider.min_value = 0.0
 	_time_slider.max_value = SECONDS_PER_DAY
 	_time_slider.value = _sim_seconds_utc
 	_time_slider.step = 60.0
-	_time_slider.position = Vector2(x, row3 + 24)
-	_time_slider.size = Vector2(300, 16)
+	_time_slider.custom_minimum_size = Vector2(300, 16)
 	_time_slider.value_changed.connect(_on_time_changed)
-	ui.add_child(_time_slider)
+	vbox.add_child(_time_slider)
 
 	# Mouse overlay panel
 	_mouse_overlay = PanelContainer.new()
