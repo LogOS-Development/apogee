@@ -25,6 +25,7 @@ authors = ["Apogee Contributors"]
 [workspace.dependencies]
 # Numerics
 nalgebra = "0.33"
+num-complex = "0.4"
 num-traits = "0.2"
 typenum = "1.17"
 # Time

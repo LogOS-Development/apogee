@@ -7,7 +7,7 @@ use crate::integrator::{StateDerivative, StateVector};
 /// Acceleration function for the RK4 integrator using point-mass gravity.
 ///
 /// Returns a [`StateDerivative`] whose `acceleration` field is the raw m/s²
-/// vector extracted from the unit-aware [`AccelerationVec`].
+/// vector extracted from the unit-aware [`AccelerationVector`].
 pub fn point_mass_derivative(
     state: &StateVector,
     celestial: &SolarSystemState,

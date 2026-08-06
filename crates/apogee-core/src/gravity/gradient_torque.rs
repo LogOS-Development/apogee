@@ -9,11 +9,11 @@
 //! where `R` is the body-relative position vector expressed in the spacecraft
 //! body frame, `I` is the inertia tensor in the body frame, and `x` is the
 //! cross product. The result is in N m in the body frame, exposed as a
-//! [`TorqueVec`] so the unit tag is visible at the public API surface.
+//! [`TorqueVector`] so the unit tag is visible at the public API surface.
 //!
 //! This is O(1) in the size of the inertia matrix.
 
-use apogee_common::units::TorqueVec;
+use apogee_common::units::TorqueVector;
 use nalgebra::{Matrix3, Vector3};
 
 /// Compute gravity-gradient torque.
@@ -24,12 +24,12 @@ use nalgebra::{Matrix3, Vector3};
 /// * `gm` — gravitational parameter of the attracting body (m^3/s^2).
 ///
 /// # Returns
-/// Torque vector in the body frame, as a [`TorqueVec`] (N·m).
+/// Torque vector in the body frame, as a [`TorqueVector`] (N·m).
 pub fn gradient_torque(
     position: &Vector3<f64>,
     inertia: &Matrix3<f64>,
     gm: f64,
-) -> Result<TorqueVec, String> {
+) -> Result<TorqueVector, String> {
     let r2 = position.norm_squared();
     if r2 == 0.0 {
         return Err("singularity: zero position vector in gravity gradient torque".into());
@@ -37,7 +37,7 @@ pub fn gradient_torque(
     let r5 = r2 * r2 * r2.sqrt();
     let i_r = inertia * position;
     let cross = position.cross(&i_r);
-    Ok(TorqueVec::from_nm(3.0 * gm / r5 * cross))
+    Ok(TorqueVector::new(3.0 * gm / r5 * cross))
 }
 
 #[cfg(test)]

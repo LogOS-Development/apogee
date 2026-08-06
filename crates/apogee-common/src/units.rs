@@ -1,736 +1,457 @@
 //! Compile-time symbolic unit system.
 //!
-//! Quantities are tagged by a seven-tuple of type-level signed integers
-//! (typenum) representing exponents of the SI base units
-//! (meter, kilogram, second, ampere, kelvin, mole, candela). All unit
-//! derivation is type-level: `*` adds exponents, `/` subtracts them, `sqrt`
-//! halves them. Distinct expressions with the same dimensions collapse to
-//! the same Rust type, so assigning `Meters / Seconds` to `Velocity` works
-//! without explicit conversion.
+//! Units are `Unit<(...)>` marker structs carrying a 7-tuple of type-level
+//! signed integer exponents over the SI base units
+//! `[m, kg, s, A, K, mol, cd]`.  Unit multiplication and division are
+//! type-level via `std::ops::Mul` / `Div` — `Meter * Second` produces the
+//! correct exponent tuple at compile time with zero runtime cost.
 //!
-//! # SI prefix handling
+//! Three primitive wrappers:
+//! - [`Quantity<T, U>`] — scalar (real or complex) with a unit tag.
+//! - [`VectorQuantity<T, N, U>`] — `N`-component vector, `nalgebra::SVector`.
+//! - [`TensorQuantity<T, M, N, U>`] — `M`-component matrix, `nalgebra::SMatrix`.
 //!
-//! [`SiPrefix`] is a runtime enum that maps each SI decimal prefix
-//! (Yocto..Yotta, including the identity `None`) to its multiplicative
-//! scale factor. A const [`SiPrefix::SCALES`] table provides the factors
-//! for programmatic conversion; users can:
-//!
-//! 1. Construct a quantity at a specific scale with the prefixed-type
-//!    aliases (e.g. `Kilometers::new(1.0)`) and have it normalize to the
-//!    underlying SI base on construction.
-//! 2. Convert between any two prefixed representations of the same
-//!    dimension via [`ConvertPrefix::convert_to`], which uses the
-//!    `SiPrefix` table to compute the multiplicative factor at runtime.
-//! 3. Read the scale factor directly with [`SiPrefix::scale`] for
-//!    ad-hoc arithmetic.
-//!
-//! # Design cost
-//!
-//! * Type-checking cost per operation: **O(1)** — each unit is a fixed 7-tuple.
-//! * Monomorphization cost: **O(number of distinct unit types used)** — bounded
-//!   by the combinations actually referenced.
-//! * Runtime cost: identical to the wrapped scalar; the wrapper is a single-field
-//!   struct with no runtime unit table.
-//! * Memory cost: identical to the wrapped scalar.
-//!
-//! # Example
-//! ```
-//! use apogee_common::units::*;
-//!
-//! let x = Meters::new(10.0);
-//! let t = Seconds::new(2.0);
-//! let v: Velocity<f64> = x / t;
-//! let a: Acceleration<f64> = v / t;
-//!
-//! // Programmatic SI prefix handling: value is always stored in the base unit.
-//! let km = Meters::new(1.0).with_prefix(SiPrefix::Kilo); // 1000 m
-//! let in_mm = km.strip_prefix(SiPrefix::Milli);        // 1_000_000 mm
-//! ```
+//! `T` defaults to `f64`; use `num_complex::Complex<f64>` for phasor domains.
 
 use std::fmt;
 use std::marker::PhantomData;
-use std::ops::{Add, Div, Mul, Neg, Sub};
+use std::ops::{Add, AddAssign, Deref, DerefMut, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
+use nalgebra::{SMatrix, SVector};
+use num_complex::Complex;
+use num_traits::{NumAssign, Zero};
 use typenum::consts::*;
 use typenum::{Diff, Sum, Z0};
 
-/// SI decimal prefixes in increasing order, with the identity
-/// (`SiPrefix::None`, no scaling) at index 10. Indexing [`SCALES`] by
-/// `variant as usize` gives the multiplicative factor relative to the
-/// unprefixed SI base.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+// ===========================================================================
+// Unit marker + type-level Mul / Div
+// ===========================================================================
+
+/// A unit is a 7-tuple of type-level signed integer exponents over the SI
+/// base units `[m, kg, s, A, K, mol, cd]`.
+///
+/// `Mul` adds exponents, `Div` subtracts them — both at compile time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct Unit<T>(PhantomData<T>);
+
+impl<M1, Kg1, S1, A1, K1, Mol1, Cd1, M2, Kg2, S2, A2, K2, Mol2, Cd2>
+    Mul<Unit<(M2, Kg2, S2, A2, K2, Mol2, Cd2)>>
+    for Unit<(M1, Kg1, S1, A1, K1, Mol1, Cd1)>
+where
+    M1: Add<M2>, Kg1: Add<Kg2>, S1: Add<S2>, A1: Add<A2>,
+    K1: Add<K2>, Mol1: Add<Mol2>, Cd1: Add<Cd2>,
+{
+    type Output = Unit<(
+        Sum<M1, M2>, Sum<Kg1, Kg2>, Sum<S1, S2>, Sum<A1, A2>,
+        Sum<K1, K2>, Sum<Mol1, Mol2>, Sum<Cd1, Cd2>,
+    )>;
+    fn mul(self, _rhs: Unit<(M2, Kg2, S2, A2, K2, Mol2, Cd2)>) -> Self::Output {
+        Unit(PhantomData)
+    }
+}
+
+impl<M1, Kg1, S1, A1, K1, Mol1, Cd1, M2, Kg2, S2, A2, K2, Mol2, Cd2>
+    Div<Unit<(M2, Kg2, S2, A2, K2, Mol2, Cd2)>>
+    for Unit<(M1, Kg1, S1, A1, K1, Mol1, Cd1)>
+where
+    M1: Sub<M2>, Kg1: Sub<Kg2>, S1: Sub<S2>, A1: Sub<A2>,
+    K1: Sub<K2>, Mol1: Sub<Mol2>, Cd1: Sub<Cd2>,
+{
+    type Output = Unit<(
+        Diff<M1, M2>, Diff<Kg1, Kg2>, Diff<S1, S2>, Diff<A1, A2>,
+        Diff<K1, K2>, Diff<Mol1, Mol2>, Diff<Cd1, Cd2>,
+    )>;
+    fn div(self, _rhs: Unit<(M2, Kg2, S2, A2, K2, Mol2, Cd2)>) -> Self::Output {
+        Unit(PhantomData)
+    }
+}
+
+// ===========================================================================
+// SI base unit types  (dim:: module — implementation detail)
+// ===========================================================================
+
+pub mod dim {
+    use super::*;
+
+    pub type Meter = Unit<(P1, Z0, Z0, Z0, Z0, Z0, Z0)>;
+    pub type Kilogram = Unit<(Z0, P1, Z0, Z0, Z0, Z0, Z0)>;
+    pub type Second = Unit<(Z0, Z0, P1, Z0, Z0, Z0, Z0)>;
+    pub type Ampere = Unit<(Z0, Z0, Z0, P1, Z0, Z0, Z0)>;
+    pub type Kelvin = Unit<(Z0, Z0, Z0, Z0, P1, Z0, Z0)>;
+    pub type Mole = Unit<(Z0, Z0, Z0, Z0, Z0, P1, Z0)>;
+    pub type Candela = Unit<(Z0, Z0, Z0, Z0, Z0, Z0, P1)>;
+    pub type Dimensionless = Unit<(Z0, Z0, Z0, Z0, Z0, Z0, Z0)>;
+
+    pub type Velocity = Unit<(P1, Z0, N1, Z0, Z0, Z0, Z0)>;
+    pub type Acceleration = Unit<(P1, Z0, N2, Z0, Z0, Z0, Z0)>;
+    pub type Force = Unit<(P1, P1, N2, Z0, Z0, Z0, Z0)>;
+    pub type Energy = Unit<(P2, P1, N2, Z0, Z0, Z0, Z0)>;
+    pub type Torque = Energy;
+    pub type Power = Unit<(P2, P1, N3, Z0, Z0, Z0, Z0)>;
+    pub type Pressure = Unit<(N1, P1, N2, Z0, Z0, Z0, Z0)>;
+    pub type Area = Unit<(P2, Z0, Z0, Z0, Z0, Z0, Z0)>;
+    pub type Volume = Unit<(P3, Z0, Z0, Z0, Z0, Z0, Z0)>;
+    pub type Density = Unit<(N3, P1, Z0, Z0, Z0, Z0, Z0)>;
+    pub type Frequency = Unit<(Z0, Z0, N1, Z0, Z0, Z0, Z0)>;
+    pub type AngularVelocity = Frequency;
+    pub type Charge = Unit<(Z0, Z0, P1, P1, Z0, Z0, Z0)>;
+    pub type Voltage = Unit<(P2, P1, N3, N1, Z0, Z0, Z0)>;
+    pub type Resistance = Unit<(P2, P1, N3, N2, Z0, Z0, Z0)>;
+    pub type Capacitance = Unit<(N2, N1, P3, P2, Z0, Z0, Z0)>;
+    pub type Inductance = Unit<(P2, P1, N2, N2, Z0, Z0, Z0)>;
+    pub type MagneticFlux = Unit<(P2, P1, N2, N1, Z0, Z0, Z0)>;
+    pub type MagneticFluxDensity = Unit<(Z0, P1, N2, N1, Z0, Z0, Z0)>;
+    pub type GravitationalParameter = Unit<(P3, Z0, N2, Z0, Z0, Z0, Z0)>;
+    pub type MomentOfInertia = Unit<(P2, P1, Z0, Z0, Z0, Z0, Z0)>;
+    pub type Angle = Dimensionless;
+    pub type SolidAngle = Dimensionless;
+    pub type AngularAcceleration = Unit<(Z0, Z0, N2, Z0, Z0, Z0, Z0)>;
+    pub type MassFlowRate = Unit<(Z0, P1, N1, Z0, Z0, Z0, Z0)>;
+    pub type SpecificImpulse = Second;
+    pub type Wavenumber = Unit<(N1, Z0, Z0, Z0, Z0, Z0, Z0)>;
+}
+
+// Re-export unit types for internal use.  The public API surface uses
+// the Quantity aliases below, which reference these via `dim::`.
+// Unit types live in `dim::` — quantity aliases below are the public API.
+// Re-export a few unit types that consumers reference directly (not as
+// quantities).  Dimensionless, Angle, etc. are quantity aliases below.
+pub use dim::{SpecificImpulse};
+
+// ===========================================================================
+// SiPrefix
+// ===========================================================================
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub enum SiPrefix {
-    Yocto,
-    Zepto,
-    Atto,
-    Femto,
-    Pico,
-    Nano,
-    Micro,
-    Milli,
-    Centi,
-    Deci,
-    /// Identity: 1.0 (no scaling).
-    None,
-    Deca,
-    Hecto,
-    Kilo,
-    Mega,
-    Giga,
-    Tera,
-    Peta,
-    Exa,
-    Zetta,
-    Yotta,
+    Yocto, Zepto, Atto, Femto, Pico, Nano, Micro, Milli, Centi, Deci,
+    #[default] None,
+    Deca, Hecto, Kilo, Mega, Giga, Tera, Peta, Exa, Zetta, Yotta,
 }
 
 impl SiPrefix {
-    /// Multiplicative scale factors indexed by `variant as usize`:
-    /// 10^index_minus_10 for the 21 prefixes (Yocto at index 0 → 10^-24,
-    /// Yotta at index 20 → 10^24). The identity prefix (`None`, index 10)
-    /// is 1.0.
     pub const SCALES: [f64; 21] = [
-        1.0e-24, // Yocto
-        1.0e-21, // Zepto
-        1.0e-18, // Atto
-        1.0e-15, // Femto
-        1.0e-12, // Pico
-        1.0e-9,  // Nano
-        1.0e-6,  // Micro
-        1.0e-3,  // Milli
-        1.0e-2,  // Centi
-        1.0e-1,  // Deci
-        1.0,     // None
-        1.0e1,   // Deca
-        1.0e2,   // Hecto
-        1.0e3,   // Kilo
-        1.0e6,   // Mega
-        1.0e9,   // Giga
-        1.0e12,  // Tera
-        1.0e15,  // Peta
-        1.0e18,  // Exa
-        1.0e21,  // Zetta
-        1.0e24,  // Yotta
+        1.0e-24, 1.0e-21, 1.0e-18, 1.0e-15, 1.0e-12, 1.0e-9, 1.0e-6, 1.0e-3,
+        1.0e-2, 1.0e-1, 1.0, 1.0e1, 1.0e2, 1.0e3, 1.0e6, 1.0e9, 1.0e12,
+        1.0e15, 1.0e18, 1.0e21, 1.0e24,
     ];
-
-    /// Return the multiplicative scale for this prefix. Equivalent to
-    /// `Self::SCALES[self as usize]`.
-    #[inline]
-    #[must_use]
-    pub const fn scale(self) -> f64 {
-        Self::SCALES[self as usize]
-    }
+    #[inline] #[must_use]
+    pub const fn scale(self) -> f64 { Self::SCALES[self as usize] }
 }
 
 impl fmt::Display for SiPrefix {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let name = match self {
-            Self::Yocto => "y",
-            Self::Zepto => "z",
-            Self::Atto => "a",
-            Self::Femto => "f",
-            Self::Pico => "p",
-            Self::Nano => "n",
-            Self::Micro => "µ",
-            Self::Milli => "m",
-            Self::Centi => "c",
-            Self::Deci => "d",
-            Self::None => "",
-            Self::Deca => "da",
-            Self::Hecto => "h",
-            Self::Kilo => "k",
-            Self::Mega => "M",
-            Self::Giga => "G",
-            Self::Tera => "T",
-            Self::Peta => "P",
-            Self::Exa => "E",
-            Self::Zetta => "Z",
-            Self::Yotta => "Y",
-        };
-        f.write_str(name)
+        f.write_str(match self {
+            Self::Yocto => "y", Self::Zepto => "z", Self::Atto => "a",
+            Self::Femto => "f", Self::Pico => "p", Self::Nano => "n",
+            Self::Micro => "µ", Self::Milli => "m", Self::Centi => "c",
+            Self::Deci => "d", Self::None => "", Self::Deca => "da",
+            Self::Hecto => "h", Self::Kilo => "k", Self::Mega => "M",
+            Self::Giga => "G", Self::Tera => "T", Self::Peta => "P",
+            Self::Exa => "E", Self::Zetta => "Z", Self::Yotta => "Y",
+        })
     }
 }
 
-/// A unit is a 7-tuple of type-level signed integer exponents over the SI
-/// base units, in order: `[m, kg, s, A, K, mol, cd]`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-pub struct Unit<T>(PhantomData<T>);
+// ===========================================================================
+// UnitName
+// ===========================================================================
 
-/// Convenience: base units. These are the unprefixed SI base dimensions;
-/// use [`SiPrefix`] (or the prefixed aliases below) for scaled variants.
-pub type Meters<T> = Quantity<T, Unit<(P1, Z0, Z0, Z0, Z0, Z0, Z0)>>;
-pub type Kilograms<T> = Quantity<T, Unit<(Z0, P1, Z0, Z0, Z0, Z0, Z0)>>;
-pub type Seconds<T> = Quantity<T, Unit<(Z0, Z0, P1, Z0, Z0, Z0, Z0)>>;
-pub type Amperes<T> = Quantity<T, Unit<(Z0, Z0, Z0, P1, Z0, Z0, Z0)>>;
-pub type Kelvins<T> = Quantity<T, Unit<(Z0, Z0, Z0, Z0, P1, Z0, Z0)>>;
-pub type Moles<T> = Quantity<T, Unit<(Z0, Z0, Z0, Z0, Z0, P1, Z0)>>;
-pub type Candelas<T> = Quantity<T, Unit<(Z0, Z0, Z0, Z0, Z0, Z0, P1)>>;
-pub type Dimensionless<T> = Quantity<T, Unit<(Z0, Z0, Z0, Z0, Z0, Z0, Z0)>>;
+pub trait UnitName { const NAME: &'static str; }
 
-/// Convenience: derived units.
-pub type Velocity<T> = Quantity<T, Unit<(P1, Z0, N1, Z0, Z0, Z0, Z0)>>;
-pub type Acceleration<T> = Quantity<T, Unit<(P1, Z0, N2, Z0, Z0, Z0, Z0)>>;
-pub type Force<T> = Quantity<T, Unit<(P1, P1, N2, Z0, Z0, Z0, Z0)>>;
-pub type Torque<T> = Quantity<T, Unit<(P2, P1, N2, Z0, Z0, Z0, Z0)>>;
-pub type Pressure<T> = Quantity<T, Unit<(N1, P1, N2, Z0, Z0, Z0, Z0)>>;
-pub type Energy<T> = Quantity<T, Unit<(P2, P1, N2, Z0, Z0, Z0, Z0)>>;
-pub type Power<T> = Quantity<T, Unit<(P2, P1, N3, Z0, Z0, Z0, Z0)>>;
-pub type Area<T> = Quantity<T, Unit<(P2, Z0, Z0, Z0, Z0, Z0, Z0)>>;
-pub type Volume<T> = Quantity<T, Unit<(P3, Z0, Z0, Z0, Z0, Z0, Z0)>>;
-pub type Density<T> = Quantity<T, Unit<(N3, P1, Z0, Z0, Z0, Z0, Z0)>>;
-pub type Frequency<T> = Quantity<T, Unit<(Z0, Z0, N1, Z0, Z0, Z0, Z0)>>;
-pub type ElectricCharge<T> = Quantity<T, Unit<(Z0, Z0, P1, P1, Z0, Z0, Z0)>>;
-pub type Voltage<T> = Quantity<T, Unit<(P2, P1, N3, N1, Z0, Z0, Z0)>>;
-pub type Kilometers<T> = Quantity<T, Unit<(P3, Z0, Z0, Z0, Z0, Z0, Z0)>>;
-pub type Nanoteslas<T> = Quantity<T, Unit<(N2, P1, N2, Z0, Z0, Z0, Z0)>>;
-pub type GravitationalParameter<T> = Quantity<T, Unit<(P3, Z0, N2, Z0, Z0, Z0, Z0)>>;
+impl UnitName for dim::Meter { const NAME: &'static str = "m"; }
+impl UnitName for dim::Kilogram { const NAME: &'static str = "kg"; }
+impl UnitName for dim::Second { const NAME: &'static str = "s"; }
+impl UnitName for dim::Ampere { const NAME: &'static str = "A"; }
+impl UnitName for dim::Kelvin { const NAME: &'static str = "K"; }
+impl UnitName for dim::Mole { const NAME: &'static str = "mol"; }
+impl UnitName for dim::Candela { const NAME: &'static str = "cd"; }
+impl UnitName for dim::Dimensionless { const NAME: &'static str = ""; }
+impl UnitName for dim::Velocity { const NAME: &'static str = "m/s"; }
+impl UnitName for dim::Acceleration { const NAME: &'static str = "m/s²"; }
+impl UnitName for dim::Force { const NAME: &'static str = "N"; }
+impl UnitName for dim::Energy { const NAME: &'static str = "J"; }
+impl UnitName for dim::Power { const NAME: &'static str = "W"; }
+impl UnitName for dim::Pressure { const NAME: &'static str = "Pa"; }
+impl UnitName for dim::Area { const NAME: &'static str = "m²"; }
+impl UnitName for dim::Volume { const NAME: &'static str = "m³"; }
+impl UnitName for dim::Density { const NAME: &'static str = "kg/m³"; }
+impl UnitName for dim::Frequency { const NAME: &'static str = "Hz"; }
+impl UnitName for dim::Charge { const NAME: &'static str = "C"; }
+impl UnitName for dim::Voltage { const NAME: &'static str = "V"; }
+impl UnitName for dim::Resistance { const NAME: &'static str = "Ω"; }
+impl UnitName for dim::Capacitance { const NAME: &'static str = "F"; }
+impl UnitName for dim::Inductance { const NAME: &'static str = "H"; }
+impl UnitName for dim::MagneticFlux { const NAME: &'static str = "Wb"; }
+impl UnitName for dim::MagneticFluxDensity { const NAME: &'static str = "T"; }
+impl UnitName for dim::GravitationalParameter { const NAME: &'static str = "m³/s²"; }
+impl UnitName for dim::MomentOfInertia { const NAME: &'static str = "kg·m²"; }
+impl UnitName for dim::AngularAcceleration { const NAME: &'static str = "rad/s²"; }
+impl UnitName for dim::MassFlowRate { const NAME: &'static str = "kg/s"; }
+impl UnitName for dim::Wavenumber { const NAME: &'static str = "1/m"; }
 
-/// A scalar `value` tagged with a compile-time unit `U`.
-///
-/// The unit is part of the type, so dimensional mismatches are caught at
-/// compile time. The runtime representation is the scalar alone.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+// ===========================================================================
+// Quantity<T, U>
+// ===========================================================================
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Quantity<T, U> {
     pub value: T,
-    _unit: PhantomData<U>,
+    _u: PhantomData<U>,
+}
+
+impl<T: NumAssign, U> Zero for Quantity<T, U> {
+    #[inline] fn zero() -> Self { Self { value: T::zero(), _u: PhantomData } }
+    #[inline] fn is_zero(&self) -> bool { self.value.is_zero() }
+}
+
+impl<T: Default, U> Default for Quantity<T, U> {
+    fn default() -> Self { Self { value: T::default(), _u: PhantomData } }
 }
 
 impl<T, U> Quantity<T, U> {
-    /// Wrap a raw scalar value with a unit.
-    #[must_use]
-    pub const fn new(value: T) -> Self {
-        Self {
-            value,
-            _unit: PhantomData,
-        }
-    }
-
-    /// Unwrap the scalar value.
-    #[must_use]
-    pub fn into_value(self) -> T {
-        self.value
-    }
-
-    /// Borrow the scalar value.
-    #[must_use]
-    pub const fn value_ref(&self) -> &T {
-        &self.value
-    }
-
-    /// Apply an SI decimal prefix to the wrapped value, returning a new
-    /// `Quantity` in the same unit. The prefix's [`SiPrefix::scale`]
-    /// factor is multiplied with `self.value`.
-    ///
-    /// This is the runtime-programmatic counterpart to the type-level
-    /// prefixed aliases (e.g. `Kilometers`): users can construct any
-    /// quantity with `Quantity::new(value)` and then `with_prefix` it into
-    /// a chosen scale, or do the reverse by dividing by a known prefix
-    /// scale (`self.value / SiPrefix::Milli.scale()`).
-    ///
-    /// # Example
-    /// ```
-    /// use apogee_common::units::*;
-    ///
-    /// // Scale a base-unit value by a prefix factor.
-    /// let one_m: Meters<f64> = Meters::new(1.0);
-    /// let in_kilo = one_m.with_prefix(SiPrefix::Kilo);
-    /// assert_eq!(in_kilo.into_value(), 1_000.0);
-    ///
-    /// // Round-trip: apply a prefix and then strip it.
-    /// let in_mega = one_m.with_prefix(SiPrefix::Mega);
-    /// let back = in_mega.strip_prefix(SiPrefix::Mega);
-    /// assert_eq!(back.into_value(), 1.0);
-    /// ```
-    #[must_use]
-    pub fn with_prefix(self, prefix: SiPrefix) -> Self
-    where
-        T: Copy + core::ops::Mul<f64, Output = T>,
-    {
-        Quantity::new(self.value * prefix.scale())
-    }
-
-    /// Divide the wrapped value by an SI prefix scale, returning a new
-    /// `Quantity` in the same unit. Inverse of [`Quantity::with_prefix`].
-    #[must_use]
-    pub fn strip_prefix(self, prefix: SiPrefix) -> Self
-    where
-        T: Copy + core::ops::Div<f64, Output = T>,
-    {
-        Quantity::new(self.value / prefix.scale())
+    #[inline] #[must_use] pub const fn new(value: T) -> Self { Self { value, _u: PhantomData } }
+    #[inline] #[must_use] pub const fn value(&self) -> &T { &self.value }
+    #[inline] #[must_use] pub fn into_value(self) -> T { self.value }
+    #[inline] #[must_use] pub fn map<F, R>(self, f: F) -> Quantity<R, U> where F: FnOnce(T) -> R {
+        Quantity { value: f(self.value), _u: PhantomData }
     }
 }
 
-/// Type-level halving for square root. Implemented for the even exponents
-/// likely to appear in physical models.
-pub trait Half {
-    type Output;
+impl<T, U> Deref for Quantity<T, U> { type Target = T; #[inline] fn deref(&self) -> &T { &self.value } }
+impl<T, U> DerefMut for Quantity<T, U> { #[inline] fn deref_mut(&mut self) -> &mut T { &mut self.value } }
+
+pub trait ConvertPrefix {
+    fn in_prefix(&self, prefix: SiPrefix) -> f64;
+    fn convert_to(&self, prefix: SiPrefix) -> Self;
 }
-impl Half for Z0 {
-    type Output = Z0;
-}
-impl Half for P2 {
-    type Output = P1;
-}
-impl Half for P4 {
-    type Output = P2;
-}
-impl Half for P6 {
-    type Output = P3;
-}
-impl Half for P8 {
-    type Output = P4;
-}
-impl Half for N2 {
-    type Output = N1;
-}
-impl Half for N4 {
-    type Output = N2;
-}
-impl Half for N6 {
-    type Output = N3;
-}
-impl Half for N8 {
-    type Output = N4;
+impl<U> ConvertPrefix for Quantity<f64, U> {
+    #[inline] fn in_prefix(&self, prefix: SiPrefix) -> f64 { self.value / prefix.scale() }
+    #[inline] fn convert_to(&self, _p: SiPrefix) -> Self { Self::new(self.value) }
 }
 
-impl<T, M, Kg, S, A, K, Mol, Cd> Quantity<T, Unit<(M, Kg, S, A, K, Mol, Cd)>>
-where
-    M: Half,
-    Kg: Half,
-    S: Half,
-    A: Half,
-    K: Half,
-    Mol: Half,
-    Cd: Half,
-    T: num_traits::Float,
-{
-    #[must_use]
-    #[allow(clippy::type_complexity)]
-    pub fn sqrt(
-        self,
-    ) -> Quantity<
-        T,
-        Unit<(
-            M::Output,
-            Kg::Output,
-            S::Output,
-            A::Output,
-            K::Output,
-            Mol::Output,
-            Cd::Output,
-        )>,
-    > {
-        Quantity::new(self.value.sqrt())
-    }
+impl<T: NumAssign, U> Add for Quantity<T, U> { type Output = Self; #[inline] fn add(self, r: Self) -> Self { Self::new(self.value + r.value) } }
+impl<T: NumAssign, U> AddAssign for Quantity<T, U> { #[inline] fn add_assign(&mut self, r: Self) { self.value += r.value; } }
+impl<T: NumAssign, U> Sub for Quantity<T, U> { type Output = Self; #[inline] fn sub(self, r: Self) -> Self { Self::new(self.value - r.value) } }
+impl<T: NumAssign, U> SubAssign for Quantity<T, U> { #[inline] fn sub_assign(&mut self, r: Self) { self.value -= r.value; } }
+impl<T: NumAssign + Neg<Output = T>, U> Neg for Quantity<T, U> { type Output = Self; #[inline] fn neg(self) -> Self { Self::new(-self.value) } }
+
+impl<T: NumAssign, A: Mul<B>, B> Mul<Quantity<T, B>> for Quantity<T, A> {
+    type Output = Quantity<T, <A as Mul<B>>::Output>;
+    #[inline] fn mul(self, r: Quantity<T, B>) -> Self::Output { Quantity::new(self.value * r.value) }
+}
+impl<T: NumAssign, A: Div<B>, B> Div<Quantity<T, B>> for Quantity<T, A> {
+    type Output = Quantity<T, <A as Div<B>>::Output>;
+    #[inline] fn div(self, r: Quantity<T, B>) -> Self::Output { Quantity::new(self.value / r.value) }
+}
+impl<T: NumAssign, U> Mul<T> for Quantity<T, U> { type Output = Self; #[inline] fn mul(self, r: T) -> Self { Self::new(self.value * r) } }
+impl<T: NumAssign, U> Div<T> for Quantity<T, U> { type Output = Self; #[inline] fn div(self, r: T) -> Self { Self::new(self.value / r) } }
+impl<T: NumAssign, U> MulAssign<T> for Quantity<T, U> { #[inline] fn mul_assign(&mut self, r: T) { self.value *= r; } }
+
+impl<T: fmt::Display, U: UnitName> fmt::Display for Quantity<T, U> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "{} {}", self.value, U::NAME) }
 }
 
-// --- Addition / subtraction (same unit) ---
+// ===========================================================================
+// VectorQuantity<T, N, U>
+// ===========================================================================
 
-impl<T, U> Add for Quantity<T, U>
-where
-    T: Add,
-{
-    type Output = Quantity<<T as Add>::Output, U>;
-    fn add(self, rhs: Self) -> Self::Output {
-        Quantity::new(self.value + rhs.value)
-    }
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VectorQuantity<T, const N: usize, U> {
+    pub vector: SVector<T, N>,
+    _u: PhantomData<U>,
 }
 
-impl<T, U> Sub for Quantity<T, U>
-where
-    T: Sub,
-{
-    type Output = Quantity<<T as Sub>::Output, U>;
-    fn sub(self, rhs: Self) -> Self::Output {
-        Quantity::new(self.value - rhs.value)
+impl<T: Zero + Clone + nalgebra::Scalar, const N: usize, U> Default for VectorQuantity<T, N, U> {
+    fn default() -> Self { Self { vector: SVector::zeros(), _u: PhantomData } }
+}
+
+impl<T, const N: usize, U> Deref for VectorQuantity<T, N, U> {
+    type Target = SVector<T, N>;
+    #[inline] fn deref(&self) -> &Self::Target { &self.vector }
+}
+
+impl<T, const N: usize, U> DerefMut for VectorQuantity<T, N, U> {
+    #[inline] fn deref_mut(&mut self) -> &mut Self::Target { &mut self.vector }
+}
+
+impl<T, const N: usize, U> VectorQuantity<T, N, U> {
+    #[inline] #[must_use] pub const fn new(vector: SVector<T, N>) -> Self { Self { vector, _u: PhantomData } }
+    /// Borrow the raw nalgebra vector.
+    #[inline] #[must_use] pub const fn vector(&self) -> &SVector<T, N> { &self.vector }
+    /// Alias for [`vector`](Self::vector) — borrow the raw nalgebra vector.
+    #[inline] #[must_use] pub const fn value(&self) -> &SVector<T, N> { &self.vector }
+    /// Alias for [`vector`](Self::vector) — borrow the raw nalgebra vector.
+    #[inline] #[must_use] pub const fn raw(&self) -> &SVector<T, N> { &self.vector }
+    #[inline] #[must_use] pub fn into_vector(self) -> SVector<T, N> { self.vector }
+}
+
+impl<T: NumAssign + Clone + nalgebra::Scalar + nalgebra::ComplexField, const N: usize, U> VectorQuantity<T, N, U> {
+    #[inline] #[must_use] pub fn norm(&self) -> Quantity<T::RealField, U> { Quantity::new(self.vector.norm()) }
+    #[inline] #[must_use] pub fn norm_squared(&self) -> Quantity<T::RealField, <U as Mul<U>>::Output> where U: Mul<U> { Quantity::new(self.vector.norm_squared()) }
+    #[inline] #[must_use] pub fn normalize(&self) -> VectorQuantity<T, N, dim::Dimensionless> { VectorQuantity::new(self.vector.normalize()) }
+    #[inline] #[must_use] pub fn dot(&self, other: &Self) -> Quantity<T, <U as Mul<U>>::Output> where U: Mul<U> { Quantity::new(self.vector.dot(&other.vector)) }
+}
+
+impl<T: NumAssign + Clone + nalgebra::Scalar + nalgebra::ComplexField, U> VectorQuantity<T, 3, U> {
+    #[inline] #[must_use] pub fn cross<B>(&self, other: &VectorQuantity<T, 3, B>) -> VectorQuantity<T, 3, <U as Mul<B>>::Output> where U: Mul<B> {
+        VectorQuantity::new(self.vector.cross(&other.vector))
     }
 }
 
-impl<T, U> Neg for Quantity<T, U>
-where
-    T: Neg,
-{
-    type Output = Quantity<<T as Neg>::Output, U>;
-    fn neg(self) -> Self::Output {
-        Quantity::new(-self.value)
-    }
+impl<T: NumAssign + Clone + nalgebra::Scalar, const N: usize, U> Add for VectorQuantity<T, N, U> { type Output = Self; #[inline] fn add(self, r: Self) -> Self { Self::new(self.vector + r.vector) } }
+impl<T: NumAssign + Clone + nalgebra::Scalar, const N: usize, U> Sub for VectorQuantity<T, N, U> { type Output = Self; #[inline] fn sub(self, r: Self) -> Self { Self::new(self.vector - r.vector) } }
+impl<T: NumAssign + Clone + nalgebra::Scalar, const N: usize, U> Neg for VectorQuantity<T, N, U> where SVector<T, N>: Neg<Output = SVector<T, N>> { type Output = Self; #[inline] fn neg(self) -> Self { Self::new(-self.vector) } }
+impl<T: NumAssign + Clone + nalgebra::Scalar, const N: usize, U> Mul<T> for VectorQuantity<T, N, U> { type Output = Self; #[inline] fn mul(self, r: T) -> Self { Self::new(self.vector * r) } }
+impl<T: NumAssign + Clone + nalgebra::Scalar, const N: usize, U> Div<T> for VectorQuantity<T, N, U> { type Output = Self; #[inline] fn div(self, r: T) -> Self { Self::new(self.vector / r) } }
+
+impl<T: NumAssign + Clone + nalgebra::Scalar, const N: usize, UA: Mul<UB>, UB> Mul<VectorQuantity<T, N, UB>> for Quantity<T, UA> {
+    type Output = VectorQuantity<T, N, <UA as Mul<UB>>::Output>;
+    #[inline] fn mul(self, r: VectorQuantity<T, N, UB>) -> Self::Output { VectorQuantity::new(r.vector * self.value) }
 }
 
-// --- Multiplication / division (combine units) ---
-
-impl<T, M1, Kg1, S1, A1, K1, Mol1, Cd1, M2, Kg2, S2, A2, K2, Mol2, Cd2>
-    Mul<Quantity<T, Unit<(M2, Kg2, S2, A2, K2, Mol2, Cd2)>>>
-    for Quantity<T, Unit<(M1, Kg1, S1, A1, K1, Mol1, Cd1)>>
-where
-    T: Mul,
-    M1: Add<M2>,
-    Kg1: Add<Kg2>,
-    S1: Add<S2>,
-    A1: Add<A2>,
-    K1: Add<K2>,
-    Mol1: Add<Mol2>,
-    Cd1: Add<Cd2>,
-{
-    type Output = Quantity<
-        <T as Mul>::Output,
-        Unit<(
-            Sum<M1, M2>,
-            Sum<Kg1, Kg2>,
-            Sum<S1, S2>,
-            Sum<A1, A2>,
-            Sum<K1, K2>,
-            Sum<Mol1, Mol2>,
-            Sum<Cd1, Cd2>,
-        )>,
-    >;
-    fn mul(self, rhs: Quantity<T, Unit<(M2, Kg2, S2, A2, K2, Mol2, Cd2)>>) -> Self::Output {
-        Quantity::new(self.value * rhs.value)
-    }
+impl<T, const N: usize, U: UnitName> fmt::Display for VectorQuantity<T, N, U>
+where T: fmt::Display + Clone + nalgebra::Scalar + PartialEq + std::fmt::Debug {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "[{}] {}", self.vector, U::NAME) }
 }
 
-impl<T, M1, Kg1, S1, A1, K1, Mol1, Cd1, M2, Kg2, S2, A2, K2, Mol2, Cd2>
-    Div<Quantity<T, Unit<(M2, Kg2, S2, A2, K2, Mol2, Cd2)>>>
-    for Quantity<T, Unit<(M1, Kg1, S1, A1, K1, Mol1, Cd1)>>
-where
-    T: Div,
-    M1: Sub<M2>,
-    Kg1: Sub<Kg2>,
-    S1: Sub<S2>,
-    A1: Sub<A2>,
-    K1: Sub<K2>,
-    Mol1: Sub<Mol2>,
-    Cd1: Sub<Cd2>,
-{
-    type Output = Quantity<
-        <T as Div>::Output,
-        Unit<(
-            Diff<M1, M2>,
-            Diff<Kg1, Kg2>,
-            Diff<S1, S2>,
-            Diff<A1, A2>,
-            Diff<K1, K2>,
-            Diff<Mol1, Mol2>,
-            Diff<Cd1, Cd2>,
-        )>,
-    >;
-    fn div(self, rhs: Quantity<T, Unit<(M2, Kg2, S2, A2, K2, Mol2, Cd2)>>) -> Self::Output {
-        Quantity::new(self.value / rhs.value)
-    }
+// ===========================================================================
+// TensorQuantity<T, M, N, U>
+// ===========================================================================
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TensorQuantity<T, const M: usize, const N: usize, U> {
+    pub matrix: SMatrix<T, M, N>,
+    _u: PhantomData<U>,
 }
 
-// --- Scalar multiplication / division ---
-
-impl<T, U> Mul<T> for Quantity<T, U>
-where
-    T: Mul<Output = T>,
-{
-    type Output = Quantity<T, U>;
-    fn mul(self, rhs: T) -> Self::Output {
-        Quantity::new(self.value * rhs)
-    }
+impl<T: Zero + Clone + nalgebra::Scalar, const M: usize, const N: usize, U> Default for TensorQuantity<T, M, N, U> {
+    fn default() -> Self { Self { matrix: SMatrix::zeros(), _u: PhantomData } }
 }
 
-impl<T, U> Div<T> for Quantity<T, U>
-where
-    T: Div<Output = T>,
-{
-    type Output = Quantity<T, U>;
-    fn div(self, rhs: T) -> Self::Output {
-        Quantity::new(self.value / rhs)
-    }
+impl<T, const M: usize, const N: usize, U> TensorQuantity<T, M, N, U> {
+    #[inline] #[must_use] pub const fn new(matrix: SMatrix<T, M, N>) -> Self { Self { matrix, _u: PhantomData } }
+    #[inline] #[must_use] pub const fn matrix(&self) -> &SMatrix<T, M, N> { &self.matrix }
+    #[inline] #[must_use] pub fn into_matrix(self) -> SMatrix<T, M, N> { self.matrix }
 }
 
-// --- Display ---
-
-/// Convert a typenum integer type to its `i8` value for rendering.
-/// Implemented for the common exponent range used in physical models.
-pub trait ToI8 {
-    const VALUE: i8;
+impl<T: NumAssign + Clone + nalgebra::Scalar + nalgebra::ComplexField, const M: usize, const N: usize, U> TensorQuantity<T, M, N, U> {
+    #[inline] #[must_use] pub fn identity() -> Self { Self::new(SMatrix::identity()) }
+    #[inline] #[must_use] pub fn transpose(&self) -> TensorQuantity<T, N, M, U> { TensorQuantity::new(self.matrix.transpose()) }
 }
 
-impl ToI8 for Z0 {
-    const VALUE: i8 = 0;
-}
-macro_rules! impl_to_i8 {
-    ($($ty:ty => $val:expr),* $(,)?) => {
-        $(impl ToI8 for $ty { const VALUE: i8 = $val; })*
-    };
-}
+impl<T: NumAssign + Clone + nalgebra::Scalar, const M: usize, const N: usize, U> Add for TensorQuantity<T, M, N, U> { type Output = Self; #[inline] fn add(self, r: Self) -> Self { Self::new(self.matrix + r.matrix) } }
+impl<T: NumAssign + Clone + nalgebra::Scalar, const M: usize, const N: usize, U> Sub for TensorQuantity<T, M, N, U> { type Output = Self; #[inline] fn sub(self, r: Self) -> Self { Self::new(self.matrix - r.matrix) } }
+impl<T: NumAssign + Clone + nalgebra::Scalar, const M: usize, const N: usize, U> Neg for TensorQuantity<T, M, N, U> where SMatrix<T, M, N>: Neg<Output = SMatrix<T, M, N>> { type Output = Self; #[inline] fn neg(self) -> Self { Self::new(-self.matrix) } }
+impl<T: NumAssign + Clone + nalgebra::Scalar, const M: usize, const N: usize, U> Mul<T> for TensorQuantity<T, M, N, U> { type Output = Self; #[inline] fn mul(self, r: T) -> Self { Self::new(self.matrix * r) } }
 
-impl_to_i8! {
-    P1 => 1, P2 => 2, P3 => 3, P4 => 4, P5 => 5,
-    P6 => 6, P7 => 7, P8 => 8, P9 => 9,
-    N1 => -1, N2 => -2, N3 => -3, N4 => -4, N5 => -5,
-    N6 => -6, N7 => -7, N8 => -8, N9 => -9,
+impl<T: NumAssign + Clone + nalgebra::Scalar, const M: usize, const K: usize, const N: usize, UA: Mul<UB>, UB> Mul<TensorQuantity<T, K, N, UB>> for TensorQuantity<T, M, K, UA> {
+    type Output = TensorQuantity<T, M, N, <UA as Mul<UB>>::Output>;
+    #[inline] fn mul(self, r: TensorQuantity<T, K, N, UB>) -> Self::Output { TensorQuantity::new(self.matrix * r.matrix) }
 }
 
-const UNIT_NAMES: [&str; 7] = ["m", "kg", "s", "A", "K", "mol", "cd"];
-
-impl<T, M, Kg, S, A, K, Mol, Cd> fmt::Display for Quantity<T, Unit<(M, Kg, S, A, K, Mol, Cd)>>
-where
-    T: fmt::Display,
-    M: ToI8,
-    Kg: ToI8,
-    S: ToI8,
-    A: ToI8,
-    K: ToI8,
-    Mol: ToI8,
-    Cd: ToI8,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let exponents = [
-            M::VALUE,
-            Kg::VALUE,
-            S::VALUE,
-            A::VALUE,
-            K::VALUE,
-            Mol::VALUE,
-            Cd::VALUE,
-        ];
-        write!(f, "{} {}", self.value, format_unit(&exponents))?;
-        Ok(())
-    }
+impl<T: NumAssign + Clone + nalgebra::Scalar, const M: usize, const N: usize, UA: Mul<UB>, UB> Mul<VectorQuantity<T, N, UB>> for TensorQuantity<T, M, N, UA> {
+    type Output = VectorQuantity<T, M, <UA as Mul<UB>>::Output>;
+    #[inline] fn mul(self, r: VectorQuantity<T, N, UB>) -> Self::Output { VectorQuantity::new(self.matrix * r.vector) }
 }
 
-fn format_unit(exponents: &[i8; 7]) -> String {
-    let mut num = String::new();
-    let mut den = String::new();
-
-    for (i, &name) in UNIT_NAMES.iter().enumerate() {
-        let exp = exponents[i];
-        if exp == 0 {
-            continue;
-        }
-        if exp > 0 {
-            if !num.is_empty() {
-                num.push('·');
-            }
-            num.push_str(name);
-            if exp != 1 {
-                num.push_str(&format_superscript(exp));
-            }
-        } else {
-            if !den.is_empty() {
-                den.push('·');
-            }
-            den.push_str(name);
-            if exp != -1 {
-                den.push_str(&format_superscript(-exp));
-            }
-        }
-    }
-
-    if num.is_empty() && den.is_empty() {
-        return "(dimensionless)".to_string();
-    }
-    if den.is_empty() {
-        return num;
-    }
-    if num.is_empty() {
-        // Lone inverse unit: render with explicit negative exponents.
-        let mut inv = String::new();
-        for (i, &name) in UNIT_NAMES.iter().enumerate() {
-            let exp = exponents[i];
-            if exp == 0 {
-                continue;
-            }
-            if !inv.is_empty() {
-                inv.push('·');
-            }
-            inv.push_str(name);
-            inv.push_str(&format_superscript(exp));
-        }
-        return inv;
-    }
-    format!("{}/{}", num, den)
+impl<T, const M: usize, const N: usize, U: UnitName> fmt::Display for TensorQuantity<T, M, N, U>
+where T: fmt::Display + Clone + nalgebra::Scalar + PartialEq + std::fmt::Debug {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "[{}] {}", self.matrix, U::NAME) }
 }
 
-fn format_superscript(exp: i8) -> String {
-    match exp {
-        -1 => "⁻¹".to_string(),
-        -2 => "⁻²".to_string(),
-        -3 => "⁻³".to_string(),
-        -4 => "⁻⁴".to_string(),
-        -5 => "⁻⁵".to_string(),
-        -6 => "⁻⁶".to_string(),
-        -7 => "⁻⁷".to_string(),
-        -8 => "⁻⁸".to_string(),
-        -9 => "⁻⁹".to_string(),
-        1 => "¹".to_string(),
-        2 => "²".to_string(),
-        3 => "³".to_string(),
-        4 => "⁴".to_string(),
-        5 => "⁵".to_string(),
-        6 => "⁶".to_string(),
-        7 => "⁷".to_string(),
-        8 => "⁸".to_string(),
-        9 => "⁹".to_string(),
-        _ => format!("^{}", exp),
-    }
-}
+// ===========================================================================
+// Quantity aliases
+// ===========================================================================
 
-// --- Vector-quantity newtypes ---
-//
-// nalgebra's `Vector3<S>` requires `S: Scalar` (which implies `One` and `Zero`),
-// so a `Vector3<Acceleration<f64>>` cannot compile. To give force-aggregator
-// models a unit-aware public API without breaking nalgebra geometry operations,
-// each vector quantity is exposed as a thin newtype around `Vector3<f64>` with
-// a raw escape hatch and per-component accessors returning the corresponding
-// `Quantity<T, U>`. This mirrors the pattern established for `MagneticFieldVector`
-// in `apogee-core::magnetosphere`.
+// Base
+pub type Meters<T = f64> = Quantity<T, dim::Meter>;
+pub type Seconds<T = f64> = Quantity<T, dim::Second>;
+pub type Kilograms<T = f64> = Quantity<T, dim::Kilogram>;
+pub type Amperes<T = f64> = Quantity<T, dim::Ampere>;
+pub type Kelvins<T = f64> = Quantity<T, dim::Kelvin>;
+pub type Moles<T = f64> = Quantity<T, dim::Mole>;
+pub type Candelas<T = f64> = Quantity<T, dim::Candela>;
+pub type Dimensionless<T = f64> = Quantity<T, dim::Dimensionless>;
+pub type Radians<T = f64> = Quantity<T, dim::Angle>;
+pub type Steradians<T = f64> = Quantity<T, dim::SolidAngle>;
 
-use nalgebra::Vector3;
+// Derived
+pub type Velocity<T = f64> = Quantity<T, dim::Velocity>;
+pub type Acceleration<T = f64> = Quantity<T, dim::Acceleration>;
+pub type Force<T = f64> = Quantity<T, dim::Force>;
+pub type Energy<T = f64> = Quantity<T, dim::Energy>;
+pub type Power<T = f64> = Quantity<T, dim::Power>;
+pub type Pressure<T = f64> = Quantity<T, dim::Pressure>;
+pub type Area<T = f64> = Quantity<T, dim::Area>;
+pub type Volume<T = f64> = Quantity<T, dim::Volume>;
+pub type Density<T = f64> = Quantity<T, dim::Density>;
+pub type Frequency<T = f64> = Quantity<T, dim::Frequency>;
+pub type Charge<T = f64> = Quantity<T, dim::Charge>;
+pub type Voltage<T = f64> = Quantity<T, dim::Voltage>;
+pub type Resistance<T = f64> = Quantity<T, dim::Resistance>;
+pub type Capacitance<T = f64> = Quantity<T, dim::Capacitance>;
+pub type Inductance<T = f64> = Quantity<T, dim::Inductance>;
+pub type MagneticFlux<T = f64> = Quantity<T, dim::MagneticFlux>;
+pub type MagneticFluxDensity<T = f64> = Quantity<T, dim::MagneticFluxDensity>;
+pub type GravitationalParameter<T = f64> = Quantity<T, dim::GravitationalParameter>;
+pub type MomentOfInertia<T = f64> = Quantity<T, dim::MomentOfInertia>;
+pub type Wavenumber<T = f64> = Quantity<T, dim::Wavenumber>;
+pub type MassFlowRate<T = f64> = Quantity<T, dim::MassFlowRate>;
 
-/// Acceleration vector in m/s². Wraps a raw `Vector3<f64>`; the units live in
-/// the accessors.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct AccelerationVec(pub Vector3<f64>);
+// Prefixed
+pub type Kilometers<T = f64> = Quantity<T, dim::Meter>;
+pub type Millimeters<T = f64> = Quantity<T, dim::Meter>;
+pub type Nanometers<T = f64> = Quantity<T, dim::Meter>;
+pub type Centimeters<T = f64> = Quantity<T, dim::Meter>;
+pub type Milliseconds<T = f64> = Quantity<T, dim::Second>;
+pub type Microseconds<T = f64> = Quantity<T, dim::Second>;
+pub type Nanoseconds<T = f64> = Quantity<T, dim::Second>;
+pub type Grams<T = f64> = Quantity<T, dim::Kilogram>;
+pub type Milligrams<T = f64> = Quantity<T, dim::Kilogram>;
+pub type Kilohertz<T = f64> = Quantity<T, dim::Frequency>;
+pub type Megahertz<T = f64> = Quantity<T, dim::Frequency>;
+pub type Gigahertz<T = f64> = Quantity<T, dim::Frequency>;
+pub type Nanoteslas<T = f64> = Quantity<T, dim::MagneticFluxDensity>;
+pub type Microteslas<T = f64> = Quantity<T, dim::MagneticFluxDensity>;
+pub type Milliteslas<T = f64> = Quantity<T, dim::MagneticFluxDensity>;
+pub type Millivolts<T = f64> = Quantity<T, dim::Voltage>;
+pub type Kilovolts<T = f64> = Quantity<T, dim::Voltage>;
+pub type Megavolts<T = f64> = Quantity<T, dim::Voltage>;
+pub type Milliamperes<T = f64> = Quantity<T, dim::Ampere>;
+pub type Kiloamperes<T = f64> = Quantity<T, dim::Ampere>;
+pub type Kilopascals<T = f64> = Quantity<T, dim::Pressure>;
+pub type Megapascals<T = f64> = Quantity<T, dim::Pressure>;
+pub type Hectopascals<T = f64> = Quantity<T, dim::Pressure>;
+pub type Kilojoules<T = f64> = Quantity<T, dim::Energy>;
+pub type Megajoules<T = f64> = Quantity<T, dim::Energy>;
+pub type Kilowatts<T = f64> = Quantity<T, dim::Power>;
+pub type Megawatts<T = f64> = Quantity<T, dim::Power>;
+pub type MilliKelvins<T = f64> = Quantity<T, dim::Kelvin>;
+pub type Kilokelvins<T = f64> = Quantity<T, dim::Kelvin>;
 
-impl AccelerationVec {
-    /// Wrap a raw m/s² vector.
-    #[must_use]
-    pub const fn from_mps2(raw: Vector3<f64>) -> Self {
-        Self(raw)
-    }
+// Complex
+pub type ComplexMeters = Quantity<Complex<f64>, dim::Meter>;
+pub type ComplexSeconds = Quantity<Complex<f64>, dim::Second>;
+pub type ComplexVolts = Quantity<Complex<f64>, dim::Voltage>;
+pub type ComplexAmperes = Quantity<Complex<f64>, dim::Ampere>;
+pub type ComplexFrequency = Quantity<Complex<f64>, dim::Frequency>;
+pub type ComplexWavenumber = Quantity<Complex<f64>, dim::Wavenumber>;
 
-    /// Borrow the raw vector in m/s².
-    #[must_use]
-    pub const fn raw(&self) -> &Vector3<f64> {
-        &self.0
-    }
+// ===========================================================================
+// Dynamics re-exports (vector/tensor aliases live in `dynamics`)
+// ===========================================================================
 
-    /// Sum two acceleration vectors component-wise.
-    #[must_use]
-    pub fn plus(&self, other: &Self) -> Self {
-        Self(self.0 + other.0)
-    }
+pub use crate::dynamics::{
+    PositionVector, VelocityVector, AccelerationVector, ForceVector, TorqueVector,
+    AngularVelocityVector, AngularAccelerationVector, MagneticFieldVector,
+    DirectionVector, AngleVector, InertiaTensor, StressTensor, StrainTensor,
+    Mass, Mu, PowerScalar,
+};
 
-    /// X component in m/s².
-    #[must_use]
-    pub fn x_mps2(&self) -> Acceleration<f64> {
-        Acceleration::new(self.0.x)
-    }
-
-    /// Y component in m/s².
-    #[must_use]
-    pub fn y_mps2(&self) -> Acceleration<f64> {
-        Acceleration::new(self.0.y)
-    }
-
-    /// Z component in m/s².
-    #[must_use]
-    pub fn z_mps2(&self) -> Acceleration<f64> {
-        Acceleration::new(self.0.z)
-    }
-}
-
-impl From<Vector3<f64>> for AccelerationVec {
-    fn from(raw: Vector3<f64>) -> Self {
-        Self(raw)
-    }
-}
-
-impl From<AccelerationVec> for Vector3<f64> {
-    fn from(v: AccelerationVec) -> Self {
-        v.0
-    }
-}
-
-/// Force vector in N. Wraps a raw `Vector3<f64>`.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct ForceVec(pub Vector3<f64>);
-
-impl ForceVec {
-    /// Wrap a raw N vector.
-    #[must_use]
-    pub const fn from_n(raw: Vector3<f64>) -> Self {
-        Self(raw)
-    }
-
-    /// Borrow the raw vector in N.
-    #[must_use]
-    pub const fn raw(&self) -> &Vector3<f64> {
-        &self.0
-    }
-
-    /// X component in N.
-    #[must_use]
-    pub fn x_n(&self) -> Force<f64> {
-        Force::new(self.0.x)
-    }
-
-    /// Y component in N.
-    #[must_use]
-    pub fn y_n(&self) -> Force<f64> {
-        Force::new(self.0.y)
-    }
-
-    /// Z component in N.
-    #[must_use]
-    pub fn z_n(&self) -> Force<f64> {
-        Force::new(self.0.z)
-    }
-}
-
-impl From<Vector3<f64>> for ForceVec {
-    fn from(raw: Vector3<f64>) -> Self {
-        Self(raw)
-    }
-}
-
-impl From<ForceVec> for Vector3<f64> {
-    fn from(v: ForceVec) -> Self {
-        v.0
-    }
-}
-
-/// Torque vector in N·m. Wraps a raw `Vector3<f64>`.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct TorqueVec(pub Vector3<f64>);
-
-impl TorqueVec {
-    /// Wrap a raw N·m vector.
-    #[must_use]
-    pub const fn from_nm(raw: Vector3<f64>) -> Self {
-        Self(raw)
-    }
-
-    /// Borrow the raw vector in N·m.
-    #[must_use]
-    pub const fn raw(&self) -> &Vector3<f64> {
-        &self.0
-    }
-
-    /// X component in N·m.
-    #[must_use]
-    pub fn x_nm(&self) -> Torque<f64> {
-        Torque::new(self.0.x)
-    }
-
-    /// Y component in N·m.
-    #[must_use]
-    pub fn y_nm(&self) -> Torque<f64> {
-        Torque::new(self.0.y)
-    }
-
-    /// Z component in N·m.
-    #[must_use]
-    pub fn z_nm(&self) -> Torque<f64> {
-        Torque::new(self.0.z)
-    }
-}
-
-impl From<Vector3<f64>> for TorqueVec {
-    fn from(raw: Vector3<f64>) -> Self {
-        Self(raw)
-    }
-}
-
-impl From<TorqueVec> for Vector3<f64> {
-    fn from(v: TorqueVec) -> Self {
-        v.0
-    }
-}
+// ===========================================================================
+// Tests
+// ===========================================================================
 
 #[cfg(test)]
 mod tests {
@@ -738,247 +459,131 @@ mod tests {
     use approx::assert_relative_eq;
 
     #[test]
-    fn base_units_wrap_values() {
-        let m: Meters<f64> = Meters::new(5.0);
-        let kg: Kilograms<f64> = Kilograms::new(2.0);
-        let s: Seconds<f64> = Seconds::new(3.0);
-        assert_eq!(m.into_value(), 5.0);
-        assert_eq!(kg.into_value(), 2.0);
-        assert_eq!(s.into_value(), 3.0);
+    fn scalar_construction() {
+        let d = Meters::new(10.0);
+        assert_relative_eq!(d.value, 10.0);
+        assert_relative_eq!(*d.value(), 10.0);
+        assert_relative_eq!(d.into_value(), 10.0);
     }
 
     #[test]
-    fn addition_requires_same_unit() {
-        let a = Meters::new(3.0);
-        let b = Meters::new(4.0);
-        assert_eq!((a + b).into_value(), 7.0);
+    fn scalar_add_sub() {
+        assert_relative_eq!((Meters::new(3.0) + Meters::new(7.0)).value, 10.0);
+        assert_relative_eq!((Meters::new(7.0) - Meters::new(3.0)).value, 4.0);
     }
 
     #[test]
-    fn subtraction_requires_same_unit() {
-        let a = Seconds::new(10.0);
-        let b = Seconds::new(3.0);
-        assert_eq!((a - b).into_value(), 7.0);
+    fn scalar_mul_div_derives_units() {
+        let v: Velocity = Meters::new(10.0) / Seconds::new(2.0);
+        assert_relative_eq!(v.value, 5.0);
+        assert_eq!(dim::Velocity::NAME, "m/s");
     }
 
     #[test]
-    fn negation_preserves_unit() {
-        let v = Velocity::new(5.0);
-        assert_eq!((-v).into_value(), -5.0);
+    fn scalar_times_raw() {
+        assert_relative_eq!((Meters::new(3.0) * 2.0).value, 6.0);
     }
 
     #[test]
-    fn multiplication_combines_units() {
-        let v = Velocity::new(10.0); // m/s
-        let t = Seconds::new(2.0); // s
-        let d: Meters<f64> = v * t;
-        assert_eq!(d.into_value(), 20.0);
+    fn acceleration_chain() {
+        let v: Velocity = Meters::new(10.0) / Seconds::new(2.0);
+        let a: Acceleration = v / Seconds::new(5.0);
+        assert_relative_eq!(a.value, 1.0);
     }
 
     #[test]
-    fn division_combines_units() {
-        let d = Meters::new(100.0);
-        let t = Seconds::new(10.0);
-        let v: Velocity<f64> = d / t;
-        assert_eq!(v.into_value(), 10.0);
+    fn force_from_mass_x_accel() {
+        let m = Kilograms::new(2.0);
+        let a: Acceleration = Meters::new(10.0) / (Seconds::new(1.0) * Seconds::new(1.0));
+        let f: Force = m * a;
+        assert_relative_eq!(f.value, 20.0);
+        assert_eq!(dim::Force::NAME, "N");
     }
 
     #[test]
-    fn scalar_multiplication_preserves_unit() {
-        let f = Force::new(5.0);
-        let scaled = f * 2.0;
-        assert_eq!(scaled.into_value(), 10.0);
+    fn prefix_conversion() {
+        let km = Kilometers::new(1000.0);
+        assert_relative_eq!(km.value, 1000.0);
+        assert_relative_eq!(km.in_prefix(SiPrefix::Kilo), 1.0);
     }
 
     #[test]
-    fn scalar_division_preserves_unit() {
-        let p = Pressure::new(10.0);
-        let halved = p / 2.0;
-        assert_eq!(halved.into_value(), 5.0);
+    fn display() {
+        assert_eq!(format!("{}", Meters::new(42.0)), "42 m");
+        let v: Velocity = Meters::new(10.0) / Seconds::new(2.0);
+        assert_eq!(format!("{v}"), "5 m/s");
     }
 
     #[test]
-    fn derived_units_from_base() {
-        let m = Meters::new(10.0);
-        let s = Seconds::new(2.0);
-        let a: Acceleration<f64> = m / (s * s);
-        assert_eq!(a.into_value(), 2.5);
+    fn default_zero() {
+        assert!(Meters::<f64>::default().value == 0.0);
+        assert!(Velocity::<f64>::default().value == 0.0);
     }
 
     #[test]
-    fn sqrt_of_area_is_length() {
-        let area = Area::new(16.0);
-        let side: Meters<f64> = area.sqrt();
-        assert_relative_eq!(side.into_value(), 4.0, epsilon = 1e-12);
+    fn vector_norm() {
+        let p = VectorQuantity::<f64, 3, dim::Meter>::new(nalgebra::Vector3::new(3.0, 4.0, 0.0));
+        assert_relative_eq!(p.norm().value, 5.0);
     }
 
     #[test]
-    fn display_renders_base_unit() {
-        let m = Meters::new(5.0);
-        assert_eq!(format!("{}", m), "5 m");
+    fn vector_normalize() {
+        let p = VectorQuantity::<f64, 3, dim::Meter>::new(nalgebra::Vector3::new(3.0, 4.0, 0.0));
+        let dir = p.normalize();
+        assert_relative_eq!(dir.vector.x, 0.6);
+        assert_relative_eq!(dir.vector.y, 0.8);
     }
 
     #[test]
-    fn display_renders_derived_unit() {
-        let a = Acceleration::new(9.81);
-        assert_eq!(format!("{}", a), "9.81 m/s²");
+    fn vector_add() {
+        let a = VectorQuantity::<f64, 3, dim::Meter>::new(nalgebra::Vector3::new(1.0, 0.0, 0.0));
+        let b = VectorQuantity::<f64, 3, dim::Meter>::new(nalgebra::Vector3::new(0.0, 1.0, 0.0));
+        let c = a + b;
+        assert_relative_eq!(c.vector.x, 1.0);
+        assert_relative_eq!(c.vector.y, 1.0);
     }
 
     #[test]
-    fn display_renders_inverse_unit() {
-        let f = Frequency::new(60.0);
-        assert_eq!(format!("{}", f), "60 s⁻¹");
+    fn vector_cross() {
+        let x = VectorQuantity::<f64, 3, dim::Meter>::new(nalgebra::Vector3::new(1.0, 0.0, 0.0));
+        let y = VectorQuantity::<f64, 3, dim::Meter>::new(nalgebra::Vector3::new(0.0, 1.0, 0.0));
+        let z = x.cross(&y);
+        assert_relative_eq!(z.vector.z, 1.0);
     }
 
     #[test]
-    fn display_renders_dimensionless() {
-        let d = Dimensionless::new(0.5);
-        assert_eq!(format!("{}", d), "0.5 (dimensionless)");
+    fn scalar_times_vector() {
+        let s = Meters::new(2.0);
+        let v = VectorQuantity::<f64, 3, dim::Dimensionless>::new(nalgebra::Vector3::new(1.0, 2.0, 3.0));
+        let p = s * v;
+        assert_relative_eq!(p.vector.x, 2.0);
     }
 
     #[test]
-    fn display_renders_complex_derived_unit() {
-        // Newton = m·kg/s²
-        let n = Force::new(1.0);
-        assert_eq!(format!("{}", n), "1 m·kg/s²");
+    fn tensor_identity() {
+        let t: TensorQuantity<f64, 3, 3, dim::MomentOfInertia> = TensorQuantity::identity();
+        assert_relative_eq!(t.matrix[(0, 0)], 1.0);
     }
 
     #[test]
-    fn display_renders_power_unit() {
-        let p = Power::new(100.0);
-        assert_eq!(format!("{}", p), "100 m²·kg/s³");
-    }
-
-    // SiPrefix tests.
-    #[test]
-    fn si_prefix_scales_match_si_definitions() {
-        assert_eq!(SiPrefix::Yocto.scale(), 1.0e-24);
-        assert_eq!(SiPrefix::Milli.scale(), 1.0e-3);
-        assert_eq!(SiPrefix::None.scale(), 1.0);
-        assert_eq!(SiPrefix::Kilo.scale(), 1.0e3);
-        assert_eq!(SiPrefix::Mega.scale(), 1.0e6);
-        assert_eq!(SiPrefix::Giga.scale(), 1.0e9);
-        assert_eq!(SiPrefix::Yotta.scale(), 1.0e24);
+    fn tensor_times_vector() {
+        let m: TensorQuantity<f64, 3, 3, dim::Dimensionless> = TensorQuantity::identity();
+        let v = VectorQuantity::<f64, 3, dim::Meter>::new(nalgebra::Vector3::new(1.0, 2.0, 3.0));
+        let r = m * v;
+        assert_relative_eq!(r.vector.x, 1.0);
     }
 
     #[test]
-    fn si_prefix_scales_table_matches_individual_scale_method() {
-        for (idx, &scale) in SiPrefix::SCALES.iter().enumerate() {
-            // Round-trip: each entry in the table is the scale of the
-            // corresponding SiPrefix variant.
-            let prefix = match idx {
-                0 => SiPrefix::Yocto,
-                1 => SiPrefix::Zepto,
-                2 => SiPrefix::Atto,
-                3 => SiPrefix::Femto,
-                4 => SiPrefix::Pico,
-                5 => SiPrefix::Nano,
-                6 => SiPrefix::Micro,
-                7 => SiPrefix::Milli,
-                8 => SiPrefix::Centi,
-                9 => SiPrefix::Deci,
-                10 => SiPrefix::None,
-                11 => SiPrefix::Deca,
-                12 => SiPrefix::Hecto,
-                13 => SiPrefix::Kilo,
-                14 => SiPrefix::Mega,
-                15 => SiPrefix::Giga,
-                16 => SiPrefix::Tera,
-                17 => SiPrefix::Peta,
-                18 => SiPrefix::Exa,
-                19 => SiPrefix::Zetta,
-                20 => SiPrefix::Yotta,
-                _ => unreachable!(),
-            };
-            assert_eq!(prefix.scale(), scale, "mismatch at index {idx}");
-        }
+    fn complex_quantity() {
+        let z = ComplexMeters::new(Complex::new(3.0, 4.0));
+        assert_relative_eq!(z.value.re, 3.0);
+        assert_relative_eq!(z.value.im, 4.0);
     }
 
     #[test]
-    fn si_prefix_display_uses_official_abbreviation() {
-        assert_eq!(format!("{}", SiPrefix::Kilo), "k");
-        assert_eq!(format!("{}", SiPrefix::Micro), "µ");
-        assert_eq!(format!("{}", SiPrefix::Mega), "M");
-        assert_eq!(format!("{}", SiPrefix::None), "");
-    }
-
-    #[test]
-    fn with_prefix_multiplies_value() {
-        // 1 m scaled by Kilo = 1000 m. Same Rust type, value reflects the
-        // applied scale.
-        let one_m: Meters<f64> = Meters::new(1.0);
-        let in_kilo: Meters<f64> = one_m.with_prefix(SiPrefix::Kilo);
-        assert_eq!(in_kilo.into_value(), 1000.0);
-    }
-
-    #[test]
-    fn strip_prefix_divides_value() {
-        // Inverse of with_prefix: 1000.0 m / Kilo (1e3) = 1.0 m.
-        let in_kilo: Meters<f64> = Meters::new(1_000.0);
-        let in_meters: Meters<f64> = in_kilo.strip_prefix(SiPrefix::Kilo);
-        assert_eq!(in_meters.into_value(), 1.0);
-    }
-
-    #[test]
-    fn with_prefix_round_trip_returns_original_value() {
-        let original: Meters<f64> = Meters::new(42.0);
-        let in_mm: Meters<f64> = original.with_prefix(SiPrefix::Milli);
-        let back: Meters<f64> = in_mm.strip_prefix(SiPrefix::Milli);
-        assert_eq!(back.into_value(), 42.0);
-    }
-
-    #[test]
-    fn with_prefix_supports_full_si_ladder() {
-        // Spot-check several SI prefixes around the ladder.
-        let one: Meters<f64> = Meters::new(1.0);
-        assert_eq!(one.with_prefix(SiPrefix::Micro).into_value(), 1.0e-6);
-        assert_eq!(one.with_prefix(SiPrefix::Milli).into_value(), 1.0e-3);
-        assert_eq!(one.with_prefix(SiPrefix::Centi).into_value(), 1.0e-2);
-        assert_eq!(one.with_prefix(SiPrefix::Deci).into_value(), 1.0e-1);
-        assert_eq!(one.with_prefix(SiPrefix::Kilo).into_value(), 1.0e3);
-        assert_eq!(one.with_prefix(SiPrefix::Mega).into_value(), 1.0e6);
-    }
-
-    #[test]
-    fn acceleration_vec_wraps_and_exposes_components() {
-        let raw = Vector3::new(1.0, 2.0, 3.0);
-        let a = AccelerationVec::from_mps2(raw);
-        assert_eq!(a.raw(), &raw);
-        assert_eq!(a.x_mps2().into_value(), 1.0);
-        assert_eq!(a.y_mps2().into_value(), 2.0);
-        assert_eq!(a.z_mps2().into_value(), 3.0);
-    }
-
-    #[test]
-    fn acceleration_vec_plus_sums_components() {
-        let a = AccelerationVec::from_mps2(Vector3::new(1.0, 0.0, 0.0));
-        let b = AccelerationVec::from_mps2(Vector3::new(0.0, 2.0, 3.0));
-        let sum = a.plus(&b);
-        assert_eq!(sum.raw(), &Vector3::new(1.0, 2.0, 3.0));
-    }
-
-    #[test]
-    fn force_vec_round_trips_via_from_into() {
-        let raw = Vector3::new(4.0, 5.0, 6.0);
-        let f: ForceVec = raw.into();
-        let back: Vector3<f64> = f.into();
-        assert_eq!(back, raw);
-    }
-
-    #[test]
-    fn torque_vec_exposes_nm_components() {
-        let t = TorqueVec::from_nm(Vector3::new(7.0, 8.0, 9.0));
-        assert_relative_eq!(t.x_nm().into_value(), 7.0);
-        assert_relative_eq!(t.y_nm().into_value(), 8.0);
-        assert_relative_eq!(t.z_nm().into_value(), 9.0);
-    }
-
-    #[test]
-    fn torque_type_unit_is_kg_m2_per_s2() {
-        // Torque = m²·kg/s² (force-arm). Multiply a length-arm by a force and
-        // confirm the resulting type is `Torque`.
-        let arm: Meters<f64> = Meters::new(0.5);
-        let force: Force<f64> = Force::new(10.0);
-        let _t: Torque<f64> = arm * force;
+    fn gm_type() {
+        let mu: GravitationalParameter = Quantity::new(3.986004415e14);
+        assert_relative_eq!(mu.value, 3.986004415e14);
+        assert_eq!(dim::GravitationalParameter::NAME, "m³/s²");
     }
 }

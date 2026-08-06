@@ -1,6 +1,6 @@
 //! Force aggregator system: collects gravity + drag + SRP forces.
 
-use apogee_common::units::{AccelerationVec, Dimensionless, Kilograms, TorqueVec};
+use apogee_common::units::{AccelerationVector, Dimensionless, Kilograms, TorqueVector};
 use apogee_common::Position;
 use nalgebra::Vector3;
 
@@ -16,27 +16,27 @@ use crate::gravity::PointMassGravity;
 #[derive(Debug, Clone, Default)]
 pub struct AggregatedForces {
     /// Gravitational acceleration (m/s²).
-    pub gravity: AccelerationVec,
+    pub gravity: AccelerationVector,
     /// Atmospheric drag acceleration (m/s²).
-    pub drag: AccelerationVec,
+    pub drag: AccelerationVector,
     /// Solar radiation pressure acceleration (m/s²).
-    pub srp: AccelerationVec,
+    pub srp: AccelerationVector,
     /// Thrust acceleration (m/s²).
-    pub thrust: AccelerationVec,
+    pub thrust: AccelerationVector,
     /// External control torque (N·m), e.g. from reaction wheels or thrusters.
-    pub control_torque: TorqueVec,
+    pub control_torque: TorqueVector,
 }
 
 impl AggregatedForces {
     /// Sum all force contributions into total acceleration.
-    pub fn total(&self) -> AccelerationVec {
+    pub fn total(&self) -> AccelerationVector {
         // Sum component-wise via raw escape hatches, then re-wrap.
         let raw = self.gravity.raw() + self.drag.raw() + self.srp.raw() + self.thrust.raw();
-        AccelerationVec::from_mps2(raw)
+        AccelerationVector::new(raw)
     }
 
     /// Sum all torque contributions (N·m).
-    pub fn torque(&self) -> TorqueVec {
+    pub fn torque(&self) -> TorqueVector {
         self.control_torque
     }
 }
@@ -53,9 +53,9 @@ pub struct ControlInputs {
 impl AggregatedForces {
     /// Apply control inputs, converting force to acceleration using `mass_kg`.
     pub fn apply_control(&mut self, inputs: &ControlInputs, mass: Kilograms<f64>) {
-        self.control_torque = TorqueVec::from_nm(inputs.torque_nm);
+        self.control_torque = TorqueVector::new(inputs.torque_nm);
         let accel = inputs.force_n / mass.into_value();
-        self.thrust = AccelerationVec::from_mps2(accel);
+        self.thrust = AccelerationVector::new(accel);
     }
 }
 
@@ -84,7 +84,7 @@ pub fn aggregate_forces(
 ) -> AggregatedForces {
     let gravity = PointMassGravity
         .acceleration(&kinematics.position, celestial)
-        .unwrap_or_else(|_| AccelerationVec::from_mps2(Vector3::zeros()));
+        .unwrap_or_else(|_| AccelerationVector::new(Vector3::zeros()));
 
     let drag = {
         let model = Nrlmsise00;
@@ -130,8 +130,8 @@ pub fn aggregate_forces(
         gravity,
         drag,
         srp,
-        thrust: AccelerationVec::from_mps2(Vector3::zeros()),
-        control_torque: TorqueVec::from_nm(Vector3::zeros()),
+        thrust: AccelerationVector::new(Vector3::zeros()),
+        control_torque: TorqueVector::new(Vector3::zeros()),
     }
 }
 

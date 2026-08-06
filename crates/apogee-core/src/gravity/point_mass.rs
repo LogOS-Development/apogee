@@ -5,7 +5,7 @@
 //! ephemeris service.
 
 use crate::ephemeris::kernel::{BodyState, SolarSystemState};
-use apogee_common::units::AccelerationVec;
+use apogee_common::units::AccelerationVector;
 use apogee_common::{gravitational_parameter, Position};
 use nalgebra::Vector3;
 
@@ -35,7 +35,7 @@ impl PointMassGravity {
         &self,
         position: &Position,
         celestial: &SolarSystemState,
-    ) -> Result<AccelerationVec, String> {
+    ) -> Result<AccelerationVector, String> {
         let mut acc = Vector3::zeros();
 
         for BodyState {
@@ -62,7 +62,7 @@ impl PointMassGravity {
             acc += gm * delta / r3;
         }
 
-        Ok(AccelerationVec::from_mps2(acc))
+        Ok(AccelerationVector::new(acc))
     }
 }
 
@@ -96,7 +96,7 @@ mod tests {
         assert_relative_eq!(raw.y, 0.0, epsilon = 1e-15);
         assert_relative_eq!(raw.z, 0.0, epsilon = 1e-15);
         // Unit tag survives the conversion.
-        assert_relative_eq!(acc.x_mps2().into_value(), expected, epsilon = 1e-6);
+        assert_relative_eq!(acc.vector.x, expected, epsilon = 1e-6);
     }
 
     #[test]

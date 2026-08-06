@@ -24,6 +24,7 @@ dependencies = [
  "approx",
  "hifitime",
  "nalgebra",
+ "num-complex",
  "num-traits",
  "serde",
  "thiserror 1.0.69",

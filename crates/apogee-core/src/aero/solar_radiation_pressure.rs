@@ -1,7 +1,7 @@
 //! Solar radiation pressure model with eclipse detection.
 
 use apogee_common::constants::{AU, R_EARTH_EQ, SRP_1AU};
-use apogee_common::units::{AccelerationVec, Area, Dimensionless, Kilograms};
+use apogee_common::units::{AccelerationVector, Area, Dimensionless, Kilograms};
 use apogee_common::Position;
 use nalgebra::Vector3;
 
@@ -14,7 +14,7 @@ impl SolarRadiationPressure {
     /// the Sun's inertial position, the spacecraft SRP area, reflectivity,
     /// and mass.
     ///
-    /// Returns the acceleration as [`AccelerationVec`] (m/s²) in the
+    /// Returns the acceleration as [`AccelerationVector`] (m/s²) in the
     /// inertial frame.
     pub fn acceleration(
         &self,
@@ -23,15 +23,15 @@ impl SolarRadiationPressure {
         srp_area: Area<f64>,
         reflectivity: Dimensionless<f64>,
         mass: Kilograms<f64>,
-    ) -> AccelerationVec {
+    ) -> AccelerationVector {
         let to_sun = sun_position - spacecraft_position;
         let r = to_sun.norm();
         if r == 0.0 {
-            return AccelerationVec::from_mps2(Vector3::zeros());
+            return AccelerationVector::new(Vector3::zeros());
         }
 
         if is_eclipsed(spacecraft_position, sun_position) {
-            return AccelerationVec::from_mps2(Vector3::zeros());
+            return AccelerationVector::new(Vector3::zeros());
         }
 
         let flux_factor = AU * AU / (r * r);
@@ -42,7 +42,7 @@ impl SolarRadiationPressure {
         let direction = to_sun / r;
         let accel_magnitude = force_magnitude / mass.into_value();
 
-        AccelerationVec::from_mps2(direction * accel_magnitude)
+        AccelerationVector::new(direction * accel_magnitude)
     }
 
     /// SRP acceleration using the Sun fixed at origin (heliocentric
@@ -53,7 +53,7 @@ impl SolarRadiationPressure {
         srp_area: Area<f64>,
         reflectivity: Dimensionless<f64>,
         mass: Kilograms<f64>,
-    ) -> AccelerationVec {
+    ) -> AccelerationVector {
         // Place the Sun at +1 AU so the spacecraft at origin is on the sunlit
         // side of Earth and not eclipsed.
         self.acceleration(
