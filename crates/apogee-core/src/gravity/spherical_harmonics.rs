@@ -4,7 +4,7 @@
 //! the gravitational acceleration from a set of Stokes coefficients (C/S)
 //! up to a configured degree and order.
 
-use apogee_common::units::AccelerationVec;
+use apogee_common::units::AccelerationVector;
 use apogee_common::{constants::GM_EARTH, constants::R_EARTH_EQ, ApogeeError, ApogeeResult};
 use nalgebra::Vector3;
 use std::io::{BufRead, BufReader, Read};
@@ -130,9 +130,9 @@ impl SphericalHarmonics {
     ///
     /// For this phase the position is assumed to already be in the body-fixed
     /// frame (no EOP rotation). The acceleration is returned in the same frame,
-    /// wrapped in [`AccelerationVec`] so the m/s² unit tag is visible at the
+    /// wrapped in [`AccelerationVector`] so the m/s² unit tag is visible at the
     /// public API surface.
-    pub fn acceleration(&self, position: &Vector3<f64>) -> ApogeeResult<AccelerationVec> {
+    pub fn acceleration(&self, position: &Vector3<f64>) -> ApogeeResult<AccelerationVector> {
         self.acceleration_with_degree(position, self.degree, self.order)
     }
 
@@ -146,7 +146,7 @@ impl SphericalHarmonics {
         position: &Vector3<f64>,
         max_degree: usize,
         max_order: usize,
-    ) -> ApogeeResult<AccelerationVec> {
+    ) -> ApogeeResult<AccelerationVector> {
         let r = position.norm();
         if r == 0.0 {
             return Err(ApogeeError::Gravity(
@@ -208,7 +208,7 @@ impl SphericalHarmonics {
         let ay = a_r * cos_phi * sin_lambda - a_phi * sin_phi * sin_lambda + a_lambda * cos_lambda;
         let az = a_r * sin_phi + a_phi * cos_phi;
 
-        Ok(AccelerationVec::from_mps2(Vector3::new(ax, ay, az)))
+        Ok(AccelerationVector::new(Vector3::new(ax, ay, az)))
     }
 
     /// Select an effective degree and order for a given radius ratio.

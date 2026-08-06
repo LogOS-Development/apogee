@@ -8,23 +8,23 @@ pub use gradient_torque::*;
 pub use point_mass::*;
 pub use spherical_harmonics::*;
 
-use apogee_common::units::{AccelerationVec, TorqueVec};
+use apogee_common::units::{AccelerationVector, TorqueVector};
 
 /// Trait for gravity acceleration computation.
 pub trait GravityModel: Send + Sync {
-    /// Returns acceleration in inertial frame, tagged as [`AccelerationVec`]
+    /// Returns acceleration in inertial frame, tagged as [`AccelerationVector`]
     /// (m/s²) at the public API surface.
     fn acceleration(
         &self,
         position: &apogee_common::Position,
         celestial: &crate::ephemeris::SolarSystemState,
-    ) -> AccelerationVec;
+    ) -> AccelerationVector;
 
-    /// Returns gravity gradient torque in body frame as a [`TorqueVec`] (N·m).
+    /// Returns gravity gradient torque in body frame as a [`TorqueVector`] (N·m).
     fn gradient_torque(
         &self,
         position: &apogee_common::Position,
         inertia: &nalgebra::Matrix3<f64>,
         celestial: &crate::ephemeris::SolarSystemState,
-    ) -> TorqueVec;
+    ) -> TorqueVector;
 }

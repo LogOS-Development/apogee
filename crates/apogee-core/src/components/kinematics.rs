@@ -26,3 +26,18 @@ impl Default for Kinematics {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use approx::assert_relative_eq;
+
+    #[test]
+    fn kinematics_default() {
+        let k = Kinematics::default();
+        assert_relative_eq!(k.position.norm(), 0.0);
+        assert_relative_eq!(k.velocity.norm(), 0.0);
+        assert_relative_eq!(k.attitude.w, 1.0);
+        assert_relative_eq!(k.angular_velocity.norm(), 0.0);
+    }
+}

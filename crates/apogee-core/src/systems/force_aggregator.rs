@@ -1,6 +1,6 @@
 //! Force aggregator system: collects gravity + drag + SRP forces.
 
-use apogee_common::units::{AccelerationVec, Dimensionless, Kilograms, TorqueVec};
+use apogee_common::units::{AccelerationVector, Dimensionless, Kilograms, TorqueVector};
 use apogee_common::Position;
 use nalgebra::Vector3;
 
@@ -16,27 +16,25 @@ use crate::gravity::PointMassGravity;
 #[derive(Debug, Clone, Default)]
 pub struct AggregatedForces {
     /// Gravitational acceleration (m/s²).
-    pub gravity: AccelerationVec,
+    pub gravity: AccelerationVector,
     /// Atmospheric drag acceleration (m/s²).
-    pub drag: AccelerationVec,
+    pub drag: AccelerationVector,
     /// Solar radiation pressure acceleration (m/s²).
-    pub srp: AccelerationVec,
+    pub srp: AccelerationVector,
     /// Thrust acceleration (m/s²).
-    pub thrust: AccelerationVec,
+    pub thrust: AccelerationVector,
     /// External control torque (N·m), e.g. from reaction wheels or thrusters.
-    pub control_torque: TorqueVec,
+    pub control_torque: TorqueVector,
 }
 
 impl AggregatedForces {
     /// Sum all force contributions into total acceleration.
-    pub fn total(&self) -> AccelerationVec {
-        // Sum component-wise via raw escape hatches, then re-wrap.
-        let raw = self.gravity.raw() + self.drag.raw() + self.srp.raw() + self.thrust.raw();
-        AccelerationVec::from_mps2(raw)
+    pub fn total(&self) -> AccelerationVector {
+        self.gravity + self.drag + self.srp + self.thrust
     }
 
     /// Sum all torque contributions (N·m).
-    pub fn torque(&self) -> TorqueVec {
+    pub fn torque(&self) -> TorqueVector {
         self.control_torque
     }
 }
@@ -53,9 +51,9 @@ pub struct ControlInputs {
 impl AggregatedForces {
     /// Apply control inputs, converting force to acceleration using `mass_kg`.
     pub fn apply_control(&mut self, inputs: &ControlInputs, mass: Kilograms<f64>) {
-        self.control_torque = TorqueVec::from_nm(inputs.torque_nm);
+        self.control_torque = TorqueVector::new(inputs.torque_nm);
         let accel = inputs.force_n / mass.into_value();
-        self.thrust = AccelerationVec::from_mps2(accel);
+        self.thrust = AccelerationVector::new(accel);
     }
 }
 
@@ -84,7 +82,7 @@ pub fn aggregate_forces(
 ) -> AggregatedForces {
     let gravity = PointMassGravity
         .acceleration(&kinematics.position, celestial)
-        .unwrap_or_else(|_| AccelerationVec::from_mps2(Vector3::zeros()));
+        .unwrap_or_else(|_| AccelerationVector::new(Vector3::zeros()));
 
     let drag = {
         let model = Nrlmsise00;
@@ -130,8 +128,8 @@ pub fn aggregate_forces(
         gravity,
         drag,
         srp,
-        thrust: AccelerationVec::from_mps2(Vector3::zeros()),
-        control_torque: TorqueVec::from_nm(Vector3::zeros()),
+        thrust: AccelerationVector::new(Vector3::zeros()),
+        control_torque: TorqueVector::new(Vector3::zeros()),
     }
 }
 
@@ -170,6 +168,7 @@ mod tests {
 
     use super::*;
     use crate::components::dynamics::Dynamics;
+    use approx::assert_relative_eq;
 
     fn make_iss_state() -> Kinematics {
         let r = R_EARTH_EQ + 408_000.0;
@@ -216,5 +215,30 @@ mod tests {
         let total = forces.total();
         assert!(total.raw().iter().all(|v| v.is_finite()));
         assert!(forces.gravity.raw().norm() > 0.0);
+    }
+
+    #[test]
+    fn test_apply_control_sets_torque_and_thrust() {
+        let mut forces = AggregatedForces::default();
+        let inputs = ControlInputs {
+            torque_nm: Vector3::new(0.0, 0.0, 5.0),
+            force_n: Vector3::new(10.0, 0.0, 0.0),
+        };
+        forces.apply_control(&inputs, Kilograms::new(500.0));
+        assert_relative_eq!(forces.control_torque.vector.z, 5.0);
+        assert_relative_eq!(forces.thrust.vector.x, 10.0 / 500.0);
+    }
+
+    #[test]
+    fn test_total_sums_all_accelerations() {
+        let mut forces = AggregatedForces::default();
+        forces.gravity = AccelerationVector::from_xyz(1.0, 0.0, 0.0);
+        forces.drag = AccelerationVector::from_xyz(0.0, 2.0, 0.0);
+        forces.srp = AccelerationVector::from_xyz(0.0, 0.0, 3.0);
+        forces.thrust = AccelerationVector::from_xyz(0.5, 0.5, 0.5);
+        let total = forces.total();
+        assert_relative_eq!(total.vector.x, 1.5);
+        assert_relative_eq!(total.vector.y, 2.5);
+        assert_relative_eq!(total.vector.z, 3.5);
     }
 }

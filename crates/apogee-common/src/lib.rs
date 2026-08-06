@@ -5,6 +5,8 @@
 
 use nalgebra::Vector3;
 
+pub mod dynamics;
+pub mod math;
 pub mod time;
 pub mod units;
 
@@ -109,3 +111,25 @@ pub mod constants {
 
 /// Re-export the lookup helper at the crate root for ergonomic use.
 pub use constants::gravitational_parameter;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use approx::assert_relative_eq;
+
+    #[test]
+    fn gravitational_parameter_lookup() {
+        assert_relative_eq!(gravitational_parameter(399).unwrap(), constants::GM_EARTH);
+        assert_relative_eq!(gravitational_parameter(10).unwrap(), constants::GM_SUN);
+        assert!(gravitational_parameter(999).is_some());
+        assert!(gravitational_parameter(12345).is_none());
+    }
+
+    #[test]
+    fn apogee_error_display() {
+        let e = ApogeeError::Gravity("test error".to_string());
+        assert!(format!("{e}").contains("test error"));
+        let e2 = ApogeeError::Ephemeris("eph err".to_string());
+        assert!(format!("{e2}").contains("eph err"));
+    }
+}
