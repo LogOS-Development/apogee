@@ -1,12 +1,12 @@
-//! Spacecraft bundle: groups kinematics + dynamics + vehicle config.
+//! Spacecraft bundle: groups kinematics + rigid body + vehicle config.
 
-use super::dynamics::{Dynamics, SpacecraftConfig};
 use super::kinematics::Kinematics;
+use super::rigid_body::{RigidBody, SpacecraftConfig};
 
 /// ECS bundle representing a complete spacecraft entity.
 #[derive(Debug, Clone, Default)]
 pub struct SpacecraftBundle {
     pub kinematics: Kinematics,
-    pub dynamics: Dynamics,
+    pub rigid_body: RigidBody,
     pub config: SpacecraftConfig,
 }
