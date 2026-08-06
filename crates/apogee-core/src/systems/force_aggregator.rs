@@ -7,8 +7,8 @@ use nalgebra::Vector3;
 use crate::aero::model::AtmosphereInput;
 use crate::aero::nrlmsise00::Nrlmsise00;
 use crate::aero::{AtmosphericDrag, SolarRadiationPressure};
-use crate::components::rigid_body::{SimulationConfig, SpacecraftConfig};
 use crate::components::kinematics::Kinematics;
+use crate::components::rigid_body::{SimulationConfig, SpacecraftConfig};
 use crate::ephemeris::kernel::SolarSystemState;
 use crate::gravity::PointMassGravity;
 

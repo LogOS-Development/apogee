@@ -13,8 +13,8 @@ use apogee_common::constants::R_EARTH_EQ;
 use apogee_common::units::{Area, Kilograms, Seconds};
 use nalgebra::Vector3;
 
-use crate::components::rigid_body::{RigidBody, SimulationConfig, SpacecraftConfig};
 use crate::components::kinematics::Kinematics;
+use crate::components::rigid_body::{RigidBody, SimulationConfig, SpacecraftConfig};
 use crate::ephemeris::kernel::{BodyState, SolarSystemState};
 use crate::systems::step::propagate;
 use crate::tle::Tle;

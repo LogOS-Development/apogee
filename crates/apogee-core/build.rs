@@ -13,9 +13,7 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
     #[cfg(not(feature = "hwm14"))]
-    {
-        return;
-    }
+    {}
 
     #[cfg(feature = "hwm14")]
     {
