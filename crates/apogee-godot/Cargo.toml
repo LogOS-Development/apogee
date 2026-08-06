@@ -13,3 +13,8 @@ apogee-common = { workspace = true }
 apogee-core = { workspace = true }
 nalgebra = { workspace = true }
 thiserror = { workspace = true }
+godot = { workspace = true }
+
+[features]
+default = []
+hwm14 = ["apogee-core/hwm14"]

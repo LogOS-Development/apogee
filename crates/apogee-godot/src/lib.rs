@@ -1,7 +1,10 @@
-//! GDExtension bridge: state transfer from sim to Godot — stub.
-//!
-//! This crate compiles as a cdylib (.so/.dll) loaded by Godot 4.x.
-//! The godot-rust dependency will be added when GDExtension binding work begins.
+//! GDExtension entry point for the Apogee Godot bridge.
 
-pub mod bridge;
-pub mod nodes;
+use godot::prelude::*;
+
+mod atmosphere_visualizer;
+
+struct ApogeeGodot;
+
+#[gdextension]
+unsafe impl ExtensionLibrary for ApogeeGodot {}
