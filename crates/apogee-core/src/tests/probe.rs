@@ -11,6 +11,8 @@ use hifitime::Epoch;
 ///   - OUT_UNITS = KM-S
 ///   - epoch = 2025-01-01 12:00:00 TDB  (et = 789004800 s)
 #[test]
+#[ignore = "loads the DE441 kernel (3.5 GB) and is slow; run with --ignored or in the nightly slow-test job"]
+#[ntest::timeout(300_000)]
 fn de441_mars_barycenter_vs_horizons() {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),

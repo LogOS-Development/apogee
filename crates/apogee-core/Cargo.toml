@@ -30,3 +30,4 @@ required-features = ["hwm14"]
 [dev-dependencies]
 approx = "0.5"
 hwm14-sys = { path = "../hwm14-sys" }
+ntest = { workspace = true }
