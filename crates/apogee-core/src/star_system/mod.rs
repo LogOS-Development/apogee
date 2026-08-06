@@ -14,7 +14,6 @@
 use std::collections::HashMap;
 
 use apogee_common::constants::AU;
-use apogee_common::dynamics::{AccelerationVec, PositionVec, VelocityVec};
 use apogee_common::math::modulo;
 use apogee_common::units::GravitationalParameter;
 use hifitime::Epoch;

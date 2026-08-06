@@ -6,4 +6,3 @@
 //! newton-meters for torque. Specific output formats (AU, km/s, etc.) are
 //! handled at conversion boundaries, not here.
 
-pub use crate::units::{AccelerationVec, ForceVec, PositionVec, TorqueVec, VelocityVec};
