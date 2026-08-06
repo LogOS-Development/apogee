@@ -41,10 +41,6 @@
 //! let t = Seconds::new(2.0);
 //! let v: Velocity<f64> = x / t;
 //! let a: Acceleration<f64> = v / t;
-//!
-//! // Programmatic SI prefix handling: value is always stored in the base unit.
-//! let km = Meters::new(1.0).with_prefix(SiPrefix::Kilo); // 1000 m
-//! let in_mm = km.strip_prefix(SiPrefix::Milli);        // 1_000_000 mm
 //! ```
 
 use std::fmt;
@@ -59,7 +55,7 @@ use typenum::{Diff, Sum, Z0};
 /// (`SiPrefix::None`, no scaling) at index 10. Indexing [`SCALES`] by
 /// `variant as usize` gives the multiplicative factor relative to the
 /// unprefixed SI base.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub enum SiPrefix {
     Yocto,
     Zepto,
@@ -72,6 +68,7 @@ pub enum SiPrefix {
     Centi,
     Deci,
     /// Identity: 1.0 (no scaling).
+    #[default]
     None,
     Deca,
     Hecto,
@@ -192,10 +189,14 @@ pub type GravitationalParameter<T> = Quantity<T, Unit<(P3, Z0, N2, Z0, Z0, Z0, Z
 /// A scalar `value` tagged with a compile-time unit `U`.
 ///
 /// The unit is part of the type, so dimensional mismatches are caught at
-/// compile time. The runtime representation is the scalar alone.
+/// compile time. The runtime representation stores the SI base-unit value
+/// plus an auto-selected [`SiPrefix`] for display and conversion. The base
+/// value is always available via [`Self::into_value`] and the public `value`
+/// field; the normalized mantissa can be obtained with [`Self::mantissa`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct Quantity<T, U> {
     pub value: T,
+    pub prefix: SiPrefix,
     _unit: PhantomData<U>,
 }
 
@@ -419,7 +420,7 @@ mod tests {
     #[test]
     fn display_renders_inverse_unit_with_negative_superscript() {
         let f = Frequency::new(60.0);
-        assert_eq!(format!("{}", f), "60 s⁻¹");
+        assert_eq!(format!("{}", f), "6 das⁻¹");
     }
 
     #[test]
@@ -430,14 +431,26 @@ mod tests {
 
     #[test]
     fn display_renders_force_unit() {
-        let f = Force::new(100.0);
-        assert_eq!(format!("{}", f), "100 m·kg/s²");
+        let f = Force::new(5.0);
+        assert_eq!(format!("{}", f), "5 m·kg/s²");
+    }
+
+    #[test]
+    fn display_renders_prefixed_force_unit() {
+        let f = Force::new(5_000.0);
+        assert_eq!(format!("{}", f), "5 km·kg/s²");
     }
 
     #[test]
     fn display_renders_power_unit() {
-        let p = Power::new(100.0);
-        assert_eq!(format!("{}", p), "100 m²·kg/s³");
+        let p = Power::new(5.0);
+        assert_eq!(format!("{}", p), "5 m²·kg/s³");
+    }
+
+    #[test]
+    fn display_renders_prefixed_power_unit() {
+        let p = Power::new(500.0);
+        assert_eq!(format!("{}", p), "5 hm²·kg/s³");
     }
 
     #[test]
@@ -448,12 +461,26 @@ mod tests {
     }
 
     #[test]
-    fn with_prefix_rescales_same_unit() {
-        let one_m: Meters<f64> = Meters::new(1.0);
-        let in_kilo = one_m.with_prefix(SiPrefix::Kilo);
-        assert_eq!(in_kilo.into_value(), 1_000.0);
-        let back = in_kilo.strip_prefix(SiPrefix::Kilo);
-        assert_eq!(back.into_value(), 1.0);
+    fn auto_prefix_normalizes_mantissa_to_one_to_ten() {
+        let m = Meters::new(5_000.0);
+        assert_eq!(m.into_value(), 5_000.0);
+        assert_eq!(m.mantissa(), 5.0);
+        assert_eq!(m.prefix(), SiPrefix::Kilo);
+
+        let small = Meters::new(0.5);
+        assert_eq!(small.into_value(), 0.5);
+        assert_eq!(small.mantissa(), 5.0);
+        assert_eq!(small.prefix(), SiPrefix::Deci);
+
+        let zero = Meters::new(0.0);
+        assert_eq!(zero.into_value(), 0.0);
+        assert_eq!(zero.mantissa(), 0.0);
+        assert_eq!(zero.prefix(), SiPrefix::None);
+
+        let negative = Meters::new(-5_000.0);
+        assert_eq!(negative.into_value(), -5_000.0);
+        assert_eq!(negative.mantissa(), -5.0);
+        assert_eq!(negative.prefix(), SiPrefix::Kilo);
     }
 
     #[test]
@@ -525,67 +552,120 @@ mod tests {
 }
 
 impl<T, U> Quantity<T, U> {
-    /// Wrap a raw scalar value with a unit.
+    /// Construct a quantity without auto-prefixing. The stored value is the
+    /// SI base value and the prefix is [`SiPrefix::None`].
+    ///
+    /// Use this for non-`f64` scalar types. For `f64` values, prefer
+    /// [`Quantity::new`] so the prefix is auto-selected.
     #[must_use]
-    pub const fn new(value: T) -> Self {
+    pub const fn new_raw(value: T) -> Self {
         Self {
             value,
+            prefix: SiPrefix::None,
             _unit: PhantomData,
         }
     }
 
-    /// Unwrap the scalar value.
+    /// Unwrap the SI base-unit scalar value.
     #[must_use]
     pub fn into_value(self) -> T {
         self.value
     }
 
-    /// Borrow the scalar value.
+    /// Borrow the SI base-unit scalar value.
     #[must_use]
     pub const fn value_ref(&self) -> &T {
         &self.value
     }
 
-    /// Apply an SI decimal prefix to the wrapped value, returning a new
-    /// `Quantity` in the same unit. The prefix's [`SiPrefix::scale`]
-    /// factor is multiplied with `self.value`.
+    /// The auto-selected decimal prefix carried by this quantity.
+    #[must_use]
+    pub const fn prefix(&self) -> SiPrefix {
+        self.prefix
+    }
+}
+
+impl<U> Quantity<f64, U> {
+    /// Wrap an `f64` scalar value with a unit, auto-selecting the SI decimal
+    /// prefix that normalizes the mantissa into `[1.0, 10.0)`.
     ///
-    /// This is the runtime-programmatic counterpart to the type-level
-    /// prefixed aliases (e.g. `Kilometers`): users can construct any
-    /// quantity with `Quantity::new(value)` and then `with_prefix` it into
-    /// a chosen scale, or do the reverse by dividing by a known prefix
-    /// scale (`self.value / SiPrefix::Milli.scale()`).
+    /// The SI base value is stored in `value`; `prefix` records the selected
+    /// scale. Use [`Self::mantissa`] to read the normalized mantissa, and
+    /// [`Self::into_value`] for the base value.
     ///
     /// # Example
     /// ```
     /// use apogee_common::units::*;
     ///
-    /// // Scale a base-unit value by a prefix factor.
-    /// let one_m: Meters<f64> = Meters::new(1.0);
-    /// let in_kilo = one_m.with_prefix(SiPrefix::Kilo);
-    /// assert_eq!(in_kilo.into_value(), 1_000.0);
+    /// let r = Meters::new(5_000.0);        // base value 5000 m, prefix Kilo
+    /// assert_eq!(r.into_value(), 5_000.0); // base value unchanged
+    /// assert_eq!(r.mantissa(), 5.0);       // normalized mantissa
+    /// assert_eq!(r.prefix(), SiPrefix::Kilo);
     ///
-    /// // Round-trip: apply a prefix and then strip it.
-    /// let in_mega = one_m.with_prefix(SiPrefix::Mega);
-    /// let back = in_mega.strip_prefix(SiPrefix::Mega);
-    /// assert_eq!(back.into_value(), 1.0);
+    /// let small = Meters::new(0.5);        // 0.5 m -> 5 dm, prefix Deci
+    /// assert_eq!(small.mantissa(), 5.0);
+    /// assert_eq!(small.prefix(), SiPrefix::Deci);
     /// ```
     #[must_use]
-    pub fn with_prefix(self, prefix: SiPrefix) -> Self
-    where
-        T: Copy + core::ops::Mul<f64, Output = T>,
-    {
-        Quantity::new(self.value * prefix.scale())
+    pub const fn new(value: f64) -> Self {
+        let prefix = Self::select_prefix(value);
+        Self {
+            value,
+            prefix,
+            _unit: PhantomData,
+        }
     }
 
-    /// Divide the wrapped value by an SI prefix scale, returning a new
-    /// `Quantity` in the same unit. Inverse of [`Quantity::with_prefix`].
+    /// The normalized mantissa in `[1.0, 10.0)` (sign preserved). Multiply by
+    /// [`Self::prefix`]`].scale()` to recover the base SI value.
     #[must_use]
-    pub fn strip_prefix(self, prefix: SiPrefix) -> Self
-    where
-        T: Copy + core::ops::Div<f64, Output = T>,
-    {
-        Quantity::new(self.value / prefix.scale())
+    pub fn mantissa(&self) -> f64 {
+        self.value / self.prefix.scale()
+    }
+
+    const fn select_prefix(value: f64) -> SiPrefix {
+        Self::select_prefix_from(value, SiPrefix::SCALES.len())
+    }
+
+    const fn select_prefix_from(value: f64, idx: usize) -> SiPrefix {
+        if idx == 0 {
+            return SiPrefix::None;
+        }
+        let i = idx - 1;
+        let scale = SiPrefix::SCALES[i];
+        let scaled_abs = (value / scale).abs();
+        if scaled_abs >= 1.0 && scaled_abs < 10.0 {
+            Self::prefix_at(i)
+        } else {
+            Self::select_prefix_from(value, i)
+        }
+    }
+
+    const fn prefix_at(idx: usize) -> SiPrefix {
+        match idx {
+            0 => SiPrefix::Yocto,
+            1 => SiPrefix::Zepto,
+            2 => SiPrefix::Atto,
+            3 => SiPrefix::Femto,
+            4 => SiPrefix::Pico,
+            5 => SiPrefix::Nano,
+            6 => SiPrefix::Micro,
+            7 => SiPrefix::Milli,
+            8 => SiPrefix::Centi,
+            9 => SiPrefix::Deci,
+            10 => SiPrefix::None,
+            11 => SiPrefix::Deca,
+            12 => SiPrefix::Hecto,
+            13 => SiPrefix::Kilo,
+            14 => SiPrefix::Mega,
+            15 => SiPrefix::Giga,
+            16 => SiPrefix::Tera,
+            17 => SiPrefix::Peta,
+            18 => SiPrefix::Exa,
+            19 => SiPrefix::Zetta,
+            20 => SiPrefix::Yotta,
+            _ => SiPrefix::None,
+        }
     }
 }
 
@@ -622,7 +702,7 @@ impl Half for N8 {
     type Output = N4;
 }
 
-impl<T, M, Kg, S, A, K, Mol, Cd> Quantity<T, Unit<(M, Kg, S, A, K, Mol, Cd)>>
+impl<M, Kg, S, A, K, Mol, Cd> Quantity<f64, Unit<(M, Kg, S, A, K, Mol, Cd)>>
 where
     M: Half,
     Kg: Half,
@@ -631,14 +711,13 @@ where
     K: Half,
     Mol: Half,
     Cd: Half,
-    T: num_traits::Float,
 {
     #[must_use]
     #[allow(clippy::type_complexity)]
     pub fn sqrt(
         self,
     ) -> Quantity<
-        T,
+        f64,
         Unit<(
             M::Output,
             Kg::Output,
@@ -655,31 +734,22 @@ where
 
 // --- Addition / subtraction (same unit) ---
 
-impl<T, U> Add for Quantity<T, U>
-where
-    T: Add,
-{
-    type Output = Quantity<<T as Add>::Output, U>;
+impl<U> Add for Quantity<f64, U> {
+    type Output = Self;
     fn add(self, rhs: Self) -> Self::Output {
         Quantity::new(self.value + rhs.value)
     }
 }
 
-impl<T, U> Sub for Quantity<T, U>
-where
-    T: Sub,
-{
-    type Output = Quantity<<T as Sub>::Output, U>;
+impl<U> Sub for Quantity<f64, U> {
+    type Output = Self;
     fn sub(self, rhs: Self) -> Self::Output {
         Quantity::new(self.value - rhs.value)
     }
 }
 
-impl<T, U> Neg for Quantity<T, U>
-where
-    T: Neg,
-{
-    type Output = Quantity<<T as Neg>::Output, U>;
+impl<U> Neg for Quantity<f64, U> {
+    type Output = Self;
     fn neg(self) -> Self::Output {
         Quantity::new(-self.value)
     }
@@ -687,11 +757,10 @@ where
 
 // --- Multiplication / division (combine units) ---
 
-impl<T, M1, Kg1, S1, A1, K1, Mol1, Cd1, M2, Kg2, S2, A2, K2, Mol2, Cd2>
-    Mul<Quantity<T, Unit<(M2, Kg2, S2, A2, K2, Mol2, Cd2)>>>
-    for Quantity<T, Unit<(M1, Kg1, S1, A1, K1, Mol1, Cd1)>>
+impl<M1, Kg1, S1, A1, K1, Mol1, Cd1, M2, Kg2, S2, A2, K2, Mol2, Cd2>
+    Mul<Quantity<f64, Unit<(M2, Kg2, S2, A2, K2, Mol2, Cd2)>>>
+    for Quantity<f64, Unit<(M1, Kg1, S1, A1, K1, Mol1, Cd1)>>
 where
-    T: Mul,
     M1: Add<M2>,
     Kg1: Add<Kg2>,
     S1: Add<S2>,
@@ -701,7 +770,7 @@ where
     Cd1: Add<Cd2>,
 {
     type Output = Quantity<
-        <T as Mul>::Output,
+        f64,
         Unit<(
             Sum<M1, M2>,
             Sum<Kg1, Kg2>,
@@ -712,16 +781,15 @@ where
             Sum<Cd1, Cd2>,
         )>,
     >;
-    fn mul(self, rhs: Quantity<T, Unit<(M2, Kg2, S2, A2, K2, Mol2, Cd2)>>) -> Self::Output {
+    fn mul(self, rhs: Quantity<f64, Unit<(M2, Kg2, S2, A2, K2, Mol2, Cd2)>>) -> Self::Output {
         Quantity::new(self.value * rhs.value)
     }
 }
 
-impl<T, M1, Kg1, S1, A1, K1, Mol1, Cd1, M2, Kg2, S2, A2, K2, Mol2, Cd2>
-    Div<Quantity<T, Unit<(M2, Kg2, S2, A2, K2, Mol2, Cd2)>>>
-    for Quantity<T, Unit<(M1, Kg1, S1, A1, K1, Mol1, Cd1)>>
+impl<M1, Kg1, S1, A1, K1, Mol1, Cd1, M2, Kg2, S2, A2, K2, Mol2, Cd2>
+    Div<Quantity<f64, Unit<(M2, Kg2, S2, A2, K2, Mol2, Cd2)>>>
+    for Quantity<f64, Unit<(M1, Kg1, S1, A1, K1, Mol1, Cd1)>>
 where
-    T: Div,
     M1: Sub<M2>,
     Kg1: Sub<Kg2>,
     S1: Sub<S2>,
@@ -731,7 +799,7 @@ where
     Cd1: Sub<Cd2>,
 {
     type Output = Quantity<
-        <T as Div>::Output,
+        f64,
         Unit<(
             Diff<M1, M2>,
             Diff<Kg1, Kg2>,
@@ -742,29 +810,23 @@ where
             Diff<Cd1, Cd2>,
         )>,
     >;
-    fn div(self, rhs: Quantity<T, Unit<(M2, Kg2, S2, A2, K2, Mol2, Cd2)>>) -> Self::Output {
+    fn div(self, rhs: Quantity<f64, Unit<(M2, Kg2, S2, A2, K2, Mol2, Cd2)>>) -> Self::Output {
         Quantity::new(self.value / rhs.value)
     }
 }
 
 // --- Scalar multiplication / division ---
 
-impl<T, U> Mul<T> for Quantity<T, U>
-where
-    T: Mul<Output = T>,
-{
-    type Output = Quantity<T, U>;
-    fn mul(self, rhs: T) -> Self::Output {
+impl<U> Mul<f64> for Quantity<f64, U> {
+    type Output = Quantity<f64, U>;
+    fn mul(self, rhs: f64) -> Self::Output {
         Quantity::new(self.value * rhs)
     }
 }
 
-impl<T, U> Div<T> for Quantity<T, U>
-where
-    T: Div<Output = T>,
-{
-    type Output = Quantity<T, U>;
-    fn div(self, rhs: T) -> Self::Output {
+impl<U> Div<f64> for Quantity<f64, U> {
+    type Output = Quantity<f64, U>;
+    fn div(self, rhs: f64) -> Self::Output {
         Quantity::new(self.value / rhs)
     }
 }
@@ -795,9 +857,8 @@ impl_to_i8! {
 
 const UNIT_NAMES: [&str; 7] = ["m", "kg", "s", "A", "K", "mol", "cd"];
 
-impl<T, M, Kg, S, A, K, Mol, Cd> fmt::Display for Quantity<T, Unit<(M, Kg, S, A, K, Mol, Cd)>>
+impl<M, Kg, S, A, K, Mol, Cd> fmt::Display for Quantity<f64, Unit<(M, Kg, S, A, K, Mol, Cd)>>
 where
-    T: fmt::Display,
     M: ToI8,
     Kg: ToI8,
     S: ToI8,
@@ -816,7 +877,8 @@ where
             Mol::VALUE,
             Cd::VALUE,
         ];
-        write!(f, "{} {}", self.value, format_unit(&exponents))?;
+        let mantissa = self.value / self.prefix.scale();
+        write!(f, "{} {}{}", mantissa, self.prefix, format_unit(&exponents))?;
         Ok(())
     }
 }
