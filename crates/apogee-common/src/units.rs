@@ -9,9 +9,28 @@
 //! Three primitive wrappers:
 //! - [`Quantity<T, U>`] — scalar (real or complex) with a unit tag.
 //! - [`VectorQuantity<T, N, U>`] — `N`-component vector, `nalgebra::SVector`.
-//! - [`TensorQuantity<T, M, N, U>`] — `M`-component matrix, `nalgebra::SMatrix`.
+//! - [`TensorQuantity<T, M, N, U>`] — `M`×`N` matrix, `nalgebra::SMatrix`.
 //!
 //! `T` defaults to `f64`; use `num_complex::Complex<f64>` for phasor domains.
+//!
+//! # Architecture
+//!
+//! The system has two layers:
+//!
+//! 1. **Unit tags** ([`Unit`] aliases in the [`dim`] module) — zero-sized
+//!    phantom types that carry dimension information at the type level.
+//!    These are an implementation detail; consumers rarely reference them
+//!    directly.
+//!
+//! 2. **Quantity wrappers** ([`Quantity`], [`VectorQuantity`],
+//!    [`TensorQuantity`]) — carry a runtime value (scalar, vector, or
+//!    matrix) tagged with a unit type.  Public type aliases like
+//!    [`Meters`], [`Velocity`], [`Force`] etc. are the primary API.
+//!
+//! The [`dim`] module is kept separate from the quantity aliases so the
+//! raw unit-tag types are clearly distinguished from the quantity wrappers
+//! that most consumers use.  Mixing them in the same namespace would make
+//! it ambiguous whether `Meter` refers to a unit tag or a scalar quantity.
 
 use std::fmt;
 use std::marker::PhantomData;
@@ -31,6 +50,10 @@ use typenum::{Diff, Sum, Z0};
 /// base units `[m, kg, s, A, K, mol, cd]`.
 ///
 /// `Mul` adds exponents, `Div` subtracts them — both at compile time.
+/// `Unit` is zero-sized (`PhantomData`); it exists only in the type system.
+///
+/// Concrete unit tags are defined as type aliases in the [`dim`] module,
+/// e.g. `dim::Meter = Unit<(P1, Z0, Z0, Z0, Z0, Z0, Z0)>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct Unit<T>(PhantomData<T>);
 
@@ -70,9 +93,21 @@ where
 // SI base unit types  (dim:: module — implementation detail)
 // ===========================================================================
 
+/// Type-level unit tags — zero-sized phantom types encoding SI dimensions.
+///
+/// Each alias is a `Unit<(...)>` with type-level integer exponents over
+/// `[m, kg, s, A, K, mol, cd]`.  For example, `Meter` is
+/// `Unit<(P1, Z0, Z0, Z0, Z0, Z0, Z0)>` — exponent +1 on length, zero
+/// elsewhere.
+///
+/// These are the **unit tags** only.  The public API wraps them in
+/// [`Quantity<T, U>`] via aliases like [`Meters`], [`Velocity`], etc.
+/// The separation keeps the type-level dimension machinery distinct from
+/// the runtime-valued quantity types that consumers actually use.
 pub mod dim {
     use super::*;
 
+    // --- SI base units ---
     pub type Meter = Unit<(P1, Z0, Z0, Z0, Z0, Z0, Z0)>;
     pub type Kilogram = Unit<(Z0, P1, Z0, Z0, Z0, Z0, Z0)>;
     pub type Second = Unit<(Z0, Z0, P1, Z0, Z0, Z0, Z0)>;
@@ -82,6 +117,7 @@ pub mod dim {
     pub type Candela = Unit<(Z0, Z0, Z0, Z0, Z0, Z0, P1)>;
     pub type Dimensionless = Unit<(Z0, Z0, Z0, Z0, Z0, Z0, Z0)>;
 
+    // --- Derived units (m·kg⁻¹·s²·A⁻¹·K⁻¹·mol⁻¹·cd⁻¹) ---
     pub type Velocity = Unit<(P1, Z0, N1, Z0, Z0, Z0, Z0)>;
     pub type Acceleration = Unit<(P1, Z0, N2, Z0, Z0, Z0, Z0)>;
     pub type Force = Unit<(P1, P1, N2, Z0, Z0, Z0, Z0)>;
@@ -111,17 +147,15 @@ pub mod dim {
     pub type Wavenumber = Unit<(N1, Z0, Z0, Z0, Z0, Z0, Z0)>;
 }
 
-// Re-export unit types for internal use.  The public API surface uses
-// the Quantity aliases below, which reference these via `dim::`.
-// Unit types live in `dim::` — quantity aliases below are the public API.
-// Re-export a few unit types that consumers reference directly (not as
-// quantities).  Dimensionless, Angle, etc. are quantity aliases below.
-pub use dim::{SpecificImpulse};
-
 // ===========================================================================
 // SiPrefix
 // ===========================================================================
 
+/// SI metric prefix (yocto through yotta).
+///
+/// Prefixes are a **construction/display concern**, not a type-level
+/// concern.  All quantities store values in SI base units internally;
+/// `in_prefix` converts for display only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub enum SiPrefix {
     Yocto, Zepto, Atto, Femto, Pico, Nano, Micro, Milli, Centi, Deci,
@@ -130,11 +164,13 @@ pub enum SiPrefix {
 }
 
 impl SiPrefix {
+    /// Scale factors indexed by enum discriminant (10⁻²⁴ … 10²⁴).
     pub const SCALES: [f64; 21] = [
         1.0e-24, 1.0e-21, 1.0e-18, 1.0e-15, 1.0e-12, 1.0e-9, 1.0e-6, 1.0e-3,
         1.0e-2, 1.0e-1, 1.0, 1.0e1, 1.0e2, 1.0e3, 1.0e6, 1.0e9, 1.0e12,
         1.0e15, 1.0e18, 1.0e21, 1.0e24,
     ];
+    /// Returns the multiplicative scale factor (e.g. `Kilo → 1000.0`).
     #[inline] #[must_use]
     pub const fn scale(self) -> f64 { Self::SCALES[self as usize] }
 }
@@ -157,6 +193,15 @@ impl fmt::Display for SiPrefix {
 // UnitName
 // ===========================================================================
 
+/// Associates a display name (e.g. `"m"`, `"m/s"`, `"N"`) with a unit tag.
+///
+/// This is implemented **per unit type alias** in [`dim`], not on the
+/// generic `Unit<T>` struct itself.  Each `dim::Meter`, `dim::Velocity`,
+/// etc. is a distinct monomorphised type (`Unit<(P1, Z0, ...)>`,
+/// `Unit<(P1, Z0, N1, ...)>`, …), so we provide a separate `impl
+/// UnitName` for each one with the appropriate `NAME` constant.  Rust's
+/// trait resolution picks the correct implementation based on the
+/// concrete unit type at compile time — no runtime dispatch involved.
 pub trait UnitName { const NAME: &'static str; }
 
 impl UnitName for dim::Meter { const NAME: &'static str = "m"; }
@@ -194,8 +239,23 @@ impl UnitName for dim::Wavenumber { const NAME: &'static str = "1/m"; }
 // Quantity<T, U>
 // ===========================================================================
 
+/// A scalar value tagged with a compile-time unit.
+///
+/// `T` is the scalar type (defaults to `f64`; use `Complex<f64>` for
+/// phasor domains).  `U` is a [`Unit`] type tag from the [`dim`] module.
+///
+/// Arithmetic operators enforce dimensional correctness at compile time:
+/// - `Add`/`Sub` require both operands to have the **same unit** `U`.
+/// - `Mul`/`Div` between quantities produce a new quantity whose unit is
+///   the product/quotient of the operands' units (type-level exponent
+///   arithmetic).
+/// - `Mul`/`Div` by a raw `T` scalar preserves the unit unchanged.
+///
+/// Public type aliases like [`Meters`], [`Velocity`], [`Force`] etc.
+/// provide convenient names for common `Quantity` instantiations.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Quantity<T, U> {
+    /// The raw scalar value in SI base units.
     pub value: T,
     _u: PhantomData<U>,
 }
@@ -210,9 +270,16 @@ impl<T: Default, U> Default for Quantity<T, U> {
 }
 
 impl<T, U> Quantity<T, U> {
+    /// Creates a quantity from a raw scalar value, inferring the unit type `U`.
     #[inline] #[must_use] pub const fn new(value: T) -> Self { Self { value, _u: PhantomData } }
+    /// Borrows the raw scalar value.
     #[inline] #[must_use] pub const fn value(&self) -> &T { &self.value }
+    /// Consumes the quantity, returning the raw scalar value.
     #[inline] #[must_use] pub fn into_value(self) -> T { self.value }
+    /// Applies a function to the scalar value, preserving the unit tag.
+    ///
+    /// Useful for applying math functions (sqrt, abs, etc.) without
+    /// losing the unit annotation.
     #[inline] #[must_use] pub fn map<F, R>(self, f: F) -> Quantity<R, U> where F: FnOnce(T) -> R {
         Quantity { value: f(self.value), _u: PhantomData }
     }
@@ -221,8 +288,14 @@ impl<T, U> Quantity<T, U> {
 impl<T, U> Deref for Quantity<T, U> { type Target = T; #[inline] fn deref(&self) -> &T { &self.value } }
 impl<T, U> DerefMut for Quantity<T, U> { #[inline] fn deref_mut(&mut self) -> &mut T { &mut self.value } }
 
+/// Prefix conversion for `f64`-backed quantities.
+///
+/// All quantities store in SI base units.  These methods convert for
+/// display or I/O in a different prefix.
 pub trait ConvertPrefix {
+    /// Returns the value expressed in the given prefix (e.g. 1000 m → 1.0 km).
     fn in_prefix(&self, prefix: SiPrefix) -> f64;
+    /// Returns a new quantity with the value converted to the given prefix.
     fn convert_to(&self, prefix: SiPrefix) -> Self;
 }
 impl<U> ConvertPrefix for Quantity<f64, U> {
@@ -230,11 +303,19 @@ impl<U> ConvertPrefix for Quantity<f64, U> {
     #[inline] fn convert_to(&self, _p: SiPrefix) -> Self { Self::new(self.value) }
 }
 
+// --- Add / Sub: same-unit only (enforced at compile time) ---
+//
+// Both operands must be `Quantity<T, U>` with the *same* `U`.  Attempting
+// to add e.g. `Meters` and `Seconds` is a type error — the compiler
+// rejects it because `dim::Meter != dim::Second`.
+
 impl<T: NumAssign, U> Add for Quantity<T, U> { type Output = Self; #[inline] fn add(self, r: Self) -> Self { Self::new(self.value + r.value) } }
 impl<T: NumAssign, U> AddAssign for Quantity<T, U> { #[inline] fn add_assign(&mut self, r: Self) { self.value += r.value; } }
 impl<T: NumAssign, U> Sub for Quantity<T, U> { type Output = Self; #[inline] fn sub(self, r: Self) -> Self { Self::new(self.value - r.value) } }
 impl<T: NumAssign, U> SubAssign for Quantity<T, U> { #[inline] fn sub_assign(&mut self, r: Self) { self.value -= r.value; } }
 impl<T: NumAssign + Neg<Output = T>, U> Neg for Quantity<T, U> { type Output = Self; #[inline] fn neg(self) -> Self { Self::new(-self.value) } }
+
+// --- Mul / Div between quantities: unit product/quotient at compile time ---
 
 impl<T: NumAssign, A: Mul<B>, B> Mul<Quantity<T, B>> for Quantity<T, A> {
     type Output = Quantity<T, <A as Mul<B>>::Output>;
@@ -244,6 +325,7 @@ impl<T: NumAssign, A: Div<B>, B> Div<Quantity<T, B>> for Quantity<T, A> {
     type Output = Quantity<T, <A as Div<B>>::Output>;
     #[inline] fn div(self, r: Quantity<T, B>) -> Self::Output { Quantity::new(self.value / r.value) }
 }
+// --- Mul / Div by raw scalar: unit preserved ---
 impl<T: NumAssign, U> Mul<T> for Quantity<T, U> { type Output = Self; #[inline] fn mul(self, r: T) -> Self { Self::new(self.value * r) } }
 impl<T: NumAssign, U> Div<T> for Quantity<T, U> { type Output = Self; #[inline] fn div(self, r: T) -> Self { Self::new(self.value / r) } }
 impl<T: NumAssign, U> MulAssign<T> for Quantity<T, U> { #[inline] fn mul_assign(&mut self, r: T) { self.value *= r; } }
@@ -256,8 +338,15 @@ impl<T: fmt::Display, U: UnitName> fmt::Display for Quantity<T, U> {
 // VectorQuantity<T, N, U>
 // ===========================================================================
 
+/// An `N`-component vector tagged with a compile-time unit.
+///
+/// Wraps `nalgebra::SVector<T, N>`.  `U` is the unit tag shared by all
+/// components.  Arithmetic follows the same dimensional rules as
+/// [`Quantity`]: `Add`/`Sub` require matching units, `Mul`/`Div` by a
+/// scalar preserves units, and `dot`/`cross` produce unit products.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VectorQuantity<T, const N: usize, U> {
+    /// The raw nalgebra vector, stored in SI base units.
     pub vector: SVector<T, N>,
     _u: PhantomData<U>,
 }
@@ -276,24 +365,51 @@ impl<T, const N: usize, U> DerefMut for VectorQuantity<T, N, U> {
 }
 
 impl<T, const N: usize, U> VectorQuantity<T, N, U> {
+    /// Creates a vector quantity from a raw nalgebra vector.
     #[inline] #[must_use] pub const fn new(vector: SVector<T, N>) -> Self { Self { vector, _u: PhantomData } }
-    /// Borrow the raw nalgebra vector.
+    /// Borrows the raw nalgebra vector.
     #[inline] #[must_use] pub const fn vector(&self) -> &SVector<T, N> { &self.vector }
-    /// Alias for [`vector`](Self::vector) — borrow the raw nalgebra vector.
+    /// Alias for [`vector`](Self::vector) — borrows the raw nalgebra vector.
     #[inline] #[must_use] pub const fn value(&self) -> &SVector<T, N> { &self.vector }
-    /// Alias for [`vector`](Self::vector) — borrow the raw nalgebra vector.
+    /// Alias for [`vector`](Self::vector) — borrows the raw nalgebra vector.
     #[inline] #[must_use] pub const fn raw(&self) -> &SVector<T, N> { &self.vector }
+    /// Consumes the vector quantity, returning the raw nalgebra vector.
     #[inline] #[must_use] pub fn into_vector(self) -> SVector<T, N> { self.vector }
 }
 
 impl<T: NumAssign + Clone + nalgebra::Scalar + nalgebra::ComplexField, const N: usize, U> VectorQuantity<T, N, U> {
+    /// Euclidean norm (magnitude) of the vector.
+    ///
+    /// Returns a [`Quantity`] with the **same unit** `U` and scalar type
+    /// `T::RealField` (the real part for complex scalars).
     #[inline] #[must_use] pub fn norm(&self) -> Quantity<T::RealField, U> { Quantity::new(self.vector.norm()) }
+
+    /// Squared Euclidean norm.
+    ///
+    /// Returns a [`Quantity`] whose unit is `U * U` (the unit squared),
+    /// matching the physics: ‖v‖² has units of v².
     #[inline] #[must_use] pub fn norm_squared(&self) -> Quantity<T::RealField, <U as Mul<U>>::Output> where U: Mul<U> { Quantity::new(self.vector.norm_squared()) }
+
+    /// Unit vector in the same direction.
+    ///
+    /// Returns a [`VectorQuantity`] tagged [`dim::Dimensionless`] — a
+    /// direction has no physical units.  The magnitude is 1 (unitless);
+    /// the original units cancel in the division v / ‖v‖.
     #[inline] #[must_use] pub fn normalize(&self) -> VectorQuantity<T, N, dim::Dimensionless> { VectorQuantity::new(self.vector.normalize()) }
+
+    /// Dot product with another vector of the same unit.
+    ///
+    /// Returns a [`Quantity`] whose unit is `U * U` (the unit product),
+    /// since the dot product multiplies component-wise: v · w has units
+    /// of v × w.
     #[inline] #[must_use] pub fn dot(&self, other: &Self) -> Quantity<T, <U as Mul<U>>::Output> where U: Mul<U> { Quantity::new(self.vector.dot(&other.vector)) }
 }
 
 impl<T: NumAssign + Clone + nalgebra::Scalar + nalgebra::ComplexField, U> VectorQuantity<T, 3, U> {
+    /// Cross product with another 3D vector.
+    ///
+    /// Returns a [`VectorQuantity`] whose unit is `U * B` (the unit
+    /// product of the two operands' units).
     #[inline] #[must_use] pub fn cross<B>(&self, other: &VectorQuantity<T, 3, B>) -> VectorQuantity<T, 3, <U as Mul<B>>::Output> where U: Mul<B> {
         VectorQuantity::new(self.vector.cross(&other.vector))
     }
@@ -319,8 +435,13 @@ where T: fmt::Display + Clone + nalgebra::Scalar + PartialEq + std::fmt::Debug {
 // TensorQuantity<T, M, N, U>
 // ===========================================================================
 
+/// An `M`×`N` matrix tagged with a compile-time unit.
+///
+/// Wraps `nalgebra::SMatrix<T, M, N>`.  Used for inertia tensors, stress
+/// tensors, transformation matrices, etc.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TensorQuantity<T, const M: usize, const N: usize, U> {
+    /// The raw nalgebra matrix, stored in SI base units.
     pub matrix: SMatrix<T, M, N>,
     _u: PhantomData<U>,
 }
@@ -330,13 +451,18 @@ impl<T: Zero + Clone + nalgebra::Scalar, const M: usize, const N: usize, U> Defa
 }
 
 impl<T, const M: usize, const N: usize, U> TensorQuantity<T, M, N, U> {
+    /// Creates a tensor quantity from a raw nalgebra matrix.
     #[inline] #[must_use] pub const fn new(matrix: SMatrix<T, M, N>) -> Self { Self { matrix, _u: PhantomData } }
+    /// Borrows the raw nalgebra matrix.
     #[inline] #[must_use] pub const fn matrix(&self) -> &SMatrix<T, M, N> { &self.matrix }
+    /// Consumes the tensor quantity, returning the raw nalgebra matrix.
     #[inline] #[must_use] pub fn into_matrix(self) -> SMatrix<T, M, N> { self.matrix }
 }
 
 impl<T: NumAssign + Clone + nalgebra::Scalar + nalgebra::ComplexField, const M: usize, const N: usize, U> TensorQuantity<T, M, N, U> {
+    /// Identity matrix of size `M`×`N`, tagged with unit `U`.
     #[inline] #[must_use] pub fn identity() -> Self { Self::new(SMatrix::identity()) }
+    /// Transpose, swapping dimensions `M`↔`N` and preserving the unit.
     #[inline] #[must_use] pub fn transpose(&self) -> TensorQuantity<T, N, M, U> { TensorQuantity::new(self.matrix.transpose()) }
 }
 
