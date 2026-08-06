@@ -716,4 +716,306 @@ mod tests {
         assert_relative_eq!(mu.value, 3.986004415e14);
         assert_eq!(dim::GravitationalParameter::NAME, "m³/s²");
     }
+
+    // --- additional coverage tests ---
+
+    #[test]
+    fn scalar_neg() {
+        assert_relative_eq!((-Meters::new(5.0)).value, -5.0);
+    }
+
+    #[test]
+    fn scalar_sub() {
+        assert_relative_eq!((Seconds::new(10.0) - Seconds::new(3.0)).value, 7.0);
+    }
+
+    #[test]
+    fn scalar_add_assign() {
+        let mut a = Meters::new(5.0);
+        a += Meters::new(3.0);
+        assert_relative_eq!(a.value, 8.0);
+    }
+
+    #[test]
+    fn scalar_sub_assign() {
+        let mut a = Meters::new(10.0);
+        a -= Meters::new(4.0);
+        assert_relative_eq!(a.value, 6.0);
+    }
+
+    #[test]
+    fn scalar_div_raw() {
+        assert_relative_eq!((Meters::new(10.0) / 2.0).value, 5.0);
+    }
+
+    #[test]
+    fn scalar_mul_assign_raw() {
+        let mut a = Meters::new(3.0);
+        a *= 2.0;
+        assert_relative_eq!(a.value, 6.0);
+    }
+
+    #[test]
+    fn scalar_map_preserves_unit() {
+        let d = Meters::new(-5.0);
+        let abs_d = d.map(f64::abs);
+        assert_relative_eq!(abs_d.value, 5.0);
+        assert_eq!(dim::Meter::NAME, "m");
+    }
+
+    #[test]
+    fn scalar_display_all_units() {
+        assert_eq!(format!("{}", Force::new(10.0)), "10 N");
+        assert_eq!(format!("{}", Energy::new(5.0)), "5 J");
+        assert_eq!(format!("{}", Power::new(100.0)), "100 W");
+        assert_eq!(format!("{}", Pressure::new(101325.0)), "101325 Pa");
+        assert_eq!(format!("{}", Area::new(12.0)), "12 m²");
+        assert_eq!(format!("{}", Volume::new(3.0)), "3 m³");
+        assert_eq!(format!("{}", Density::new(1000.0)), "1000 kg/m³");
+        assert_eq!(format!("{}", Frequency::new(60.0)), "60 Hz");
+        let c_str = format!("{}", Charge::new(1.6e-19));
+        assert!(c_str.ends_with(" C"));
+        assert_eq!(format!("{}", Voltage::new(120.0)), "120 V");
+        assert_eq!(format!("{}", Resistance::new(50.0)), "50 Ω");
+        let cap_str = format!("{}", Capacitance::new(1e-6));
+        assert!(cap_str.ends_with(" F"));
+        assert_eq!(format!("{}", Inductance::new(0.1)), "0.1 H");
+        assert_eq!(format!("{}", MagneticFlux::new(0.5)), "0.5 Wb");
+        assert_eq!(format!("{}", MagneticFluxDensity::new(0.05)), "0.05 T");
+        assert_eq!(format!("{}", MomentOfInertia::new(100.0)), "100 kg·m²");
+        assert_eq!(format!("{}", Wavenumber::new(5.0)), "5 1/m");
+        assert_eq!(format!("{}", MassFlowRate::new(2.5)), "2.5 kg/s");
+        assert_eq!(format!("{}", Dimensionless::new(0.5)), "0.5 ");
+        assert_eq!(format!("{}", Kelvins::new(300.0)), "300 K");
+    }
+
+    #[test]
+    fn scalar_zero_impl() {
+        let z = Meters::<f64>::zero();
+        assert!(z.is_zero());
+        assert_relative_eq!(z.value, 0.0);
+        let nz = Meters::new(1.0);
+        assert!(!nz.is_zero());
+    }
+
+    #[test]
+    fn scalar_deref() {
+        let d = Meters::new(10.0);
+        assert_relative_eq!(*d, 10.0); // Deref to T
+    }
+
+    #[test]
+    fn scalar_deref_mut() {
+        let mut d = Meters::new(5.0);
+        *d += 3.0;
+        assert_relative_eq!(d.value, 8.0);
+    }
+
+    #[test]
+    fn convert_prefix() {
+        let m = Meters::new(1000.0);
+        assert_relative_eq!(m.in_prefix(SiPrefix::Kilo), 1.0);
+        assert_relative_eq!(m.in_prefix(SiPrefix::None), 1000.0);
+        let same = m.convert_to(SiPrefix::Kilo);
+        assert_relative_eq!(same.value, 1000.0); // stored in SI base, not rescaled
+    }
+
+    #[test]
+    fn si_prefix_display() {
+        assert_eq!(format!("{}", SiPrefix::Kilo), "k");
+        assert_eq!(format!("{}", SiPrefix::Milli), "m");
+        assert_eq!(format!("{}", SiPrefix::None), "");
+        assert_eq!(format!("{}", SiPrefix::Micro), "µ");
+        assert_eq!(format!("{}", SiPrefix::Mega), "M");
+    }
+
+    #[test]
+    fn si_prefix_scale() {
+        assert_relative_eq!(SiPrefix::Kilo.scale(), 1.0e3);
+        assert_relative_eq!(SiPrefix::Milli.scale(), 1.0e-3);
+        assert_relative_eq!(SiPrefix::None.scale(), 1.0);
+        assert_relative_eq!(SiPrefix::Yocto.scale(), 1.0e-24);
+        assert_relative_eq!(SiPrefix::Yotta.scale(), 1.0e24);
+    }
+
+    #[test]
+    fn unit_mul_type_level() {
+        // Meter * Second -> Unit<(P1, Z0, P1, ...)>
+        let _: <dim::Meter as Mul<dim::Second>>::Output = Unit(PhantomData);
+    }
+
+    #[test]
+    fn unit_div_type_level() {
+        // Meter / Second -> Unit<(P1, Z0, N1, ...)>
+        let _: <dim::Meter as Div<dim::Second>>::Output = Unit(PhantomData);
+    }
+
+    #[test]
+    fn vector_norm_squared() {
+        let p = VectorQuantity::<f64, 3, dim::Meter>::new(nalgebra::Vector3::new(3.0, 4.0, 0.0));
+        assert_relative_eq!(p.norm_squared().value, 25.0);
+    }
+
+    #[test]
+    fn vector_dot_same_unit() {
+        let a = VectorQuantity::<f64, 3, dim::Meter>::new(nalgebra::Vector3::new(1.0, 2.0, 3.0));
+        let b = VectorQuantity::<f64, 3, dim::Meter>::new(nalgebra::Vector3::new(4.0, 5.0, 6.0));
+        let d = a.dot(&b);
+        assert_relative_eq!(d.value, 32.0); // 4+10+18
+    }
+
+    #[test]
+    fn vector_dot_different_unit() {
+        let r = VectorQuantity::<f64, 3, dim::Meter>::new(nalgebra::Vector3::new(1.0, 0.0, 0.0));
+        let v = VectorQuantity::<f64, 3, dim::Velocity>::new(nalgebra::Vector3::new(10.0, 0.0, 0.0));
+        let d = r.dot(&v);
+        assert_relative_eq!(d.value, 10.0);
+    }
+
+    #[test]
+    fn vector_sub() {
+        let a = VectorQuantity::<f64, 3, dim::Meter>::new(nalgebra::Vector3::new(5.0, 3.0, 1.0));
+        let b = VectorQuantity::<f64, 3, dim::Meter>::new(nalgebra::Vector3::new(2.0, 1.0, 0.0));
+        let c = a - b;
+        assert_relative_eq!(c.vector.x, 3.0);
+        assert_relative_eq!(c.vector.y, 2.0);
+        assert_relative_eq!(c.vector.z, 1.0);
+    }
+
+    #[test]
+    fn vector_neg() {
+        let a = VectorQuantity::<f64, 3, dim::Meter>::new(nalgebra::Vector3::new(1.0, -2.0, 3.0));
+        let b = -a;
+        assert_relative_eq!(b.vector.x, -1.0);
+        assert_relative_eq!(b.vector.y, 2.0);
+        assert_relative_eq!(b.vector.z, -3.0);
+    }
+
+    #[test]
+    fn vector_div_raw() {
+        let a = VectorQuantity::<f64, 3, dim::Meter>::new(nalgebra::Vector3::new(10.0, 20.0, 30.0));
+        let b = a / 2.0;
+        assert_relative_eq!(b.vector.x, 5.0);
+        assert_relative_eq!(b.vector.y, 10.0);
+        assert_relative_eq!(b.vector.z, 15.0);
+    }
+
+    #[test]
+    fn vector_display() {
+        let v = VectorQuantity::<f64, 3, dim::Meter>::new(nalgebra::Vector3::new(1.0, 2.0, 3.0));
+        let s = format!("{v}");
+        assert!(s.contains("m"));
+    }
+
+    #[test]
+    fn vector_into_vector() {
+        let v = VectorQuantity::<f64, 3, dim::Meter>::new(nalgebra::Vector3::new(1.0, 2.0, 3.0));
+        let raw = v.into_vector();
+        assert_relative_eq!(raw.x, 1.0);
+    }
+
+    #[test]
+    fn vector_vector_and_raw_accessors() {
+        let v = VectorQuantity::<f64, 3, dim::Meter>::new(nalgebra::Vector3::new(7.0, 8.0, 9.0));
+        assert_relative_eq!(v.vector().x, 7.0);
+        assert_relative_eq!(v.value().x, 7.0);
+        assert_relative_eq!(v.raw().x, 7.0);
+    }
+
+    #[test]
+    fn vector_default_zero() {
+        let v = VectorQuantity::<f64, 3, dim::Meter>::default();
+        assert_relative_eq!(v.vector.norm(), 0.0);
+    }
+
+    #[test]
+    fn tensor_transpose() {
+        let m = TensorQuantity::<f64, 2, 3, dim::Dimensionless>::new(
+            nalgebra::SMatrix::from_element(1.0),
+        );
+        let t = m.transpose();
+        assert_relative_eq!(t.matrix[(0, 0)], 1.0);
+    }
+
+    #[test]
+    fn tensor_sub() {
+        let a: TensorQuantity<f64, 2, 2, dim::Dimensionless> = TensorQuantity::new(
+            nalgebra::SMatrix::from_element(5.0),
+        );
+        let b: TensorQuantity<f64, 2, 2, dim::Dimensionless> = TensorQuantity::new(
+            nalgebra::SMatrix::from_element(3.0),
+        );
+        let c = a - b;
+        assert_relative_eq!(c.matrix[(0, 0)], 2.0);
+    }
+
+    #[test]
+    fn tensor_neg() {
+        let a: TensorQuantity<f64, 2, 2, dim::Dimensionless> = TensorQuantity::new(
+            nalgebra::SMatrix::from_element(5.0),
+        );
+        let b = -a;
+        assert_relative_eq!(b.matrix[(0, 0)], -5.0);
+    }
+
+    #[test]
+    fn tensor_mul_raw() {
+        let a: TensorQuantity<f64, 2, 2, dim::Dimensionless> = TensorQuantity::new(
+            nalgebra::SMatrix::from_element(3.0),
+        );
+        let c = a * 2.0;
+        assert_relative_eq!(c.matrix[(0, 0)], 6.0);
+    }
+
+    #[test]
+    fn tensor_mul_tensor() {
+        let a: TensorQuantity<f64, 2, 2, dim::Dimensionless> = TensorQuantity::identity();
+        let b: TensorQuantity<f64, 2, 2, dim::Dimensionless> = TensorQuantity::new(
+            nalgebra::SMatrix::from_element(7.0),
+        );
+        let c = a * b;
+        assert_relative_eq!(c.matrix[(0, 0)], 7.0);
+    }
+
+    #[test]
+    fn tensor_default_zero() {
+        let t: TensorQuantity<f64, 2, 2, dim::Dimensionless> = TensorQuantity::default();
+        assert_relative_eq!(t.matrix[(0, 0)], 0.0);
+    }
+
+    #[test]
+    fn tensor_into_matrix() {
+        let t: TensorQuantity<f64, 2, 2, dim::Dimensionless> = TensorQuantity::identity();
+        let raw = t.into_matrix();
+        assert_relative_eq!(raw[(0, 0)], 1.0);
+    }
+
+    #[test]
+    fn tensor_display() {
+        let t: TensorQuantity<f64, 2, 2, dim::Force> = TensorQuantity::identity();
+        let s = format!("{t}");
+        assert!(s.contains("N"));
+    }
+
+    #[test]
+    fn complex_velocity() {
+        let v = ComplexFrequency::new(Complex::new(1.0, 2.0));
+        assert_relative_eq!(v.value.re, 1.0);
+        assert_relative_eq!(v.value.im, 2.0);
+    }
+
+    #[test]
+    fn prefixed_quantity_types() {
+        // These are all Quantity<T, dim::X> — just verify construction works
+        let km = Kilometers::new(1.0);
+        let mm = Millimeters::new(1.0);
+        let ms = Milliseconds::new(1.0);
+        let nt = Nanoteslas::new(50.0);
+        let kpa = Kilopascals::new(101.3);
+        assert_relative_eq!(km.value, 1.0);
+        assert_relative_eq!(mm.value, 1.0);
+        assert_relative_eq!(ms.value, 1.0);
+        assert_relative_eq!(nt.value, 50.0);
+        assert_relative_eq!(kpa.value, 101.3);
+    }
 }

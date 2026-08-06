@@ -81,3 +81,41 @@ impl Default for SimulationConfig {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use approx::assert_relative_eq;
+
+    #[test]
+    fn dynamics_default() {
+        let d = Dynamics::default();
+        assert_relative_eq!(d.mass.value, 1.0);
+        assert_relative_eq!(d.inertia[(0, 0)], 1.0);
+        assert_relative_eq!(d.cg_offset.norm(), 0.0);
+    }
+
+    #[test]
+    fn spacecraft_config_default() {
+        let c = SpacecraftConfig::default();
+        assert_relative_eq!(c.ballistic_coefficient, 0.01);
+        assert_relative_eq!(c.srp_area.value, 10.0);
+        assert_relative_eq!(c.reflectivity, 1.2);
+        assert_relative_eq!(c.reference_mass_kg, 1.0);
+    }
+
+    #[test]
+    fn spacecraft_config_drag_area() {
+        let c = SpacecraftConfig::default();
+        let area = c.drag_area(Kilograms::new(500.0));
+        assert_relative_eq!(area.value, 0.01 * 500.0);
+    }
+
+    #[test]
+    fn simulation_config_default() {
+        let s = SimulationConfig::default();
+        assert_relative_eq!(s.f107, 150.0);
+        assert_relative_eq!(s.f107a, 150.0);
+        assert_relative_eq!(s.ap, 4.0);
+    }
+}

@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use apogee_common::constants::AU;
 use apogee_common::math::modulo;
 use apogee_common::units::GravitationalParameter;
-use apogee_common::units::{PositionVector, VelocityVector, AccelerationVector, AngularVelocityVector};
+use apogee_common::units::{PositionVector, VelocityVector, AccelerationVector, AngularVelocityVector, Radians};
 use hifitime::Epoch;
 
 /// A celestial body with barycentric state, physical parameters, and orientation.
@@ -41,7 +41,7 @@ pub struct CelestialBody {
     /// Angular velocity vector (rad/s) — magnitude is spin rate, direction is rotation pole.
     pub angular_velocity: AngularVelocityVector,
     /// Current rotation angle about `angular_velocity` (radians).
-    pub rotation_angle: f64,
+    pub rotation_angle: Radians<f64>,
 }
 
 impl CelestialBody {
@@ -156,7 +156,7 @@ impl StarSystem {
                 velocity: VelocityVector::default(),
                 acceleration: AccelerationVector::default(),
                 angular_velocity: AngularVelocityVector::new(nalgebra::Vector3::z()),
-                rotation_angle: 0.0,
+                rotation_angle: Radians::new(0.0),
             },
         );
         bodies.insert(
@@ -169,7 +169,7 @@ impl StarSystem {
                 velocity: VelocityVector::default(),
                 acceleration: AccelerationVector::default(),
                 angular_velocity: earth_rotation_axis,
-                rotation_angle: earth_rotation_rad,
+                rotation_angle: Radians::new(earth_rotation_rad),
             },
         );
 
@@ -259,5 +259,32 @@ mod tests {
             "expected Sun direction to flip ~180°, dot={}",
             dot
         );
+    }
+
+    #[test]
+    fn celestial_body_velocity_and_acceleration_to() {
+        let epoch = Epoch::from_jde_in_time_scale(2451545.0, TimeScale::TT);
+        let system = StarSystem::at_epoch(epoch);
+        let earth = system.body("Earth").unwrap();
+        let sun = system.body("Sun").unwrap();
+
+        // Relative velocity of Sun wrt Earth (both ~zero at J2000 in this model)
+        let rel_vel = earth.velocity_to(&sun.velocity);
+        assert_relative_eq!(rel_vel.vector.norm(), 0.0);
+
+        // Relative acceleration
+        let rel_acc = earth.acceleration_to(&sun.acceleration);
+        assert_relative_eq!(rel_acc.vector.norm(), 0.0);
+    }
+
+    #[test]
+    fn celestial_body_angular_velocity_is_set() {
+        let epoch = Epoch::from_jde_in_time_scale(2451545.0, TimeScale::TT);
+        let system = StarSystem::at_epoch(epoch);
+        let earth = system.body("Earth").unwrap();
+        // Angular velocity direction should be the pole (not zero)
+        assert!(earth.angular_velocity.vector.norm() > 0.0);
+        // Rotation angle should be wrapped
+        assert!(earth.rotation_angle.value >= 0.0);
     }
 }

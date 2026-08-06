@@ -187,4 +187,77 @@ mod tests {
         assert_relative_eq!(i.matrix[(1, 1)], 1.0);
         assert_relative_eq!(i.matrix[(2, 2)], 1.0);
     }
+
+    #[test]
+    fn velocity_vector_from_xyz() {
+        let v = VelocityVector::from_xyz(1.0, 2.0, 3.0);
+        assert_relative_eq!(v.vector.x, 1.0);
+        assert_relative_eq!(v.vector.y, 2.0);
+        assert_relative_eq!(v.vector.z, 3.0);
+    }
+
+    #[test]
+    fn acceleration_vector_from_xyz() {
+        let a = AccelerationVector::from_xyz(0.1, 0.2, 9.8);
+        assert_relative_eq!(a.vector.z, 9.8);
+    }
+
+    #[test]
+    fn force_vector_from_xyz() {
+        let f = ForceVector::from_xyz(10.0, 0.0, 0.0);
+        assert_relative_eq!(f.vector.x, 10.0);
+    }
+
+    #[test]
+    fn torque_vector_from_xyz() {
+        let t = TorqueVector::from_xyz(0.0, 5.0, 0.0);
+        assert_relative_eq!(t.vector.y, 5.0);
+    }
+
+    #[test]
+    fn force_vector_add() {
+        let a = ForceVector::from_xyz(1.0, 2.0, 3.0);
+        let b = ForceVector::from_xyz(4.0, 5.0, 6.0);
+        let c = a + b;
+        assert_relative_eq!(c.vector.x, 5.0);
+        assert_relative_eq!(c.vector.y, 7.0);
+        assert_relative_eq!(c.vector.z, 9.0);
+    }
+
+    #[test]
+    fn torque_vector_sub() {
+        let a = TorqueVector::from_xyz(5.0, 3.0, 1.0);
+        let b = TorqueVector::from_xyz(1.0, 1.0, 1.0);
+        let c = a - b;
+        assert_relative_eq!(c.vector.x, 4.0);
+        assert_relative_eq!(c.vector.y, 2.0);
+    }
+
+    #[test]
+    fn angular_velocity_default() {
+        let v = AngularVelocityVector::default();
+        assert_relative_eq!(v.vector.norm(), 0.0);
+    }
+
+    #[test]
+    fn stress_tensor_default() {
+        let s = StressTensor::default();
+        assert_relative_eq!(s.matrix[(0, 0)], 0.0);
+    }
+
+    #[test]
+    fn strain_tensor_default() {
+        let s = StrainTensor::default();
+        assert_relative_eq!(s.matrix[(0, 0)], 0.0);
+    }
+
+    #[test]
+    fn mass_mu_power_aliases() {
+        let m = Mass::new(100.0);
+        let mu = Mu::new(3.986e14);
+        let p = PowerScalar::new(500.0);
+        assert_relative_eq!(m.value, 100.0);
+        assert_relative_eq!(mu.value, 3.986e14);
+        assert_relative_eq!(p.value, 500.0);
+    }
 }

@@ -168,6 +168,7 @@ mod tests {
 
     use super::*;
     use crate::components::dynamics::Dynamics;
+    use approx::assert_relative_eq;
 
     fn make_iss_state() -> Kinematics {
         let r = R_EARTH_EQ + 408_000.0;
@@ -214,5 +215,30 @@ mod tests {
         let total = forces.total();
         assert!(total.raw().iter().all(|v| v.is_finite()));
         assert!(forces.gravity.raw().norm() > 0.0);
+    }
+
+    #[test]
+    fn test_apply_control_sets_torque_and_thrust() {
+        let mut forces = AggregatedForces::default();
+        let inputs = ControlInputs {
+            torque_nm: Vector3::new(0.0, 0.0, 5.0),
+            force_n: Vector3::new(10.0, 0.0, 0.0),
+        };
+        forces.apply_control(&inputs, Kilograms::new(500.0));
+        assert_relative_eq!(forces.control_torque.vector.z, 5.0);
+        assert_relative_eq!(forces.thrust.vector.x, 10.0 / 500.0);
+    }
+
+    #[test]
+    fn test_total_sums_all_accelerations() {
+        let mut forces = AggregatedForces::default();
+        forces.gravity = AccelerationVector::from_xyz(1.0, 0.0, 0.0);
+        forces.drag = AccelerationVector::from_xyz(0.0, 2.0, 0.0);
+        forces.srp = AccelerationVector::from_xyz(0.0, 0.0, 3.0);
+        forces.thrust = AccelerationVector::from_xyz(0.5, 0.5, 0.5);
+        let total = forces.total();
+        assert_relative_eq!(total.vector.x, 1.5);
+        assert_relative_eq!(total.vector.y, 2.5);
+        assert_relative_eq!(total.vector.z, 3.5);
     }
 }
