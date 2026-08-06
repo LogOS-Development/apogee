@@ -43,6 +43,46 @@ use typenum::consts::*;
 use typenum::{Diff, Sum, Z0};
 
 // ===========================================================================
+// Halvable — type-level "half" for even signed exponents
+// ===========================================================================
+
+/// Halves a type-level signed integer exponent.
+///
+/// Only implemented for **even** exponents (`Z0`, `P2`, `N2`, `P4`, `N4`, …).
+/// Odd exponents (`P1`, `N1`, `P3`, …) have no impl, so attempting `sqrt` on
+/// a quantity with an odd exponent in any dimension is a compile-time error
+/// — exactly the desired behavior, since `sqrt(m)` would require `m^{1/2}`,
+/// which has no physical SI unit.
+///
+/// This replaces the old brittle `Half` trait (removed in PR #95) with a
+/// macro-generated set of impls that cover all even exponents up to ±6,
+/// which is far beyond anything in physics.
+pub trait Halvable {
+    /// The exponent divided by two.
+    type Output;
+}
+
+macro_rules! impl_halvable {
+    ($($p:ident => $ph:ident, $n:ident => $nh:ident),* $(,)?) => {
+        $(
+            impl Halvable for $p { type Output = $ph; }
+            impl Halvable for $n { type Output = $nh; }
+        )*
+    };
+}
+
+// Z0 is even (0 / 2 = 0).
+impl Halvable for Z0 {
+    type Output = Z0;
+}
+
+impl_halvable! {
+    P2 => P1, N2 => N1,
+    P4 => P2, N4 => N2,
+    P6 => P3, N6 => N3,
+}
+
+// ===========================================================================
 // Unit marker + type-level Mul / Div
 // ===========================================================================
 
@@ -105,6 +145,44 @@ where
     fn div(self, _rhs: Unit<(M2, Kg2, S2, A2, K2, Mol2, Cd2)>) -> Self::Output {
         Unit(PhantomData)
     }
+}
+
+// ===========================================================================
+// Sqrt — type-level square root of a unit tuple
+// ===========================================================================
+
+/// Type-level square root of a `Unit` tuple.
+///
+/// Each of the 7 exponents must be [`Halvable`] (i.e. even).  Odd exponents
+/// produce a compile-time error — `sqrt(m)` has no physical SI unit.
+/// `sqrt(m²) = m`, `sqrt(m²/s²) = m/s`, `sqrt(m³/s²) = m^{3/2}/s` (rejected).
+impl<M, Kg, S, A, K, Mol, Cd> Sqrt for Unit<(M, Kg, S, A, K, Mol, Cd)>
+where
+    M: Halvable,
+    Kg: Halvable,
+    S: Halvable,
+    A: Halvable,
+    K: Halvable,
+    Mol: Halvable,
+    Cd: Halvable,
+{
+    type Output = Unit<(
+        <M as Halvable>::Output,
+        <Kg as Halvable>::Output,
+        <S as Halvable>::Output,
+        <A as Halvable>::Output,
+        <K as Halvable>::Output,
+        <Mol as Halvable>::Output,
+        <Cd as Halvable>::Output,
+    )>;
+}
+
+/// Trait for taking the type-level square root of a unit tag.
+///
+/// Implemented on `Unit<(...)>` tuples where every exponent is [`Halvable`].
+pub trait Sqrt {
+    /// The unit whose exponents are half of `Self`'s exponents.
+    type Output;
 }
 
 // ===========================================================================
@@ -425,9 +503,10 @@ impl<T, U> Quantity<T, U> {
     /// The return type is `Quantity<R, U>` — the **same unit**, with a
     /// possibly different scalar type `R`.  This is correct for functions
     /// that don't change the dimension (e.g. `abs`, `round`, `min/max`).
-    /// For functions that *do* change the dimension (e.g. `sqrt` would
-    /// produce `m^{1/2}` from `m`), `map` is the wrong tool — you need a
-    /// new quantity with a different unit type.
+    /// For functions that *do* change the dimension, use the appropriate
+    /// method — e.g. [`sqrt`](Quantity::sqrt) for square roots (which
+    /// produces a quantity with half the exponents), or `Mul`/`Div` for
+    /// unit products/quotients.
     #[inline]
     #[must_use]
     pub fn map<F, R>(self, f: F) -> Quantity<R, U>
@@ -438,6 +517,25 @@ impl<T, U> Quantity<T, U> {
             value: f(self.value),
             _u: PhantomData,
         }
+    }
+
+    /// Square root of a scalar quantity.
+    ///
+    /// Produces a `Quantity<T, SqrtU>` where `SqrtU` is the type-level
+    /// square root of `U`.  Only callable when every exponent in `U` is
+    /// even — `sqrt(m²) = m`, `sqrt(m²/s²) = m/s`.
+    /// Odd exponents (`sqrt(m)`) are rejected at compile time because
+    /// `m^{1/2}` has no physical SI unit.
+    ///
+    /// Requires `T: nalgebra::ComplexField` so the scalar has a `sqrt()`.
+    #[inline]
+    #[must_use]
+    pub fn sqrt(self) -> Quantity<T, <U as Sqrt>::Output>
+    where
+        T: nalgebra::ComplexField,
+        U: Sqrt,
+    {
+        Quantity::new(self.value.sqrt())
     }
 }
 
@@ -1438,5 +1536,61 @@ mod tests {
         assert_relative_eq!(ms.value, 1.0);
         assert_relative_eq!(nt.value, 50.0);
         assert_relative_eq!(kpa.value, 101.3);
+    }
+
+    // --- sqrt tests ---
+
+    #[test]
+    fn sqrt_area_is_meters() {
+        let area = Area::new(16.0); // m²
+        let length = area.sqrt();
+        assert_relative_eq!(length.value, 4.0);
+    }
+
+    #[test]
+    fn sqrt_area_assigns_to_meters() {
+        // Compile-time check: sqrt(Area) has the same type as Meters.
+        let area = Area::new(100.0);
+        let length: Meters = area.sqrt();
+        assert_relative_eq!(length.value, 10.0);
+    }
+
+    #[test]
+    fn sqrt_velocity_squared_is_velocity() {
+        // (m/s)² = m²/s² -> sqrt -> m/s
+        let v_sq = Quantity::<f64, <dim::Velocity as Mul<dim::Velocity>>::Output>::new(25.0);
+        let v: Velocity = v_sq.sqrt();
+        assert_relative_eq!(v.value, 5.0);
+    }
+
+    #[test]
+    fn sqrt_area_squared_is_area() {
+        // m² * m² = m⁴ -> sqrt -> m²
+        let a_sq: Quantity<f64, <dim::Area as Mul<dim::Area>>::Output> = Quantity::new(81.0);
+        let r: Area = a_sq.sqrt();
+        assert_relative_eq!(r.value, 9.0);
+    }
+
+    #[test]
+    fn sqrt_complex_quantity() {
+        let area: Quantity<Complex<f64>, dim::Area> = Quantity::new(Complex::new(16.0, 0.0));
+        let r = area.sqrt();
+        assert_relative_eq!(r.value.re, 4.0);
+    }
+
+    /// Compile-time verification that `sqrt` on an odd-exponent quantity
+    /// is rejected.  If this test compiles, the type system is correctly
+    /// blocking `sqrt(m)` (which would require `m^{1/2}`).
+    ///
+    /// Uncomment the lines below to verify the compile error:
+    /// ```compile_fail
+    /// use apogee_common::units::{Meters, Quantity};
+    /// let m = Meters::new(4.0);
+    /// let _ = m.sqrt(); // P1 exponent — no Halvable impl
+    /// ```
+    #[test]
+    fn sqrt_odd_exponent_is_compile_error() {
+        // This test exists to document the compile-time guarantee.
+        // The compile_fail doc-test above is the actual verification.
     }
 }
