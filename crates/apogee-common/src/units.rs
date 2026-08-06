@@ -1541,15 +1541,8 @@ mod tests {
     // --- sqrt tests ---
 
     #[test]
-    fn sqrt_area_is_meters() {
-        let area = Area::new(16.0); // m²
-        let length = area.sqrt();
-        assert_relative_eq!(length.value, 4.0);
-    }
-
-    #[test]
     fn sqrt_area_assigns_to_meters() {
-        // Compile-time check: sqrt(Area) has the same type as Meters.
+        // sqrt(m²) = m — runtime value + compile-time type check.
         let area = Area::new(100.0);
         let length: Meters = area.sqrt();
         assert_relative_eq!(length.value, 10.0);
@@ -1558,39 +1551,27 @@ mod tests {
     #[test]
     fn sqrt_velocity_squared_is_velocity() {
         // (m/s)² = m²/s² -> sqrt -> m/s
-        let v_sq = Quantity::<f64, <dim::Velocity as Mul<dim::Velocity>>::Output>::new(25.0);
-        let v: Velocity = v_sq.sqrt();
-        assert_relative_eq!(v.value, 5.0);
+        let v = Velocity::new(5.0);
+        let v_sq = v * v;
+        let r: Velocity = v_sq.sqrt();
+        assert_relative_eq!(r.value, 5.0);
     }
 
     #[test]
     fn sqrt_area_squared_is_area() {
         // m² * m² = m⁴ -> sqrt -> m²
-        let a_sq: Quantity<f64, <dim::Area as Mul<dim::Area>>::Output> = Quantity::new(81.0);
+        let a = Area::new(9.0);
+        let a_sq = a * a;
         let r: Area = a_sq.sqrt();
         assert_relative_eq!(r.value, 9.0);
     }
 
     #[test]
     fn sqrt_complex_quantity() {
-        let area: Quantity<Complex<f64>, dim::Area> = Quantity::new(Complex::new(16.0, 0.0));
+        // sqrt of a genuinely complex area: sqrt(3+4i) = 2+i
+        let area: Quantity<Complex<f64>, dim::Area> = Quantity::new(Complex::new(3.0, 4.0));
         let r = area.sqrt();
-        assert_relative_eq!(r.value.re, 4.0);
-    }
-
-    /// Compile-time verification that `sqrt` on an odd-exponent quantity
-    /// is rejected.  If this test compiles, the type system is correctly
-    /// blocking `sqrt(m)` (which would require `m^{1/2}`).
-    ///
-    /// Uncomment the lines below to verify the compile error:
-    /// ```compile_fail
-    /// use apogee_common::units::{Meters, Quantity};
-    /// let m = Meters::new(4.0);
-    /// let _ = m.sqrt(); // P1 exponent — no Halvable impl
-    /// ```
-    #[test]
-    fn sqrt_odd_exponent_is_compile_error() {
-        // This test exists to document the compile-time guarantee.
-        // The compile_fail doc-test above is the actual verification.
+        assert_relative_eq!(r.value.re, 2.0);
+        assert_relative_eq!(r.value.im, 1.0);
     }
 }
