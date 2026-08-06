@@ -30,9 +30,7 @@ pub struct AggregatedForces {
 impl AggregatedForces {
     /// Sum all force contributions into total acceleration.
     pub fn total(&self) -> AccelerationVector {
-        // Sum component-wise via raw escape hatches, then re-wrap.
-        let raw = self.gravity.raw() + self.drag.raw() + self.srp.raw() + self.thrust.raw();
-        AccelerationVector::new(raw)
+        self.gravity + self.drag + self.srp + self.thrust
     }
 
     /// Sum all torque contributions (N·m).

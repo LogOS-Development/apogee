@@ -276,10 +276,14 @@ impl<T, U> Quantity<T, U> {
     #[inline] #[must_use] pub const fn value(&self) -> &T { &self.value }
     /// Consumes the quantity, returning the raw scalar value.
     #[inline] #[must_use] pub fn into_value(self) -> T { self.value }
-    /// Applies a function to the scalar value, preserving the unit tag.
+    /// Applies a function to the scalar value, preserving the unit tag `U`.
     ///
-    /// Useful for applying math functions (sqrt, abs, etc.) without
-    /// losing the unit annotation.
+    /// The return type is `Quantity<R, U>` — the **same unit**, with a
+    /// possibly different scalar type `R`.  This is correct for functions
+    /// that don't change the dimension (e.g. `abs`, `round`, `min/max`).
+    /// For functions that *do* change the dimension (e.g. `sqrt` would
+    /// produce `m^{1/2}` from `m`), `map` is the wrong tool — you need a
+    /// new quantity with a different unit type.
     #[inline] #[must_use] pub fn map<F, R>(self, f: F) -> Quantity<R, U> where F: FnOnce(T) -> R {
         Quantity { value: f(self.value), _u: PhantomData }
     }
@@ -397,12 +401,12 @@ impl<T: NumAssign + Clone + nalgebra::Scalar + nalgebra::ComplexField, const N: 
     /// the original units cancel in the division v / ‖v‖.
     #[inline] #[must_use] pub fn normalize(&self) -> VectorQuantity<T, N, dim::Dimensionless> { VectorQuantity::new(self.vector.normalize()) }
 
-    /// Dot product with another vector of the same unit.
+    /// Dot product with another vector.
     ///
-    /// Returns a [`Quantity`] whose unit is `U * U` (the unit product),
-    /// since the dot product multiplies component-wise: v · w has units
-    /// of v × w.
-    #[inline] #[must_use] pub fn dot(&self, other: &Self) -> Quantity<T, <U as Mul<U>>::Output> where U: Mul<U> { Quantity::new(self.vector.dot(&other.vector)) }
+    /// Returns a [`Quantity`] whose unit is `U * B` — the product of
+    /// the two operands' units — since the dot product multiplies
+    /// component-wise: v · w has units of v × w.
+    #[inline] #[must_use] pub fn dot<B>(&self, other: &VectorQuantity<T, N, B>) -> Quantity<T, <U as Mul<B>>::Output> where U: Mul<B> { Quantity::new(self.vector.dot(&other.vector)) }
 }
 
 impl<T: NumAssign + Clone + nalgebra::Scalar + nalgebra::ComplexField, U> VectorQuantity<T, 3, U> {
