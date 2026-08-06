@@ -74,19 +74,33 @@ impl CelestialBody {
 }
 
 /// Snapshot of a star system at a single epoch.
+///
+/// `epoch` is the single source of truth for time. Derived representations
+/// (Julian Day, days since J2000) are computed on demand via [`julian_day`]
+/// and [`days_since_j2000`] accessors, avoiding redundant stored fields that
+/// can drift out of sync.
+///
+/// [`julian_day`]: StarSystem::julian_day
+/// [`days_since_j2000`]: StarSystem::days_since_j2000
 #[derive(Debug, Clone, PartialEq)]
 pub struct StarSystem {
-    /// Epoch of the snapshot.
+    /// Epoch of the snapshot — single source of truth for time.
     pub epoch: Epoch,
-    /// Julian Day (TT) corresponding to `epoch`.
-    pub julian_day: f64,
-    /// Days since J2000.0 (JD 2451545.0).
-    pub days_since_j2000: f64,
     /// Bodies keyed by name.
     pub bodies: HashMap<String, CelestialBody>,
 }
 
 impl StarSystem {
+    /// Julian Day (TT) corresponding to `epoch`.
+    pub fn julian_day(&self) -> f64 {
+        self.epoch.to_jde_tt_days()
+    }
+
+    /// Days since J2000.0 (JD 2451545.0).
+    pub fn days_since_j2000(&self) -> f64 {
+        self.julian_day() - 2451545.0
+    }
+
     /// Compute the star-system state at the given epoch.
     ///
     /// Uses the low-precision analytic model from "Astronomical Algorithms" by
@@ -96,8 +110,7 @@ impl StarSystem {
     ///
     /// Returned state is in SI units.
     pub fn at_epoch(epoch: Epoch) -> Self {
-        let julian_day = epoch.to_jde_tt_days();
-        let days_since_j2000 = julian_day - 2451545.0;
+        let days_since_j2000 = epoch.to_jde_tt_days() - 2451545.0;
 
         // Mean longitude of the Sun (degrees).
         let l = modulo(280.460 + 0.9856474 * days_since_j2000, 360.0);
@@ -173,12 +186,7 @@ impl StarSystem {
             },
         );
 
-        Self {
-            epoch,
-            julian_day,
-            days_since_j2000,
-            bodies,
-        }
+        Self { epoch, bodies }
     }
 
     /// Convenience accessor for a body by name.
@@ -286,5 +294,21 @@ mod tests {
         assert!(earth.angular_velocity.vector.norm() > 0.0);
         // Rotation angle should be wrapped
         assert!(earth.rotation_angle.value >= 0.0);
+    }
+
+    #[test]
+    fn time_accessors_are_consistent_with_epoch() {
+        let epoch = Epoch::from_jde_in_time_scale(2451545.0, TimeScale::TT);
+        let system = StarSystem::at_epoch(epoch);
+
+        // J2000: days_since_j2000 should be ~0, julian_day should be 2451545.0
+        assert!((system.days_since_j2000()).abs() < 1e-9);
+        assert!((system.julian_day() - 2451545.0).abs() < 1e-9);
+
+        // Six months later: days_since_j2000 should be ~180
+        let later = epoch + 180.0 * Unit::Day;
+        let system_later = StarSystem::at_epoch(later);
+        assert!((system_later.days_since_j2000() - 180.0).abs() < 1e-6);
+        assert!((system_later.julian_day() - (2451545.0 + 180.0)).abs() < 1e-6);
     }
 }
