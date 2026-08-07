@@ -14,6 +14,7 @@
 
 pub use hecs::Entity;
 
+use crate::components::celestial::CelestialRegistry;
 use crate::components::rigid_body::SimulationConfig;
 use crate::ephemeris::kernel::SolarSystemState;
 
@@ -28,6 +29,10 @@ pub struct World {
     /// Space-weather / environment configuration for force models.
     pub sim_config: SimulationConfig,
     /// Celestial ephemeris state (positions and velocities of all bodies).
+    ///
+    /// This is kept for backward compatibility and is rebuilt from the
+    /// registry when `build_celestial_state()` is called. Direct mutation
+    /// should be replaced by `celestial_registry` operations.
     pub celestial: SolarSystemState,
     /// Current simulation epoch.
     pub epoch: hifitime::Epoch,
@@ -150,6 +155,24 @@ impl World {
     /// Remove all entities.
     pub fn clear(&mut self) {
         self.ecs.clear();
+    }
+
+    // ------------------------------------------------------------------
+    // Celestial body API
+    // ------------------------------------------------------------------
+
+    /// Add a celestial body to the registry.
+    pub fn add_celestial_body(&mut self, body: crate::components::celestial::CelestialBody) {
+        self.celestial_registry.add(body);
+    }
+
+    /// Rebuild the `celestial` (`SolarSystemState`) from the celestial
+    /// registry. This should be called before each `step_world` if the
+    /// registry has been modified (kinematic bodies updated from ephemeris,
+    /// or propagated bodies integrated).
+    pub fn build_celestial_state(&mut self) {
+        self.celestial =
+            crate::components::celestial::celestial_state_from_registry(&self.celestial_registry);
     }
 }
 

@@ -206,9 +206,21 @@ pub fn propagate_single(
     day_of_year: u16,
     seconds_utc: f64,
 ) -> SpacecraftBundle {
-    let mut world = World::with_config(sim_config, celestial);
+    let mut world = World::with_config(sim_config, celestial.clone());
     world.day_of_year = day_of_year;
     world.seconds_utc = seconds_utc;
+
+    // Populate the celestial registry from the provided SolarSystemState
+    // so that step_world's build_celestial_state() produces the same gravity
+    // field.
+    for body_state in &celestial.states {
+        world.add_celestial_body(crate::components::celestial::CelestialBody::kinematic(
+            body_state.naif_id,
+            body_state.position,
+            body_state.velocity,
+        ));
+    }
+
     let _entity = world.spawn(bundle);
 
     let total = duration_s.into_value();
@@ -361,5 +373,144 @@ mod tests {
         let r = pos.norm();
         let v2 = vel.norm_squared();
         v2 / 2.0 - GM_EARTH / r
+    }
+
+    // ------------------------------------------------------------------
+    // Celestial registry integration tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_kinematic_body_does_not_move() {
+        // A kinematic Earth at the origin should not be moved by step_world.
+        let mut world = World::new();
+        world.day_of_year = 80;
+        world.add_celestial_body(crate::components::celestial::CelestialBody::kinematic(
+            399,
+            Vector3::zeros(),
+            Vector3::zeros(),
+        ));
+
+        for _ in 0..10 {
+            step_world(&mut world, Seconds::new(60.0));
+        }
+
+        let earth = world.celestial_registry.find(399).unwrap();
+        assert_relative_eq!(earth.position.norm(), 0.0);
+        assert_relative_eq!(earth.velocity.norm(), 0.0);
+    }
+
+    #[test]
+    fn test_propagated_celestial_orbits_kinematic_body() {
+        // A small propagated body (asteroid) should orbit a kinematic Earth.
+        let mut world = World::new();
+        world.day_of_year = 80;
+        world.add_celestial_body(crate::components::celestial::CelestialBody::kinematic(
+            399,
+            Vector3::zeros(),
+            Vector3::zeros(),
+        ));
+
+        // Asteroid at 400 km altitude, circular orbit velocity.
+        let r = R_EARTH_EQ + 400_000.0;
+        let v = (GM_EARTH / r).sqrt();
+        world.add_celestial_body(
+            crate::components::celestial::CelestialBody::propagated_from_mass(
+                2_000_001,
+                Vector3::new(r, 0.0, 0.0),
+                Vector3::new(0.0, v, 0.0),
+                Kilograms::new(1e6),
+            ),
+        );
+
+        let asteroid = world.celestial_registry.find(2_000_001).unwrap();
+        let e0 = orbital_energy(&asteroid.position, &asteroid.velocity);
+
+        // Step for ~1 orbit (92 min).
+        for _ in 0..92 {
+            step_world(&mut world, Seconds::new(60.0));
+        }
+
+        let asteroid = world.celestial_registry.find(2_000_001).unwrap();
+        let e1 = orbital_energy(&asteroid.position, &asteroid.velocity);
+        let rel_err = (e1 - e0).abs() / e0.abs();
+        assert!(
+            rel_err < 1e-4,
+            "propagated celestial energy drift too large: {}",
+            rel_err
+        );
+    }
+
+    #[test]
+    fn test_spacecraft_orbits_with_kinematic_and_propagated_bodies() {
+        // Spacecraft orbits a kinematic Earth while a propagated asteroid
+        // also orbits. Both should maintain stable orbits.
+        let mut world = World::new();
+        world.day_of_year = 80;
+        world.add_celestial_body(crate::components::celestial::CelestialBody::kinematic(
+            399,
+            Vector3::zeros(),
+            Vector3::zeros(),
+        ));
+
+        // Propagated asteroid at 1000 km altitude.
+        let r_ast = R_EARTH_EQ + 1_000_000.0;
+        let v_ast = (GM_EARTH / r_ast).sqrt();
+        world.add_celestial_body(
+            crate::components::celestial::CelestialBody::propagated_from_mass(
+                2_000_001,
+                Vector3::new(r_ast, 0.0, 0.0),
+                Vector3::new(0.0, v_ast, 0.0),
+                Kilograms::new(1e10),
+            ),
+        );
+
+        // Spacecraft at 400 km altitude (well inside the asteroid orbit).
+        let r_sc = R_EARTH_EQ + 400_000.0;
+        let v_sc = (GM_EARTH / r_sc).sqrt();
+        let bundle = SpacecraftBundle {
+            kinematics: Kinematics {
+                position: Vector3::new(r_sc, 0.0, 0.0),
+                velocity: Vector3::new(0.0, v_sc, 0.0),
+                attitude: nalgebra::Quaternion::identity(),
+                angular_velocity: Vector3::zeros(),
+            },
+            rigid_body: crate::components::rigid_body::RigidBody {
+                mass: Kilograms::new(1_000.0),
+                inertia: nalgebra::Matrix3::identity(),
+                cg_offset: Vector3::zeros(),
+            },
+            config: crate::components::rigid_body::SpacecraftConfig {
+                ballistic_coefficient: 0.0,
+                srp_area: Area::new(0.0),
+                reflectivity: 0.0,
+                reference_mass_kg: 1_000.0,
+            },
+        };
+        let _sc_entity = world.spawn(bundle);
+
+        let sc_e0 = {
+            let b = world.iter().next().unwrap().1;
+            orbital_energy(&b.kinematics.position, &b.kinematics.velocity)
+        };
+
+        // Step 10 minutes.
+        for _ in 0..10 {
+            step_world(&mut world, Seconds::new(60.0));
+        }
+
+        let sc_e1 = {
+            let b = world.iter().next().unwrap().1;
+            orbital_energy(&b.kinematics.position, &b.kinematics.velocity)
+        };
+        let sc_rel_err = (sc_e1 - sc_e0).abs() / sc_e0.abs();
+        assert!(
+            sc_rel_err < 1e-4,
+            "spacecraft energy drift with celestial registry: {}",
+            sc_rel_err
+        );
+
+        // Spacecraft should still be in LEO.
+        let sc_alt = world.iter().next().unwrap().1.kinematics.position.norm() - R_EARTH_EQ;
+        assert!(sc_alt > 350_000.0 && sc_alt < 500_000.0);
     }
 }

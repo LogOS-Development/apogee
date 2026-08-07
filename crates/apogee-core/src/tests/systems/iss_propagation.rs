@@ -14,6 +14,7 @@ use apogee_common::units::{Area, Kilograms, Seconds};
 use hifitime::Epoch;
 use nalgebra::Vector3;
 
+use crate::components::celestial::CelestialBody;
 use crate::components::kinematics::Kinematics;
 use crate::components::rigid_body::{RigidBody, SimulationConfig, SpacecraftConfig};
 use crate::components::spacecraft::SpacecraftBundle;
@@ -90,6 +91,20 @@ fn earth_only_celestial() -> SolarSystemState {
             velocity: Vector3::zeros(),
         }],
     }
+}
+
+/// Build a world with a kinematic Earth at the origin, ready for stepping.
+fn world_with_earth() -> World {
+    let mut world = World::new();
+    world.day_of_year = 212;
+    world.seconds_utc = 0.0;
+    world.add_celestial_body(CelestialBody::kinematic(
+        399,
+        Vector3::zeros(),
+        Vector3::zeros(),
+    ));
+    world.build_celestial_state();
+    world
 }
 
 #[test]
