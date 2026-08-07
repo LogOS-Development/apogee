@@ -11,7 +11,7 @@ mod apollo15_validation {
     /// JPL's public `apollo15-1.bsp` SPK Type 1 kernel.
     const APOLLO15_CSV: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../tests/fixtures/apollo15_reference.csv"
+        "/tests/fixtures/apollo15_reference.csv"
     );
 
     /// Load the reference trajectory as a list of (et_s, position_km, velocity_km_s).
@@ -55,7 +55,7 @@ mod apollo15_validation {
     }
 
     #[test]
-    #[ignore = "requires tests/fixtures/apollo15_reference.csv; generated from apollo15-1.bsp"]
+    #[ignore = "requires tests/fixtures/apollo15_reference.csv (within apogee-core); generated from apollo15-1.bsp"]
     fn test_apollo15_lunar_orbit_vs_reference() {
         let reference = load_reference().expect("Apollo 15 reference CSV fixture");
         assert!(

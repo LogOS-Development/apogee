@@ -9,10 +9,7 @@ mod artemis2_validation {
     use nalgebra::Vector3;
 
     /// Path to the Artemis 2 SPK fixture.
-    const ARTEMIS2_BSP: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../tests/fixtures/artemis2.bsp"
-    );
+    const ARTEMIS2_BSP: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/artemis2.bsp");
 
     /// Build a point-mass ephemeris from kernel states at a single epoch.
     fn build_celestial(kernel: &Kernel, et: f64) -> SolarSystemState {
@@ -38,7 +35,7 @@ mod artemis2_validation {
     }
 
     #[test]
-    #[ignore = "requires tests/fixtures/artemis2.bsp; run scripts/fetch_data.sh to obtain it"]
+    #[ignore = "requires tests/fixtures/artemis2.bsp (within apogee-core); run scripts/fetch_data.sh to obtain it"]
     fn test_artemis2_propagation_vs_spk() {
         let kernel = Kernel::load(ARTEMIS2_BSP).expect("load Artemis 2 SPK");
 

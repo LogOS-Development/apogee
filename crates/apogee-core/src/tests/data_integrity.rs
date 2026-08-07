@@ -18,10 +18,6 @@ fn data_dir() -> PathBuf {
 
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
         .join("tests")
         .join("fixtures")
 }
