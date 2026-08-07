@@ -79,103 +79,12 @@ jobs:
           echo "coverage=$PCT" >> "$GITHUB_STEP_SUMMARY"
           echo "Coverage: $PCT% ($TOTAL_HIT/$TOTAL_FOUND lines)"
 
-      - name: Upload lcov artifact
-        uses: actions/upload-artifact@v4
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v4
         with:
-          name: lcov-report
-          path: lcov.info
-          retention-days: 7
-
-  coverage:
-    name: Code Coverage
-    # Coverage badge generation should only happen on main, not on every
-    # feature branch push/PR, to avoid noisy badge commits and double uploads.
-    if: github.ref == 'refs/heads/main'
-    needs: coverage-check
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: llvm-tools-preview
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: cargo-coverage-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
-
-      - name: Generate coverage report
-        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
-
-      - name: Extract coverage percentage
-        id: cov
-        run: |
-          # Parse lcov.info: DA:line,hit_count → covered = lines with hit>0
-          STATS=$(grep "^DA:" lcov.info | awk -F, '{total++; if ($2>0) hit++} END {printf "%d %d", total, hit}')
-          TOTAL_FOUND=$(echo $STATS | awk '{print $1}')
-          TOTAL_HIT=$(echo $STATS | awk '{print $2}')
-          if [ "$TOTAL_FOUND" -gt 0 ]; then
-            PCT=$(echo "scale=1; $TOTAL_HIT * 100 / $TOTAL_FOUND" | bc)
-          else
-            PCT="0.0"
-          fi
-          echo "percentage=$PCT" >> "$GITHUB_OUTPUT"
-          echo "Coverage: $PCT% ($TOTAL_HIT/$TOTAL_FOUND lines)"
-
-      - name: Generate coverage JSON
-        run: |
-          PCT="${{ steps.cov.outputs.percentage }}"
-          # Color: red <60, orange <80, yellow <90, green >=90
-          if (( $(echo "$PCT >= 90" | bc -l) )); then
-            COLOR="4c1"
-          elif (( $(echo "$PCT >= 80" | bc -l) )); then
-            COLOR="dfb317"
-          elif (( $(echo "$PCT >= 60" | bc -l) )); then
-            COLOR="fe7d37"
-          else
-            COLOR="e05d44"
-          fi
-          VALUE="${PCT}%"
-          cat > coverage.json << EOF
-          {
-            "schemaVersion": 1,
-            "label": "coverage",
-            "message": "$VALUE",
-            "color": "$COLOR"
-          }
-          EOF
-
-      - name: Push JSON to badges branch
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          # Fetch the badges branch (or orphan-create it on first run).
-          if git fetch origin badges; then
-            git checkout badges
-          else
-            git checkout --orphan badges
-            git rm -rf .
-          fi
-          mkdir -p .github
-          mv coverage.json .github/coverage.json
-          git add .github/coverage.json
-          if git diff --cached --quiet; then
-            echo "No coverage changes to commit"
-          else
-            git commit -m "chore: update coverage badge JSON [skip ci]"
-            git push origin badges
-          fi
+          files: lcov.info
+          fail_ci_if_error: true
+          token: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Upload lcov artifact
         uses: actions/upload-artifact@v4
