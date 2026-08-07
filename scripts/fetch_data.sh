@@ -76,7 +76,7 @@ echo ""
 
 # Create directories
 mkdir -p "$DATA_DIR"/{ephemeris,gravity,spaceweather,time,eop}
-mkdir -p "$ROOT_DIR/tests/fixtures"
+mkdir -p "$ROOT_DIR/crates/apogee-core/tests/fixtures"
 
 # --- 1. JPL DE441 Ephemeris ---
 log "=== JPL DE441 Ephemeris ==="
@@ -119,8 +119,8 @@ verify_file "$DATA_DIR/spaceweather/SW-All.txt" 1000
 log "=== Sample TLEs ==="
 download \
     "https://celestrak.org/NORAD/elements/gp.php?GROUP=stations&FORMAT=tle" \
-    "$ROOT_DIR/tests/fixtures/iss_tle.txt"
-verify_file "$ROOT_DIR/tests/fixtures/iss_tle.txt" 100
+    "$ROOT_DIR/crates/apogee-core/tests/fixtures/iss_tle.txt"
+verify_file "$ROOT_DIR/crates/apogee-core/tests/fixtures/iss_tle.txt" 100
 
 # --- Summary ---
 echo ""
@@ -132,4 +132,4 @@ echo "Files in data/:"
 find "$DATA_DIR" -type f -exec ls -lh {} \; 2>/dev/null || true
 echo ""
 echo "Test fixtures:"
-find "$ROOT_DIR/tests/fixtures" -type f -exec ls -lh {} \; 2>/dev/null || true
+find "$ROOT_DIR/crates/apogee-core/tests/fixtures" -type f -exec ls -lh {} \; 2>/dev/null || true

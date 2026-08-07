@@ -251,7 +251,7 @@ mod tests {
         //   https://www.ngdc.noaa.gov/IAGA/vmod/coeffs/igrf13coeffs.txt
         let csv = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../tests/fixtures/igrf13_reference.csv"
+            "/tests/fixtures/igrf13_reference.csv"
         );
         let path = std::path::Path::new(csv);
         if !path.exists() {
