@@ -12,6 +12,7 @@ pub mod integrator;
 pub mod magnetosphere;
 pub mod systems;
 pub mod tle;
+pub mod world;
 
 #[cfg(test)]
 mod tests;

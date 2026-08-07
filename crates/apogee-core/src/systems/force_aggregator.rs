@@ -231,11 +231,13 @@ mod tests {
 
     #[test]
     fn test_total_sums_all_accelerations() {
-        let mut forces = AggregatedForces::default();
-        forces.gravity = AccelerationVector::from_xyz(1.0, 0.0, 0.0);
-        forces.drag = AccelerationVector::from_xyz(0.0, 2.0, 0.0);
-        forces.srp = AccelerationVector::from_xyz(0.0, 0.0, 3.0);
-        forces.thrust = AccelerationVector::from_xyz(0.5, 0.5, 0.5);
+        let forces = AggregatedForces {
+            gravity: AccelerationVector::from_xyz(1.0, 0.0, 0.0),
+            drag: AccelerationVector::from_xyz(0.0, 2.0, 0.0),
+            srp: AccelerationVector::from_xyz(0.0, 0.0, 3.0),
+            thrust: AccelerationVector::from_xyz(0.5, 0.5, 0.5),
+            ..Default::default()
+        };
         let total = forces.total();
         assert_relative_eq!(total.vector.x, 1.5);
         assert_relative_eq!(total.vector.y, 2.5);
