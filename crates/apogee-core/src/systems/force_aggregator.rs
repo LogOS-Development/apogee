@@ -7,8 +7,8 @@ use nalgebra::Vector3;
 use crate::aero::model::AtmosphereInput;
 use crate::aero::nrlmsise00::Nrlmsise00;
 use crate::aero::{AtmosphericDrag, SolarRadiationPressure};
-use crate::components::kinematics::Kinematics;
-use crate::components::rigid_body::{SimulationConfig, SpacecraftConfig};
+use crate::components::rigid_body::SimulationConfig;
+use crate::components::spacecraft::SpacecraftBundle;
 use crate::ephemeris::kernel::SolarSystemState;
 use crate::gravity::PointMassGravity;
 
@@ -70,16 +70,17 @@ impl AggregatedForces {
 ///
 /// Space-weather values are taken from `sim_config` rather than hardcoded so
 /// a federation can drive them from an external simulation.
-#[allow(clippy::too_many_arguments)]
 pub fn aggregate_forces(
-    kinematics: &Kinematics,
-    rigid_body: &crate::components::rigid_body::RigidBody,
-    config: &SpacecraftConfig,
+    bundle: &SpacecraftBundle,
     sim_config: &SimulationConfig,
     celestial: &SolarSystemState,
     day_of_year: u16,
     seconds_utc: f64,
 ) -> AggregatedForces {
+    let kinematics = &bundle.kinematics;
+    let rigid_body = &bundle.rigid_body;
+    let config = &bundle.config;
+
     let gravity = PointMassGravity
         .acceleration(&kinematics.position, celestial)
         .unwrap_or_else(|_| AccelerationVector::new(Vector3::zeros()));
@@ -167,34 +168,37 @@ mod tests {
     use nalgebra::Vector3;
 
     use super::*;
-    use crate::components::rigid_body::RigidBody;
+    use crate::components::kinematics::Kinematics;
+    use crate::components::spacecraft::SpacecraftBundle;
     use approx::assert_relative_eq;
 
-    fn make_iss_state() -> Kinematics {
+    fn make_iss_bundle() -> SpacecraftBundle {
         let r = R_EARTH_EQ + 408_000.0;
         let v = (GM_EARTH / r).sqrt();
-        Kinematics {
-            position: Vector3::new(r, 0.0, 0.0),
-            velocity: Vector3::new(0.0, v, 0.0),
-            attitude: nalgebra::Quaternion::identity(),
-            angular_velocity: Vector3::zeros(),
+        SpacecraftBundle {
+            kinematics: Kinematics {
+                position: Vector3::new(r, 0.0, 0.0),
+                velocity: Vector3::new(0.0, v, 0.0),
+                attitude: nalgebra::Quaternion::identity(),
+                angular_velocity: Vector3::zeros(),
+            },
+            rigid_body: crate::components::rigid_body::RigidBody {
+                mass: Kilograms::new(420_000.0),
+                inertia: nalgebra::Matrix3::identity(),
+                cg_offset: Vector3::zeros(),
+            },
+            config: crate::components::rigid_body::SpacecraftConfig {
+                ballistic_coefficient: 1e-4,
+                srp_area: Area::new(2_500.0),
+                reflectivity: 1.2,
+                reference_mass_kg: 420_000.0,
+            },
         }
     }
 
     #[test]
     fn test_aggregate_forces_finite() {
-        let kinematics = make_iss_state();
-        let rigid_body = RigidBody {
-            mass: Kilograms::new(420_000.0),
-            inertia: nalgebra::Matrix3::identity(),
-            cg_offset: Vector3::zeros(),
-        };
-        let config = SpacecraftConfig {
-            ballistic_coefficient: 1e-4,
-            srp_area: Area::new(2_500.0),
-            reflectivity: 1.2,
-            reference_mass_kg: 420_000.0,
-        };
+        let bundle = make_iss_bundle();
         let sim_config = SimulationConfig::default();
         let celestial = SolarSystemState {
             states: vec![crate::ephemeris::kernel::BodyState {
@@ -203,15 +207,7 @@ mod tests {
                 velocity: Vector3::zeros(),
             }],
         };
-        let forces = aggregate_forces(
-            &kinematics,
-            &rigid_body,
-            &config,
-            &sim_config,
-            &celestial,
-            80,
-            12.0 * 3600.0,
-        );
+        let forces = aggregate_forces(&bundle, &sim_config, &celestial, 80, 12.0 * 3600.0);
         let total = forces.total();
         assert!(total.raw().iter().all(|v| v.is_finite()));
         assert!(forces.gravity.raw().norm() > 0.0);
