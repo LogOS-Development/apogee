@@ -97,8 +97,6 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -135,7 +133,7 @@ jobs:
           echo "percentage=$PCT" >> "$GITHUB_OUTPUT"
           echo "Coverage: $PCT% ($TOTAL_HIT/$TOTAL_FOUND lines)"
 
-      - name: Generate coverage badge and JSON
+      - name: Generate coverage JSON
         run: |
           PCT="${{ steps.cov.outputs.percentage }}"
           # Color: red <60, orange <80, yellow <90, green >=90
@@ -148,35 +146,8 @@ jobs:
           else
             COLOR="e05d44"
           fi
-          LABEL="coverage"
-          # Calculate width based on text length
           VALUE="${PCT}%"
-          LABEL_W=70
-          VALUE_W=$(( ${#VALUE} * 8 + 10 ))
-          TOTAL_W=$(( LABEL_W + VALUE_W ))
-          cat > .github/badge-coverage.svg << EOF
-          <svg xmlns="http://www.w3.org/2000/svg" width="$TOTAL_W" height="20">
-            <linearGradient id="b" x2="0" y2="100%">
-              <stop offset="0" stop-color="#bbb" stop-opacity=".1"/>
-              <stop offset="1" stop-opacity=".1"/>
-            </linearGradient>
-            <mask id="a">
-              <rect width="$TOTAL_W" height="20" rx="3" fill="#fff"/>
-            </mask>
-            <g mask="url(#a)">
-              <path fill="#555" d="M0 0h$LABEL_W v20H0z"/>
-              <path fill="#$COLOR" d="M$LABEL_W 0h$VALUE_W v20H$LABEL_W z"/>
-              <path fill="url(#b)" d="M0 0h$TOTAL_W v20H0z"/>
-            </g>
-            <g fill="#fff" text-anchor="middle" font-family="Verdana,DejaVu Sans,sans-serif" font-size="11">
-              <text x="$(( LABEL_W / 2 ))" y="14" fill="#010101" fill-opacity=".3">$LABEL</text>
-              <text x="$(( LABEL_W / 2 ))" y="13">$LABEL</text>
-              <text x="$(( LABEL_W + VALUE_W / 2 ))" y="14" fill="#010101" fill-opacity=".3">$VALUE</text>
-              <text x="$(( LABEL_W + VALUE_W / 2 ))" y="13">$VALUE</text>
-            </g>
-          </svg>
-          EOF
-          cat > .github/coverage.json << EOF
+          cat > coverage.json << EOF
           {
             "schemaVersion": 1,
             "label": "coverage",
@@ -185,16 +156,25 @@ jobs:
           }
           EOF
 
-      - name: Commit badge
+      - name: Push JSON to badges branch
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .github/badge-coverage.svg .github/coverage.json
-          if git diff --cached --quiet; then
-            echo "No badge changes to commit"
+          # Fetch the badges branch (or orphan-create it on first run).
+          if git fetch origin badges; then
+            git checkout badges
           else
-            git commit -m "chore: update coverage badge [skip ci]"
-            git push
+            git checkout --orphan badges
+            git rm -rf .
+          fi
+          mkdir -p .github
+          mv coverage.json .github/coverage.json
+          git add .github/coverage.json
+          if git diff --cached --quiet; then
+            echo "No coverage changes to commit"
+          else
+            git commit -m "chore: update coverage badge JSON [skip ci]"
+            git push origin badges
           fi
 
       - name: Upload lcov artifact

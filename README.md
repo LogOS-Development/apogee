@@ -1,7 +1,7 @@
 # Apogee
 
-[![CI](https://github.com/ryansennis/apogee/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ryansennis/apogee/actions/workflows/ci.yml)
-[![Coverage](.github/badge-coverage.svg)](https://github.com/ryansennis/apogee/actions/workflows/ci.yml)
+[![CI](https://github.com/LogOS-Development/apogee/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/LogOS-Development/apogee/actions/workflows/ci.yml)
+[![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/LogOS-Development/apogee/badges/.github/coverage.json)](https://github.com/LogOS-Development/apogee/actions/workflows/ci.yml)
 
 A multiplayer space simulation with an authoritative headless physics server and a Godot 4 client. Built in Rust for numerical fidelity — real JPL ephemeris, spherical harmonic gravity, atmospheric models, geomagnetic field, and multi-rate integration.
 
