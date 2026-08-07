@@ -16,6 +16,7 @@ use nalgebra::Vector3;
 
 use crate::components::kinematics::Kinematics;
 use crate::components::rigid_body::{RigidBody, SimulationConfig, SpacecraftConfig};
+use crate::components::spacecraft::SpacecraftBundle;
 use crate::ephemeris::kernel::{BodyState, SolarSystemState};
 use crate::systems::step::{propagate, step_world, SimContext};
 use crate::tle::Tle;
@@ -42,11 +43,24 @@ fn iss_components() -> (
 ) {
     let tle = Tle::parse(ISS_TLE).expect("embedded ISS TLE should parse");
     let (pos, vel) = tle.to_state_vector();
-    let kinematics = Kinematics {
-        position: pos,
-        velocity: vel,
-        attitude: nalgebra::Quaternion::identity(),
-        angular_velocity: Vector3::zeros(),
+    let bundle = SpacecraftBundle {
+        kinematics: Kinematics {
+            position: pos,
+            velocity: vel,
+            attitude: nalgebra::Quaternion::identity(),
+            angular_velocity: Vector3::zeros(),
+        },
+        rigid_body: RigidBody {
+            mass: Kilograms::new(420_000.0),
+            inertia: nalgebra::Matrix3::identity() * 1e7,
+            cg_offset: Vector3::zeros(),
+        },
+        config: SpacecraftConfig {
+            ballistic_coefficient: 1e-4,
+            srp_area: Area::new(2_500.0),
+            reflectivity: 1.2,
+            reference_mass_kg: 420_000.0,
+        },
     };
     let rigid_body = RigidBody {
         mass: Kilograms::new(420_000.0),
@@ -122,6 +136,7 @@ fn test_iss_24h_propagation_stays_leo() {
         epoch: iss_epoch(),
     };
 
+    let mut bundle = bundle;
     propagate(
         &mut kin,
         &rb,

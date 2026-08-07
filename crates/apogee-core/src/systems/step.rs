@@ -12,7 +12,8 @@
 use apogee_common::units::Seconds;
 
 use crate::components::kinematics::Kinematics;
-use crate::components::rigid_body::{RigidBody, SimulationConfig, SpacecraftConfig};
+use crate::components::rigid_body::SimulationConfig;
+use crate::components::spacecraft::SpacecraftBundle;
 use crate::ephemeris::kernel::SolarSystemState;
 use crate::integrator::{IntegrationResult, Integrator, Rk4, StateDerivative, StateVector};
 use crate::systems::force_aggregator::aggregate_forces;
@@ -63,13 +64,19 @@ pub fn step_spacecraft(
     integrator: &mut Rk4,
     dt: Seconds<f64>,
 ) -> IntegrationResult {
-    let mut state = StateVector::from_kinematics(kinematics);
+    let mut state = StateVector::from_kinematics(&bundle.kinematics);
 
-    let inertia = rigid_body.inertia;
+    let inertia = bundle.rigid_body.inertia;
     let inertia_inv = inertia
         .try_inverse()
         .unwrap_or_else(nalgebra::Matrix3::identity);
-    let _mass_inv = 1.0 / rigid_body.mass.into_value();
+    let _mass_inv = 1.0 / bundle.rigid_body.mass.into_value();
+
+    // Capture the immutable parts of the bundle for the derivative closure.
+    // We need a snapshot of the rigid_body and config so the closure borrows
+    // do not conflict with the mutable kinematics write-back.
+    let rigid_body = &bundle.rigid_body;
+    let config = &bundle.config;
 
     // Snapshot the immutable parts so the derivative closure does not conflict
     // with the mutable kinematics write-back.
@@ -114,7 +121,7 @@ pub fn step_spacecraft(
     };
 
     let result = integrator.step(&mut state, &derivative_fn, dt);
-    state.write_to_kinematics(kinematics);
+    state.write_to_kinematics(&mut bundle.kinematics);
     result
 }
 
@@ -183,6 +190,44 @@ pub fn propagate(
         elapsed += step;
         ctx.epoch += step * Unit::Second;
     }
+}
+
+/// Propagate a single entity in the `World` for `duration_s` seconds.
+///
+/// Convenience wrapper for the common single-spacecraft case: creates a
+/// temporary `World` from the given bundle and context, calls `step_world`
+/// in a loop, then returns the propagated bundle.
+pub fn propagate_single(
+    bundle: SpacecraftBundle,
+    sim_config: SimulationConfig,
+    celestial: SolarSystemState,
+    dt: Seconds<f64>,
+    duration_s: Seconds<f64>,
+    day_of_year: u16,
+    seconds_utc: f64,
+) -> SpacecraftBundle {
+    let mut world = World::with_config(sim_config, celestial);
+    world.day_of_year = day_of_year;
+    world.seconds_utc = seconds_utc;
+    let _entity = world.spawn(bundle);
+
+    let total = duration_s.into_value();
+    let dt_value = dt.into_value();
+    let mut elapsed = 0.0_f64;
+    while elapsed < total {
+        let remaining = total - elapsed;
+        let step = if remaining < dt_value {
+            remaining
+        } else {
+            dt_value
+        };
+        step_world(&mut world, Seconds::new(step));
+        elapsed += step;
+    }
+
+    // Return the single entity's bundle.
+    let entity = world.entities().next().expect("entity should exist");
+    world.get(entity).unwrap().clone()
 }
 
 #[cfg(test)]
