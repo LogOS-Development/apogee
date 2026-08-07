@@ -1,20 +1,15 @@
-//! Tests module.
+//! Integration and validation tests, organized by module.
+//!
+//! Each subdirectory mirrors the crate's module structure. Cross-module
+//! integration tests live in the subdirectory of the primary module they
+//! exercise (e.g. trajectory propagation tests that use the integrator +
+//! ephemeris + gravity live under `integrator/` or `ephemeris/`).
 
 pub mod helpers;
 
-mod apollo15_validation;
-mod artemis2_validation;
-mod clock;
-mod data_integrity;
-mod eop;
-mod frame_service;
-mod integration_erfa;
-mod iss_propagation;
-mod leap_seconds;
-mod lunar_orbit;
-mod mars_propagation_golden;
-mod nrlmsise00;
-mod nutation_precession;
-mod probe;
-mod space_weather;
-mod tle_parser;
+mod aero;
+mod ephemeris;
+mod frames;
+mod integrator;
+mod systems;
+mod tle;

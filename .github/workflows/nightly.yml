@@ -49,7 +49,7 @@ jobs:
         run: cargo clippy -p apogee-core --features hwm14 -- -D warnings
 
       - name: Test workspace (including ignored tests, excluding slow kernel tests)
-        run: cargo test --workspace -- --include-ignored --skip mars_propagation_golden_snapshots_match --skip de441_mars_barycenter_vs_horizons
+        run: cargo test --workspace -- --include-ignored --skip de441_mars_barycenter_vs_horizons --skip de441_multi_body_vs_horizons
 
       - name: Test hwm14 feature (including ignored Fortran tests)
         run: cargo test -p apogee-core --features hwm14 -- --include-ignored
@@ -57,10 +57,10 @@ jobs:
       - name: Build hwm14_samples example
         run: cargo build --example hwm14_samples -p apogee-core --features hwm14
 
-  # Slow kernel/golden tests run separately with a generous timeout so they do
+  # Slow kernel tests run separately with a generous timeout so they do
   # not cancel the fast job if they hang.
-  slow-golden-tests:
-    name: Slow DE441/golden snapshot tests
+  slow-kernel-tests:
+    name: Slow DE441 kernel tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -83,5 +83,5 @@ jobs:
       - name: Fetch external data assets
         run: ./scripts/fetch_data.sh
 
-      - name: Test DE441 probe and Mars golden snapshots
-        run: cargo test --workspace -- --ignored mars_propagation_golden_snapshots_match de441_mars_barycenter_vs_horizons
+      - name: Test DE441 ephemeris validation
+        run: cargo test --workspace -- --ignored de441_mars_barycenter_vs_horizons de441_multi_body_vs_horizons

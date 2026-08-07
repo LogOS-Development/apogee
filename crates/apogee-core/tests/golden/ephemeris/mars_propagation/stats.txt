@@ -1,8 +1,0 @@
-samples: 547
-start ET: 789004800.0
-end ET: 836179200.0
-min heliocentric distance: 206633232.092 km
-max heliocentric distance: 249239329.521 km
-mean velocity: 24.091280 km/s
-min velocity: 21.968878 km/s
-max velocity: 26.507192 km/s
