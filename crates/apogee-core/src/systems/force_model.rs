@@ -22,8 +22,8 @@ use crate::ephemeris::kernel::SolarSystemState;
 ///
 /// Contains everything a force model might need: the body's kinematic state,
 /// its physical properties, spacecraft config, the celestial ephemeris, the
-/// space-weather environment, and the simulation clock (day of year +
-/// seconds UTC). Individual force models read only the fields they need.
+/// space-weather environment, and the current simulation epoch. Individual
+/// force models read only the fields they need.
 pub struct ForceContext<'a> {
     /// Translational + rotational state of the body being evaluated.
     pub kinematics: &'a Kinematics,
@@ -35,10 +35,8 @@ pub struct ForceContext<'a> {
     pub sim_config: &'a SimulationConfig,
     /// Celestial ephemeris state (positions/velocities of all massive bodies).
     pub celestial: &'a SolarSystemState,
-    /// Day of year [1, 366].
-    pub day_of_year: u16,
-    /// Seconds since UTC midnight [0, 86400).
-    pub seconds_utc: f64,
+    /// Current simulation epoch.
+    pub epoch: hifitime::Epoch,
 }
 
 /// A discrete physics force model contributing acceleration and/or torque.

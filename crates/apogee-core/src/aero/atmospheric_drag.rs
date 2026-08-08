@@ -81,18 +81,23 @@ impl crate::systems::force_model::ForceModel for AtmosphericDrag {
         use crate::aero::model::AtmosphereInput;
         use crate::aero::nrlmsise00::Nrlmsise00;
 
+        // Derive day-of-year and seconds-into-day from the epoch.
+        let doy_f64 = ctx.epoch.day_of_year(); // 1-based, fractional
+        let day_of_year = doy_f64 as u16;
+        let seconds_utc = (doy_f64 - doy_f64.floor()) * 86_400.0;
+
         let model = Nrlmsise00;
         let latlon = crate::systems::force_aggregator::ecef_lat_lon_from_inertial(
             &ctx.kinematics.position,
-            ctx.day_of_year,
-            ctx.seconds_utc,
+            day_of_year,
+            seconds_utc,
         );
         let input = AtmosphereInput {
             altitude_m: apogee_common::units::Meters::new(latlon.altitude_m),
             latitude_rad: latlon.latitude_rad,
             longitude_rad: latlon.longitude_rad,
-            day_of_year: ctx.day_of_year,
-            seconds_utc: ctx.seconds_utc,
+            day_of_year,
+            seconds_utc,
             f107: ctx.sim_config.f107,
             f107a: ctx.sim_config.f107a,
             ap: ctx.sim_config.ap,

@@ -1,9 +1,9 @@
 //! ECS World built on [`hecs`].
 //!
 //! The [`World`] wraps a [`hecs::World`] for entity storage and holds shared
-//! simulation context ([`SimulationConfig`], celestial ephemeris state, clock
-//! values). Entities are composed of individual components —
-//! [`Kinematics`], [`RigidBody`], [`SpacecraftConfig`] — rather than a
+//! simulation context ([`SimulationConfig`], celestial ephemeris state, the
+//! current simulation epoch). Entities are composed of individual components
+//! — [`Kinematics`], [`RigidBody`], [`SpacecraftConfig`] — rather than a
 //! monolithic bundle. This lets systems query only the components they need
 //! and allows future entity types (stations, asteroids, debris) to reuse
 //! shared components without fitting into a spacecraft-shaped bundle.
@@ -19,20 +19,18 @@ use crate::ephemeris::kernel::SolarSystemState;
 
 /// The simulation world.
 ///
-/// Owns a [`hecs::World`] for entity/component storage plus shared simulation
-/// context. System functions take `&mut World` and query the inner
-/// [`hecs::World`] for the components they need.
+/// Owns a [`hecs::World`] (exposed as [`World::ecs`]) for entity/component
+/// storage plus shared simulation context. System functions take `&mut World`
+/// and query the inner [`hecs::World`] for the components they need.
 pub struct World {
     /// Archetypal ECS storage for all entities and their components.
-    pub entities: hecs::World,
+    pub ecs: hecs::World,
     /// Space-weather / environment configuration for force models.
     pub sim_config: SimulationConfig,
     /// Celestial ephemeris state (positions and velocities of all bodies).
     pub celestial: SolarSystemState,
-    /// Day of year [1, 365/366], used by the atmosphere model.
-    pub day_of_year: u16,
-    /// Seconds since UTC midnight [0, 86400).
-    pub seconds_utc: f64,
+    /// Current simulation epoch.
+    pub epoch: hifitime::Epoch,
 }
 
 impl Default for World {
@@ -45,22 +43,34 @@ impl World {
     /// Create an empty world with default simulation context.
     pub fn new() -> Self {
         Self {
-            entities: hecs::World::new(),
+            ecs: hecs::World::new(),
             sim_config: SimulationConfig::default(),
             celestial: SolarSystemState::default(),
-            day_of_year: 1,
-            seconds_utc: 0.0,
+            epoch: hifitime::Epoch::from_tai_duration(hifitime::Duration::ZERO),
         }
     }
 
     /// Create an empty world with the given simulation context.
     pub fn with_config(sim_config: SimulationConfig, celestial: SolarSystemState) -> Self {
         Self {
-            entities: hecs::World::new(),
+            ecs: hecs::World::new(),
             sim_config,
             celestial,
-            day_of_year: 1,
-            seconds_utc: 0.0,
+            epoch: hifitime::Epoch::from_tai_duration(hifitime::Duration::ZERO),
+        }
+    }
+
+    /// Create an empty world with the given simulation context and epoch.
+    pub fn with_config_and_epoch(
+        sim_config: SimulationConfig,
+        celestial: SolarSystemState,
+        epoch: hifitime::Epoch,
+    ) -> Self {
+        Self {
+            ecs: hecs::World::new(),
+            sim_config,
+            celestial,
+            epoch,
         }
     }
 
@@ -68,20 +78,26 @@ impl World {
     // Entity API
     // ------------------------------------------------------------------
 
-    /// Spawn a spacecraft entity with the standard component set:
-    /// `Kinematics`, `RigidBody`, `SpacecraftConfig`.
-    pub fn spawn_spacecraft(
-        &mut self,
-        kinematics: crate::components::kinematics::Kinematics,
-        rigid_body: crate::components::rigid_body::RigidBody,
-        config: crate::components::rigid_body::SpacecraftConfig,
-    ) -> Entity {
-        self.entities.spawn((kinematics, rigid_body, config))
+    /// Spawn an entity with any combination of components.
+    ///
+    /// Accepts any [`hecs::DynamicBundle`] — typically a tuple of components.
+    /// This is intentionally generic so the world can hold heterogeneous entity
+    /// types (spacecraft, asteroids, stations, debris) with different
+    /// component sets.
+    ///
+    /// ```
+    /// # use apogee_core::world::World;
+    /// # use apogee_core::components::kinematics::Kinematics;
+    /// let mut world = World::new();
+    /// let entity = world.spawn((Kinematics::default(),));
+    /// ```
+    pub fn spawn(&mut self, components: impl hecs::DynamicBundle) -> Entity {
+        self.ecs.spawn(components)
     }
 
     /// Despawn an entity. Returns `true` if the handle was valid.
     pub fn despawn(&mut self, entity: Entity) -> bool {
-        self.entities.despawn(entity).is_ok()
+        self.ecs.despawn(entity).is_ok()
     }
 
     /// Get an immutable reference to a single component, or `None`.
@@ -91,7 +107,7 @@ impl World {
         &self,
         entity: Entity,
     ) -> Option<hecs::Ref<'_, T>> {
-        self.entities.get::<&T>(entity).ok()
+        self.ecs.get::<&T>(entity).ok()
     }
 
     /// Get a mutable reference to a single component, or `None`.
@@ -101,39 +117,39 @@ impl World {
         &mut self,
         entity: Entity,
     ) -> Option<hecs::RefMut<'_, T>> {
-        self.entities.get::<&mut T>(entity).ok()
+        self.ecs.get::<&mut T>(entity).ok()
     }
 
     /// Number of live entities.
     pub fn len(&self) -> usize {
-        self.entities.len() as usize
+        self.ecs.len() as usize
     }
 
     /// Is the world empty?
     pub fn is_empty(&self) -> bool {
-        self.entities.len() == 0
+        self.ecs.len() == 0
     }
 
     /// Iterate over all live entity handles.
     pub fn entities(&self) -> impl Iterator<Item = Entity> + '_ {
-        self.entities.iter().map(|r| r.entity())
+        self.ecs.iter().map(|r| r.entity())
     }
 
     /// Query all entities that have the given component tuple, returning
     /// immutable references.
     pub fn query<Q: hecs::Query>(&self) -> hecs::QueryBorrow<'_, Q> {
-        self.entities.query::<Q>()
+        self.ecs.query::<Q>()
     }
 
     /// Query all entities that have the given component tuple, returning
     /// mutable references.
     pub fn query_mut<Q: hecs::Query>(&mut self) -> hecs::QueryMut<'_, Q> {
-        self.entities.query_mut::<Q>()
+        self.ecs.query_mut::<Q>()
     }
 
     /// Remove all entities.
     pub fn clear(&mut self) {
-        self.entities.clear();
+        self.ecs.clear();
     }
 }
 
@@ -146,7 +162,7 @@ mod tests {
     use approx::assert_relative_eq;
     use nalgebra::{Matrix3, Quaternion, Vector3};
 
-    fn make_components(id: f64) -> (Kinematics, RigidBody, SpacecraftConfig) {
+    fn make_spacecraft(id: f64) -> (Kinematics, RigidBody, SpacecraftConfig) {
         (
             Kinematics {
                 position: Vector3::new(id, 0.0, 0.0),
@@ -171,18 +187,31 @@ mod tests {
     #[test]
     fn spawn_and_get_component() {
         let mut world = World::new();
-        let (kin, rb, cfg) = make_components(1.0);
-        let e = world.spawn_spacecraft(kin, rb, cfg);
+        let (kin, rb, cfg) = make_spacecraft(1.0);
+        let e = world.spawn((kin, rb, cfg));
         assert_eq!(world.len(), 1);
         let kin = world.get_component::<Kinematics>(e).unwrap();
         assert_relative_eq!(kin.position.x, 1.0);
     }
 
     #[test]
+    fn spawn_heterogeneous_entities() {
+        // A spacecraft with full component set and a bare-body with just kinematics.
+        let mut world = World::new();
+        let (kin, rb, cfg) = make_spacecraft(1.0);
+        let _sc = world.spawn((kin, rb, cfg));
+        let bare = world.spawn((Kinematics::default(),));
+        assert_eq!(world.len(), 2);
+        // The bare entity has Kinematics but no RigidBody.
+        assert!(world.get_component::<Kinematics>(bare).is_some());
+        assert!(world.get_component::<RigidBody>(bare).is_none());
+    }
+
+    #[test]
     fn despawn() {
         let mut world = World::new();
-        let (kin, rb, cfg) = make_components(1.0);
-        let e = world.spawn_spacecraft(kin, rb, cfg);
+        let (kin, rb, cfg) = make_spacecraft(1.0);
+        let e = world.spawn((kin, rb, cfg));
         assert!(world.despawn(e));
         assert_eq!(world.len(), 0);
         assert!(world.get_component::<Kinematics>(e).is_none());
@@ -191,12 +220,11 @@ mod tests {
     #[test]
     fn despawn_stale_handle() {
         let mut world = World::new();
-        let (kin, rb, cfg) = make_components(1.0);
-        let e0 = world.spawn_spacecraft(kin, rb, cfg);
+        let (kin, rb, cfg) = make_spacecraft(1.0);
+        let e0 = world.spawn((kin, rb, cfg));
         world.despawn(e0);
-        let (kin, rb, cfg) = make_components(2.0);
-        let e1 = world.spawn_spacecraft(kin, rb, cfg);
-        // The old handle should not resolve to the new occupant.
+        let (kin, rb, cfg) = make_spacecraft(2.0);
+        let e1 = world.spawn((kin, rb, cfg));
         assert!(world.get_component::<Kinematics>(e0).is_none());
         assert!(world.get_component::<Kinematics>(e1).is_some());
     }
@@ -204,8 +232,8 @@ mod tests {
     #[test]
     fn get_component_mut_modifies() {
         let mut world = World::new();
-        let (kin, rb, cfg) = make_components(1.0);
-        let e = world.spawn_spacecraft(kin, rb, cfg);
+        let (kin, rb, cfg) = make_spacecraft(1.0);
+        let e = world.spawn((kin, rb, cfg));
         {
             let mut kin = world.get_component_mut::<Kinematics>(e).unwrap();
             kin.position = Vector3::new(99.0, 0.0, 0.0);
@@ -219,10 +247,10 @@ mod tests {
     #[test]
     fn query_multi_entity() {
         let mut world = World::new();
-        let (kin, rb, cfg) = make_components(1.0);
-        let e0 = world.spawn_spacecraft(kin, rb.clone(), cfg);
-        let (kin, rb, cfg) = make_components(2.0);
-        let e1 = world.spawn_spacecraft(kin, rb, cfg);
+        let (kin, rb, cfg) = make_spacecraft(1.0);
+        let e0 = world.spawn((kin, rb.clone(), cfg));
+        let (kin, rb, cfg) = make_spacecraft(2.0);
+        let e1 = world.spawn((kin, rb, cfg));
 
         let positions: Vec<_> = world
             .query::<(&Kinematics,)>()
@@ -238,10 +266,10 @@ mod tests {
     #[test]
     fn query_mut_updates_all() {
         let mut world = World::new();
-        let (kin, rb, cfg) = make_components(1.0);
-        let _e0 = world.spawn_spacecraft(kin, rb.clone(), cfg);
-        let (kin, rb, cfg) = make_components(2.0);
-        let _e1 = world.spawn_spacecraft(kin, rb, cfg);
+        let (kin, rb, cfg) = make_spacecraft(1.0);
+        let _e0 = world.spawn((kin, rb.clone(), cfg));
+        let (kin, rb, cfg) = make_spacecraft(2.0);
+        let _e1 = world.spawn((kin, rb, cfg));
 
         for (_, (kin,)) in world.query_mut::<(&mut Kinematics,)>() {
             kin.position = Vector3::new(42.0, 0.0, 0.0);
@@ -273,12 +301,23 @@ mod tests {
     }
 
     #[test]
+    fn with_config_and_epoch() {
+        let epoch = hifitime::Epoch::from_gregorian_utc(2026, 3, 20, 12, 0, 0, 0);
+        let world = World::with_config_and_epoch(
+            SimulationConfig::default(),
+            SolarSystemState::default(),
+            epoch,
+        );
+        assert_eq!(world.epoch, epoch);
+    }
+
+    #[test]
     fn clear_removes_all() {
         let mut world = World::new();
-        let (kin, rb, cfg) = make_components(1.0);
-        let e0 = world.spawn_spacecraft(kin, rb.clone(), cfg);
-        let (kin, rb, cfg) = make_components(2.0);
-        let e1 = world.spawn_spacecraft(kin, rb, cfg);
+        let (kin, rb, cfg) = make_spacecraft(1.0);
+        let e0 = world.spawn((kin, rb.clone(), cfg));
+        let (kin, rb, cfg) = make_spacecraft(2.0);
+        let e1 = world.spawn((kin, rb, cfg));
         world.clear();
         assert_eq!(world.len(), 0);
         assert!(world.get_component::<Kinematics>(e0).is_none());
@@ -288,9 +327,8 @@ mod tests {
     #[test]
     fn despawn_returns_false_for_invalid() {
         let mut world = World::new();
-        let (kin, rb, cfg) = make_components(1.0);
-        let _ = world.spawn_spacecraft(kin, rb, cfg);
-        // A non-existent entity should fail to despawn.
+        let (kin, rb, cfg) = make_spacecraft(1.0);
+        let _ = world.spawn((kin, rb, cfg));
         let bad = Entity::from_bits(u64::MAX).expect("non-zero bits should produce an Entity");
         assert!(!world.despawn(bad));
     }
