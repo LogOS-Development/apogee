@@ -72,6 +72,43 @@ impl AtmosphericDrag {
     }
 }
 
+impl crate::systems::force_model::ForceModel for AtmosphericDrag {
+    fn name(&self) -> &str {
+        "atmospheric drag"
+    }
+
+    fn acceleration(&self, ctx: &crate::systems::force_model::ForceContext) -> AccelerationVector {
+        use crate::aero::model::AtmosphereInput;
+        use crate::aero::nrlmsise00::Nrlmsise00;
+
+        let model = Nrlmsise00;
+        let latlon = crate::systems::force_aggregator::ecef_lat_lon_from_inertial(
+            &ctx.kinematics.position,
+            ctx.day_of_year,
+            ctx.seconds_utc,
+        );
+        let input = AtmosphereInput {
+            altitude_m: apogee_common::units::Meters::new(latlon.altitude_m),
+            latitude_rad: latlon.latitude_rad,
+            longitude_rad: latlon.longitude_rad,
+            day_of_year: ctx.day_of_year,
+            seconds_utc: ctx.seconds_utc,
+            f107: ctx.sim_config.f107,
+            f107a: ctx.sim_config.f107a,
+            ap: ctx.sim_config.ap,
+        };
+        let drag_area = ctx.config.drag_area(ctx.rigid_body.mass);
+        self.acceleration_with_model(
+            &ctx.kinematics.position,
+            &ctx.kinematics.velocity,
+            &model,
+            &input,
+            drag_area,
+            ctx.rigid_body.mass,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

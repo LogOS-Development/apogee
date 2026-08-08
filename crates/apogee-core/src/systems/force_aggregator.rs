@@ -136,13 +136,13 @@ pub fn aggregate_forces(
 /// Approximate geodetic latitude, longitude, and altitude from an inertial
 /// position. This is a coarse spherical approximation sufficient for
 /// atmosphere-model inputs in a first-pass 6DOF demo.
-struct LatLonAlt {
-    latitude_rad: f64,
-    longitude_rad: f64,
-    altitude_m: f64,
+pub(crate) struct LatLonAlt {
+    pub(crate) latitude_rad: f64,
+    pub(crate) longitude_rad: f64,
+    pub(crate) altitude_m: f64,
 }
 
-fn ecef_lat_lon_from_inertial(
+pub(crate) fn ecef_lat_lon_from_inertial(
     position: &Position,
     _day_of_year: u16,
     _seconds_utc: f64,

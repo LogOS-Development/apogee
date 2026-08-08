@@ -66,6 +66,17 @@ impl PointMassGravity {
     }
 }
 
+impl crate::systems::force_model::ForceModel for PointMassGravity {
+    fn name(&self) -> &str {
+        "point-mass gravity"
+    }
+
+    fn acceleration(&self, ctx: &crate::systems::force_model::ForceContext) -> AccelerationVector {
+        self.acceleration(&ctx.kinematics.position, ctx.celestial)
+            .unwrap_or_else(|_| AccelerationVector::new(Vector3::zeros()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
