@@ -48,9 +48,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Need full history to commit back to the PR branch.
+          # Full history needed to commit the badge update back to main.
           fetch-depth: 0
-          # Use the GITHUB_TOKEN so we can push back to the PR branch.
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Rust toolchain
@@ -89,11 +88,19 @@ jobs:
           echo "Coverage: $PCT% ($TOTAL_HIT/$TOTAL_FOUND lines)"
           echo "coverage=$PCT" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Update README badge
-        # On PRs: update the static badge URL in README and commit to the PR branch.
-        # On push to main: just print (can't commit to protected main — the PR
-        # merge already brought the updated badge in).
+      - name: Check coverage threshold (PRs only)
         if: github.event_name == 'pull_request'
+        run: |
+          PCT="${{ steps.cov.outputs.percentage }}"
+          THRESHOLD="80.0"
+          if (( $(echo "$PCT < $THRESHOLD" | bc -l) )); then
+            echo "::error::Coverage $PCT% is below the $THRESHOLD% threshold"
+            exit 1
+          fi
+          echo "::notice::Coverage $PCT% meets the $THRESHOLD% threshold"
+
+      - name: Update README badge (main only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           PCT="${{ steps.cov.outputs.percentage }}"
           # Color: red <60, orange <80, yellow <90, green >=90
