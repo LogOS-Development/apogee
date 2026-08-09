@@ -37,6 +37,8 @@ tracing = "0.1"
 tracing-subscriber = "0.3"
 # Parallelism
 rayon = "1.10"
+# ECS
+hecs = "0.10"
 # Godot 4 bindings (GDExtension)
 godot = "0.5"
 # Test utilities

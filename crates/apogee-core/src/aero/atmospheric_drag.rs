@@ -72,6 +72,48 @@ impl AtmosphericDrag {
     }
 }
 
+impl crate::systems::force_model::ForceModel for AtmosphericDrag {
+    fn name(&self) -> &str {
+        "atmospheric drag"
+    }
+
+    fn acceleration(&self, ctx: &crate::systems::force_model::ForceContext) -> AccelerationVector {
+        use crate::aero::model::AtmosphereInput;
+        use crate::aero::nrlmsise00::Nrlmsise00;
+
+        // Derive day-of-year and seconds-into-day from the epoch.
+        let doy_f64 = ctx.epoch.day_of_year(); // 1-based, fractional
+        let day_of_year = doy_f64 as u16;
+        let seconds_utc = (doy_f64 - doy_f64.floor()) * 86_400.0;
+
+        let model = Nrlmsise00;
+        let latlon = crate::systems::force_aggregator::ecef_lat_lon_from_inertial(
+            &ctx.kinematics.position,
+            day_of_year,
+            seconds_utc,
+        );
+        let input = AtmosphereInput {
+            altitude_m: apogee_common::units::Meters::new(latlon.altitude_m),
+            latitude_rad: latlon.latitude_rad,
+            longitude_rad: latlon.longitude_rad,
+            day_of_year,
+            seconds_utc,
+            f107: ctx.sim_config.f107,
+            f107a: ctx.sim_config.f107a,
+            ap: ctx.sim_config.ap,
+        };
+        let drag_area = ctx.config.drag_area(ctx.rigid_body.mass);
+        self.acceleration_with_model(
+            &ctx.kinematics.position,
+            &ctx.kinematics.velocity,
+            &model,
+            &input,
+            drag_area,
+            ctx.rigid_body.mass,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
