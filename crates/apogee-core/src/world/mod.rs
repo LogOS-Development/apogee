@@ -34,6 +34,8 @@ pub struct World {
     /// registry when `build_celestial_state()` is called. Direct mutation
     /// should be replaced by `celestial_registry` operations.
     pub celestial: SolarSystemState,
+    /// Registry of celestial bodies (kinematic + propagated).
+    pub celestial_registry: CelestialRegistry,
     /// Current simulation epoch.
     pub epoch: hifitime::Epoch,
 }
@@ -51,6 +53,7 @@ impl World {
             ecs: hecs::World::new(),
             sim_config: SimulationConfig::default(),
             celestial: SolarSystemState::default(),
+            celestial_registry: CelestialRegistry::new(),
             epoch: hifitime::Epoch::from_tai_duration(hifitime::Duration::ZERO),
         }
     }
@@ -61,6 +64,7 @@ impl World {
             ecs: hecs::World::new(),
             sim_config,
             celestial,
+            celestial_registry: CelestialRegistry::new(),
             epoch: hifitime::Epoch::from_tai_duration(hifitime::Duration::ZERO),
         }
     }
@@ -75,6 +79,7 @@ impl World {
             ecs: hecs::World::new(),
             sim_config,
             celestial,
+            celestial_registry: CelestialRegistry::new(),
             epoch,
         }
     }
