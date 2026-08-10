@@ -151,9 +151,9 @@ pub fn step_world(world: &mut World, dt: Seconds<f64>) {
         step_spacecraft(kin, rb, cfg, &ctx, &mut integrator, dt);
     }
 
-    // Integrate propagated celestial bodies under point-mass gravity from
+    // Integrate dynamic celestial bodies under point-mass gravity from
     // all bodies in the registry. Kinematic bodies are left untouched.
-    integrate_propagated_celestials(&mut world.celestial_registry, &ctx, &mut integrator, dt);
+    integrate_dynamic_celestials(&mut world.celestial_registry, &ctx, &mut integrator, dt);
 
     // Rebuild celestial state after propagated bodies have moved.
     if !world.celestial_registry.is_empty() {
@@ -164,19 +164,19 @@ pub fn step_world(world: &mut World, dt: Seconds<f64>) {
     world.epoch += dt.into_value() * Unit::Second;
 }
 
-/// Integrate all propagated celestial bodies in the registry one step forward.
+/// Integrate all dynamic celestial bodies in the registry one step forward.
 ///
 /// Each propagated body is accelerated by point-mass gravity from every body
 /// in the registry (including itself — a body's own GM produces zero net force
 /// since r→0 is never hit; the body's position is its own). Kinematic bodies
 /// are skipped: their positions are driven by the ephemeris service.
-fn integrate_propagated_celestials(
+fn integrate_dynamic_celestials(
     registry: &mut crate::components::celestial::CelestialRegistry,
     ctx: &SimContext,
     integrator: &mut Rk4,
     dt: Seconds<f64>,
 ) {
-    for body in registry.propagated_mut() {
+    for body in registry.dynamic_mut() {
         // Build a temporary kinematics for the force aggregator.
         let mut kin = Kinematics {
             position: body.position,
@@ -185,7 +185,7 @@ fn integrate_propagated_celestials(
             angular_velocity: Vector3::zeros(),
         };
 
-        // Propagated bodies only feel gravity — zero out drag/SRP areas.
+        // Dynamic bodies only feel gravity — zero out drag/SRP areas.
         let rb = RigidBody {
             mass: body.mass,
             inertia: nalgebra::Matrix3::identity(),
@@ -401,8 +401,8 @@ mod tests {
     }
 
     #[test]
-    fn test_propagated_celestial_orbits_kinematic_body() {
-        // A small propagated body (asteroid) should orbit a kinematic Earth.
+    fn test_dynamic_celestial_orbits_kinematic_body() {
+        // A small dynamic body (asteroid) should orbit a kinematic Earth.
         let mut world = World::new();
         world.add_celestial_body(crate::components::celestial::CelestialBody::kinematic(
             399,
@@ -414,7 +414,7 @@ mod tests {
         let r = R_EARTH_EQ + 400_000.0;
         let v = (GM_EARTH / r).sqrt();
         world.add_celestial_body(
-            crate::components::celestial::CelestialBody::propagated_from_mass(
+            crate::components::celestial::CelestialBody::dynamic_from_mass(
                 2_000_001,
                 Vector3::new(r, 0.0, 0.0),
                 Vector3::new(0.0, v, 0.0),
@@ -435,7 +435,7 @@ mod tests {
         let rel_err = (e1 - e0).abs() / e0.abs();
         assert!(
             rel_err < 1e-4,
-            "propagated celestial energy drift too large: {}",
+            "dynamic celestial energy drift too large: {}",
             rel_err
         );
     }
@@ -455,7 +455,7 @@ mod tests {
         let r_ast = R_EARTH_EQ + 1_000_000.0;
         let v_ast = (GM_EARTH / r_ast).sqrt();
         world.add_celestial_body(
-            crate::components::celestial::CelestialBody::propagated_from_mass(
+            crate::components::celestial::CelestialBody::dynamic_from_mass(
                 2_000_001,
                 Vector3::new(r_ast, 0.0, 0.0),
                 Vector3::new(0.0, v_ast, 0.0),

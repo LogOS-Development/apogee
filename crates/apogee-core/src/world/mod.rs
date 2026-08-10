@@ -34,7 +34,7 @@ pub struct World {
     /// registry when `build_celestial_state()` is called. Direct mutation
     /// should be replaced by `celestial_registry` operations.
     pub celestial: SolarSystemState,
-    /// Registry of celestial bodies (kinematic + propagated).
+    /// Registry of celestial bodies (kinematic + dynamic).
     pub celestial_registry: CelestialRegistry,
     /// Current simulation epoch.
     pub epoch: hifitime::Epoch,
@@ -174,7 +174,7 @@ impl World {
     /// Rebuild the `celestial` (`SolarSystemState`) from the celestial
     /// registry. This should be called before each `step_world` if the
     /// registry has been modified (kinematic bodies updated from ephemeris,
-    /// or propagated bodies integrated).
+    /// or dynamic bodies integrated).
     pub fn build_celestial_state(&mut self) {
         self.celestial =
             crate::components::celestial::celestial_state_from_registry(&self.celestial_registry);
