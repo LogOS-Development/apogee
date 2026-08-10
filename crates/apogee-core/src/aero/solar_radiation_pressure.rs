@@ -94,16 +94,9 @@ impl crate::systems::force_model::ForceModel for SolarRadiationPressure {
     }
 
     fn acceleration(&self, ctx: &crate::systems::force_model::ForceContext) -> AccelerationVector {
-        let sun_pos = ctx
-            .celestial
-            .states
-            .iter()
-            .find(|s| s.naif_id == 10)
-            .map(|s| s.position)
-            .unwrap_or_else(|| Vector3::new(-apogee_common::constants::AU, 0.0, 0.0));
         self.acceleration(
             &ctx.kinematics.position,
-            &sun_pos,
+            &ctx.sun_position,
             ctx.config.srp_area,
             apogee_common::units::Dimensionless::new(ctx.config.reflectivity),
             ctx.rigid_body.mass,

@@ -12,9 +12,9 @@
 //! converted from `f64` (internal) to `f32` (Godot) at the boundary.
 
 use apogee_common::units::{Area, Kilograms, Seconds};
+use apogee_core::components::celestial::CelestialBodySpec;
 use apogee_core::components::kinematics::Kinematics;
 use apogee_core::components::rigid_body::{RigidBody, SimulationConfig, SpacecraftConfig};
-use apogee_core::ephemeris::kernel::{BodyState, SolarSystemState};
 use apogee_core::systems::step::step_world;
 use apogee_core::world::Entity;
 use apogee_core::world::World as CoreWorld;
@@ -228,7 +228,7 @@ pub struct ApogeeWorld {
 impl INode for ApogeeWorld {
     fn init(base: Base<Node>) -> Self {
         let sim_config = SimulationConfig::default();
-        let world = CoreWorld::with_config(sim_config, SolarSystemState::default());
+        let world = CoreWorld::with_config(sim_config);
         Self {
             base,
             f107: sim_config.f107,
@@ -378,6 +378,11 @@ impl ApogeeWorld {
     /// - `naif_id`: int
     /// - `position`: Vector3 (meters)
     /// - `velocity`: Vector3 (m/s)
+    ///
+    /// Each entry is spawned as an ECS entity with `Kinematics + NaifId +
+    /// GravitySource + CelestialKind::Kinematic` components. The GM is looked
+    /// up from the built-in NAIF table; unknown NAIF IDs get GM = 0 (no
+    /// gravity contribution).
     #[func]
     fn set_celestial_state(&mut self, state: VarDictionary) {
         let Some(entries) = state.get("entries") else {
@@ -385,21 +390,19 @@ impl ApogeeWorld {
         };
         let arr = entries.to::<VarArray>();
 
-        let mut bodies = Vec::with_capacity(arr.len());
         for entry in arr.iter_shared() {
             let d = entry.to::<VarDictionary>();
             let naif_id = dict_get_i32(&d, "naif_id").unwrap_or(0);
             let pos = dict_get_vec3(&d, "position").unwrap_or(Vector3::ZERO);
             let vel = dict_get_vec3(&d, "velocity").unwrap_or(Vector3::ZERO);
 
-            bodies.push(BodyState {
+            let spec = CelestialBodySpec::kinematic(
                 naif_id,
-                position: NaVector3::new(pos.x as f64, pos.y as f64, pos.z as f64),
-                velocity: NaVector3::new(vel.x as f64, vel.y as f64, vel.z as f64),
-            });
+                NaVector3::new(pos.x as f64, pos.y as f64, pos.z as f64),
+                NaVector3::new(vel.x as f64, vel.y as f64, vel.z as f64),
+            );
+            self.world.add_celestial_body(spec);
         }
-
-        self.world.celestial = SolarSystemState { states: bodies };
     }
 }
 
@@ -552,17 +555,14 @@ mod tests {
 
     #[test]
     fn test_spawn_step_query_cycle() {
-        let mut world = CoreWorld::with_config(
-            SimulationConfig::default(),
-            SolarSystemState {
-                states: vec![BodyState {
-                    naif_id: 399,
-                    position: NaVector3::zeros(),
-                    velocity: NaVector3::zeros(),
-                }],
-            },
-        );
+        let mut world = CoreWorld::with_config(SimulationConfig::default());
         world.epoch = Epoch::from_gregorian_utc(2026, 3, 21, 0, 0, 0, 0);
+        // Spawn Earth as a kinematic celestial body at the origin.
+        world.add_celestial_body(CelestialBodySpec::kinematic(
+            399,
+            NaVector3::zeros(),
+            NaVector3::zeros(),
+        ));
 
         let r = R_EARTH_EQ + 400_000.0;
         let v = (GM_EARTH / r).sqrt();

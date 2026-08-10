@@ -1,27 +1,41 @@
-//! Celestial body components and registry.
+//! Celestial body ECS components.
 //!
-//! The hybrid model stores celestial bodies in two categories:
+//! Celestial bodies (Sun, planets, moons, asteroids) are first-class ECS
+//! entities, not a separate data structure. Each body is spawned with a
+//! combination of components:
 //!
-//! - **Kinematic** bodies (Sun, planets, moons): positions are injected from
-//!   the ephemeris service (SPK kernel) each step. They are not integrated.
-//! - **Dynamic** bodies (user-spawned debris, asteroids): positions are
-//!   integrated each step, just like spacecraft. These bodies also
-//!   contribute to the gravity field.
+//! - [`Kinematics`] — position and velocity (shared with spacecraft entities).
+//! - [`GravitySource`] — gravitational parameter GM, used by point-mass gravity.
+//! - [`NaifId`] — body identifier for ephemeris lookup and GM resolution.
+//! - [`CelestialKind`] — kinematic (ephemeris-driven) or dynamic (integrated).
 //!
-//! Both categories live in a [`CelestialRegistry`] on the [`World`], so that
-//! `aggregate_forces` can iterate all massive bodies (kinematic + dynamic)
-//! when computing point-mass gravity on a spacecraft.
+//! Not every body needs every component. An asteroid has
+//! `Kinematics + GravitySource + NaifId + CelestialKind::Dynamic` and nothing
+//! else. Earth may carry future components (`Atmosphere`, `MagneticField`,
+//! `RotationState`) — the ECS model handles this naturally.
+//!
+//! ## Design
+//!
+//! The force aggregator queries `hecs::World` for `(&GravitySource,
+//! &Kinematics)` to compute point-mass gravity, eliminating the separate
+//! `SolarSystemState` that previously duplicated celestial body data.
+//! Kinematic bodies (Sun, planets, moons) have their `Kinematics` updated
+//! from the ephemeris service each step; dynamic bodies (asteroids, debris)
+//! are integrated by `step_world` like spacecraft.
 
 use apogee_common::gravitational_parameter;
 use apogee_common::units::Kilograms;
-use apogee_common::{NaifId, Position, Velocity};
+use apogee_common::NaifId;
 
 /// Kind of celestial body: kinematic (ephemeris-driven) or dynamic.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Stored as an ECS component on each celestial body entity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CelestialKind {
     /// Position is set from an external ephemeris service each step.
     /// The body is never integrated by `step_world`, but it **does**
     /// contribute its GM to the gravity field acting on all other bodies.
+    #[default]
     Kinematic,
 
     /// Position is integrated by `step_world` like a spacecraft.
@@ -29,37 +43,134 @@ pub enum CelestialKind {
     Dynamic,
 }
 
-/// A celestial body in the simulation.
-#[derive(Debug, Clone)]
-pub struct CelestialBody {
-    /// NAIF ID of the body. Used for GM lookup and ephemeris matching.
-    pub naif_id: NaifId,
-    /// Whether this body is kinematic (ephemeris-driven) or dynamic.
-    pub kind: CelestialKind,
-    /// Inertial position (m).
-    pub position: Position,
-    /// Inertial velocity (m/s).
-    pub velocity: Velocity,
-    /// Gravitational parameter GM (m^3/s^2). If the NAIF ID is known, this is
-    /// looked up from the built-in table; otherwise the caller supplies it.
-    pub gm: f64,
-    /// Mass (kg). Derived from GM = G * M for dynamic bodies.
-    ///
-    /// For kinematic bodies this is informational only — the gravity
-    /// contribution comes from the GM value (looked up by NAIF ID), not
-    /// from this mass field. It exists so dynamic bodies can compute GM
-    /// from mass, and for reporting/display purposes.
-    pub mass: Kilograms<f64>,
+impl CelestialKind {
+    /// Is this body kinematic (ephemeris-driven)?
+    pub fn is_kinematic(&self) -> bool {
+        *self == Self::Kinematic
+    }
+
+    /// Is this body dynamic (integrated each step)?
+    pub fn is_dynamic(&self) -> bool {
+        *self == Self::Dynamic
+    }
 }
 
-impl CelestialBody {
+/// NAIF body identifier component.
+///
+/// Used for ephemeris lookup and GM resolution. Stored as a component so
+/// systems can query bodies by NAIF ID without a separate registry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct NaifIdComponent(pub NaifId);
+
+impl NaifIdComponent {
+    /// Create a new NAIF ID component.
+    pub fn new(id: NaifId) -> Self {
+        Self(id)
+    }
+
+    /// The underlying NAIF ID value.
+    pub fn id(&self) -> NaifId {
+        self.0
+    }
+}
+
+/// Gravitational source component.
+///
+/// Carries the gravitational parameter GM (m³/s²) for point-mass gravity
+/// computation. Attached to any entity that contributes to the gravity field
+/// — planets, moons, asteroids, the Sun.
+///
+/// For bodies with a known NAIF ID, GM is looked up from the built-in table
+/// at construction time. For user-spawned bodies (asteroids, debris), the
+/// caller supplies GM directly or derives it from mass.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct GravitySource {
+    /// Gravitational parameter GM (m³/s²).
+    pub gm: f64,
+}
+
+impl GravitySource {
+    /// Create a gravity source from a known GM value.
+    pub fn from_gm(gm: f64) -> Self {
+        Self { gm }
+    }
+
+    /// Create a gravity source from a mass, deriving GM = G * M.
+    pub fn from_mass(mass: Kilograms<f64>) -> Self {
+        Self {
+            gm: mass.into_value() * apogee_common::constants::G,
+        }
+    }
+
+    /// Create a gravity source by looking up GM from the NAIF ID table.
+    /// Returns `None` if the NAIF ID is not in the built-in table.
+    pub fn from_naif_id(naif_id: NaifId) -> Option<Self> {
+        gravitational_parameter(naif_id).map(Self::from_gm)
+    }
+}
+
+/// Mass component for celestial bodies.
+///
+/// Stored separately from [`GravitySource`] because not all gravity sources
+/// need a mass (e.g. a kinematic planet's gravity comes from GM, not from
+/// mass-based integration). Dynamic bodies (asteroids) carry both so the
+/// integrator can compute their acceleration as F/m.
+///
+/// This is an alias for `Kilograms<f64>` — the component is a thin wrapper
+/// so hecs can store it as a distinct component type.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CelestialMass(pub Kilograms<f64>);
+
+impl CelestialMass {
+    /// Create a new celestial mass component.
+    pub fn new(mass: Kilograms<f64>) -> Self {
+        Self(mass)
+    }
+
+    /// The underlying mass value.
+    pub fn mass(&self) -> Kilograms<f64> {
+        self.0
+    }
+}
+
+/// A complete set of components for spawning a celestial body entity.
+///
+/// This is a convenience builder — the caller constructs it, then spawns the
+/// appropriate component tuple into the ECS world. Not all fields are
+/// required for every body:
+///
+/// - `naif_id` and `kind` are always needed.
+/// - `gm` is needed if the body contributes to gravity.
+/// - `mass` is needed for dynamic bodies (integrated by `step_world`).
+/// - `kinematics` (position + velocity) is always needed.
+#[derive(Debug, Clone)]
+pub struct CelestialBodySpec {
+    /// NAIF ID of the body.
+    pub naif_id: NaifId,
+    /// Kinematic (ephemeris-driven) or dynamic (integrated).
+    pub kind: CelestialKind,
+    /// Inertial position (m).
+    pub position: apogee_common::Position,
+    /// Inertial velocity (m/s).
+    pub velocity: apogee_common::Velocity,
+    /// Gravitational parameter GM (m³/s²). If `None`, looked up from NAIF ID.
+    pub gm: Option<f64>,
+    /// Mass (kg). If `None`, derived from GM for dynamic bodies.
+    pub mass: Option<Kilograms<f64>>,
+}
+
+impl CelestialBodySpec {
     /// Create a kinematic celestial body from an ephemeris state.
     ///
     /// GM is looked up from the built-in NAIF table. If the NAIF ID is not
     /// known, GM defaults to 0 (no gravity contribution).
-    pub fn kinematic(naif_id: NaifId, position: Position, velocity: Velocity) -> Self {
-        let gm = gravitational_parameter(naif_id).unwrap_or(0.0);
-        let mass = Kilograms::new(gm / apogee_common::constants::G);
+    pub fn kinematic(
+        naif_id: NaifId,
+        position: apogee_common::Position,
+        velocity: apogee_common::Velocity,
+    ) -> Self {
+        let gm = gravitational_parameter(naif_id);
+        let mass = gm.map(|g| Kilograms::new(g / apogee_common::constants::G));
         Self {
             naif_id,
             kind: CelestialKind::Kinematic,
@@ -70,12 +181,11 @@ impl CelestialBody {
         }
     }
 
-    /// Create a dynamic celestial body (e.g. an asteroid or debris cloud)
-    /// with an explicit GM and mass.
+    /// Create a dynamic celestial body with an explicit GM and mass.
     pub fn dynamic(
         naif_id: NaifId,
-        position: Position,
-        velocity: Velocity,
+        position: apogee_common::Position,
+        velocity: apogee_common::Velocity,
         gm: f64,
         mass: Kilograms<f64>,
     ) -> Self {
@@ -84,16 +194,16 @@ impl CelestialBody {
             kind: CelestialKind::Dynamic,
             position,
             velocity,
-            gm,
-            mass,
+            gm: Some(gm),
+            mass: Some(mass),
         }
     }
 
     /// Create a dynamic celestial body with GM derived from mass.
     pub fn dynamic_from_mass(
         naif_id: NaifId,
-        position: Position,
-        velocity: Velocity,
+        position: apogee_common::Position,
+        velocity: apogee_common::Velocity,
         mass: Kilograms<f64>,
     ) -> Self {
         let gm = mass.into_value() * apogee_common::constants::G;
@@ -102,136 +212,23 @@ impl CelestialBody {
             kind: CelestialKind::Dynamic,
             position,
             velocity,
-            gm,
-            mass,
+            gm: Some(gm),
+            mass: Some(mass),
         }
     }
 
-    /// Is this body kinematic (ephemeris-driven)?
-    pub fn is_kinematic(&self) -> bool {
-        self.kind == CelestialKind::Kinematic
+    /// The resolved GM value (0 if not set and NAIF lookup failed).
+    pub fn resolved_gm(&self) -> f64 {
+        self.gm
+            .unwrap_or_else(|| gravitational_parameter(self.naif_id).unwrap_or(0.0))
     }
 
-    /// Is this body dynamic (integrated each step)?
-    pub fn is_dynamic(&self) -> bool {
-        self.kind == CelestialKind::Dynamic
-    }
-}
-
-/// Registry of all celestial bodies in the simulation world.
-///
-/// Stores both kinematic bodies (updated from ephemeris) and dynamic
-/// bodies (integrated each step). The registry is iterated by the force
-/// aggregator to compute point-mass gravity on spacecraft.
-#[derive(Debug, Clone, Default)]
-pub struct CelestialRegistry {
-    /// All celestial bodies, in insertion order.
-    bodies: Vec<CelestialBody>,
-}
-
-impl CelestialRegistry {
-    /// Create an empty registry.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Add a celestial body to the registry.
-    pub fn add(&mut self, body: CelestialBody) {
-        self.bodies.push(body);
-    }
-
-    /// Number of celestial bodies.
-    pub fn len(&self) -> usize {
-        self.bodies.len()
-    }
-
-    /// Is the registry empty?
-    pub fn is_empty(&self) -> bool {
-        self.bodies.is_empty()
-    }
-
-    /// Iterate over all celestial bodies (immutable).
-    pub fn iter(&self) -> impl Iterator<Item = &CelestialBody> {
-        self.bodies.iter()
-    }
-
-    /// Iterate over all celestial bodies (mutable).
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut CelestialBody> {
-        self.bodies.iter_mut()
-    }
-
-    /// Iterate over only the kinematic bodies (mutable) — used by the
-    /// ephemeris service to update positions each step.
-    pub fn kinematic_mut(&mut self) -> impl Iterator<Item = &mut CelestialBody> {
-        self.bodies.iter_mut().filter(|b| b.is_kinematic())
-    }
-
-    /// Iterate over only the dynamic bodies (mutable) — used by
-    /// `step_world` to integrate positions.
-    pub fn dynamic_mut(&mut self) -> impl Iterator<Item = &mut CelestialBody> {
-        self.bodies.iter_mut().filter(|b| b.is_dynamic())
-    }
-
-    /// Iterate over only the dynamic bodies (immutable).
-    pub fn dynamic(&self) -> impl Iterator<Item = &CelestialBody> {
-        self.bodies.iter().filter(|b| b.is_dynamic())
-    }
-
-    /// Iterate over only the kinematic bodies (immutable).
-    pub fn kinematic(&self) -> impl Iterator<Item = &CelestialBody> {
-        self.bodies.iter().filter(|b| b.is_kinematic())
-    }
-
-    /// Find a body by NAIF ID.
-    pub fn find(&self, naif_id: NaifId) -> Option<&CelestialBody> {
-        self.bodies.iter().find(|b| b.naif_id == naif_id)
-    }
-
-    /// Find a body by NAIF ID (mutable).
-    pub fn find_mut(&mut self, naif_id: NaifId) -> Option<&mut CelestialBody> {
-        self.bodies.iter_mut().find(|b| b.naif_id == naif_id)
-    }
-
-    /// Remove a body by NAIF ID. Returns the body if it was found.
-    pub fn remove(&mut self, naif_id: NaifId) -> Option<CelestialBody> {
-        self.bodies
-            .iter()
-            .position(|b| b.naif_id == naif_id)
-            .map(|i| self.bodies.remove(i))
-    }
-
-    /// Update the position and velocity of a kinematic body from ephemeris
-    /// data. Does nothing if the body is not found or is not kinematic.
-    pub fn update_kinematic(&mut self, naif_id: NaifId, position: Position, velocity: Velocity) {
-        if let Some(body) = self.find_mut(naif_id) {
-            if body.is_kinematic() {
-                body.position = position;
-                body.velocity = velocity;
-            }
-        }
-    }
-
-    /// Clear all bodies from the registry.
-    pub fn clear(&mut self) {
-        self.bodies.clear();
-    }
-}
-
-/// Build a `SolarSystemState` (the flat `Vec<BodyState>` used by the gravity
-/// model) from the registry. All bodies — kinematic and dynamic — are
-/// included, since both contribute to point-mass gravity.
-pub fn celestial_state_from_registry(
-    registry: &CelestialRegistry,
-) -> crate::ephemeris::kernel::SolarSystemState {
-    crate::ephemeris::kernel::SolarSystemState {
-        states: registry
-            .iter()
-            .map(|body| crate::ephemeris::kernel::BodyState {
-                naif_id: body.naif_id,
-                position: body.position,
-                velocity: body.velocity,
-            })
-            .collect(),
+    /// The resolved mass (derived from GM if not explicitly set).
+    pub fn resolved_mass(&self) -> Kilograms<f64> {
+        self.mass.unwrap_or_else(|| {
+            let gm = self.resolved_gm();
+            Kilograms::new(gm / apogee_common::constants::G)
+        })
     }
 }
 
@@ -241,120 +238,53 @@ mod tests {
     use approx::assert_relative_eq;
     use nalgebra::Vector3;
 
-    fn earth() -> CelestialBody {
-        CelestialBody::kinematic(399, Vector3::zeros(), Vector3::zeros())
+    #[test]
+    fn kinematic_spec_has_gm_from_naif_id() {
+        let spec = CelestialBodySpec::kinematic(399, Vector3::zeros(), Vector3::zeros());
+        assert_eq!(spec.kind, CelestialKind::Kinematic);
+        assert_relative_eq!(spec.resolved_gm(), apogee_common::constants::GM_EARTH);
+        assert!(spec.resolved_gm() > 0.0);
     }
 
     #[test]
-    fn kinematic_body_has_gm_from_naif_id() {
-        let body = earth();
-        assert_eq!(body.kind, CelestialKind::Kinematic);
-        assert_relative_eq!(body.gm, apogee_common::constants::GM_EARTH);
-        assert!(body.gm > 0.0);
+    fn kinematic_spec_unknown_naif_has_zero_gm() {
+        let spec = CelestialBodySpec::kinematic(12345, Vector3::zeros(), Vector3::zeros());
+        assert_relative_eq!(spec.resolved_gm(), 0.0);
     }
 
     #[test]
-    fn kinematic_body_unknown_naif_has_zero_gm() {
-        let body = CelestialBody::kinematic(12345, Vector3::zeros(), Vector3::zeros());
-        assert_relative_eq!(body.gm, 0.0);
-    }
-
-    #[test]
-    fn dynamic_body_from_mass() {
+    fn dynamic_spec_from_mass() {
         let mass = Kilograms::new(1e15);
-        let body =
-            CelestialBody::dynamic_from_mass(2000001, Vector3::zeros(), Vector3::zeros(), mass);
-        assert_eq!(body.kind, CelestialKind::Dynamic);
-        assert!(body.is_dynamic());
-        assert!(body.gm > 0.0);
-        assert_relative_eq!(body.gm, 1e15 * apogee_common::constants::G);
+        let spec =
+            CelestialBodySpec::dynamic_from_mass(2000001, Vector3::zeros(), Vector3::zeros(), mass);
+        assert_eq!(spec.kind, CelestialKind::Dynamic);
+        assert!(spec.resolved_gm() > 0.0);
+        assert_relative_eq!(spec.resolved_gm(), 1e15 * apogee_common::constants::G);
     }
 
     #[test]
-    fn registry_add_iter_find() {
-        let mut reg = CelestialRegistry::new();
-        reg.add(earth());
-        reg.add(CelestialBody::dynamic_from_mass(
-            2000001,
-            Vector3::new(1e6, 0.0, 0.0),
-            Vector3::zeros(),
-            Kilograms::new(1e12),
-        ));
-        assert_eq!(reg.len(), 2);
-        assert!(reg.find(399).is_some());
-        assert!(reg.find(2000001).is_some());
-        assert!(reg.find(999).is_none());
+    fn gravity_source_from_naif_id() {
+        let gs = GravitySource::from_naif_id(399).unwrap();
+        assert_relative_eq!(gs.gm, apogee_common::constants::GM_EARTH);
     }
 
     #[test]
-    fn registry_kinematic_dynamic_filters() {
-        let mut reg = CelestialRegistry::new();
-        reg.add(earth());
-        reg.add(CelestialBody::dynamic_from_mass(
-            2000001,
-            Vector3::zeros(),
-            Vector3::zeros(),
-            Kilograms::new(1e12),
-        ));
-        assert_eq!(reg.kinematic().count(), 1);
-        assert_eq!(reg.dynamic().count(), 1);
-        assert_eq!(reg.kinematic_mut().count(), 1);
-        assert_eq!(reg.dynamic_mut().count(), 1);
+    fn gravity_source_from_unknown_naif_returns_none() {
+        assert!(GravitySource::from_naif_id(12345).is_none());
     }
 
     #[test]
-    fn registry_update_kinematic() {
-        let mut reg = CelestialRegistry::new();
-        reg.add(earth());
-        reg.update_kinematic(
-            399,
-            Vector3::new(1e9, 0.0, 0.0),
-            Vector3::new(1e3, 0.0, 0.0),
-        );
-        let body = reg.find(399).unwrap();
-        assert_relative_eq!(body.position.x, 1e9);
-        assert_relative_eq!(body.velocity.x, 1e3);
+    fn gravity_source_from_mass() {
+        let gs = GravitySource::from_mass(Kilograms::new(1e15));
+        assert_relative_eq!(gs.gm, 1e15 * apogee_common::constants::G);
     }
 
     #[test]
-    fn registry_update_kinematic_ignores_dynamic() {
-        let mut reg = CelestialRegistry::new();
-        reg.add(CelestialBody::dynamic_from_mass(
-            2000001,
-            Vector3::zeros(),
-            Vector3::zeros(),
-            Kilograms::new(1e12),
-        ));
-        // Should not update a dynamic body.
-        reg.update_kinematic(2000001, Vector3::new(1e9, 0.0, 0.0), Vector3::zeros());
-        let body = reg.find(2000001).unwrap();
-        assert_relative_eq!(body.position.x, 0.0);
-    }
-
-    #[test]
-    fn registry_remove() {
-        let mut reg = CelestialRegistry::new();
-        reg.add(earth());
-        assert_eq!(reg.len(), 1);
-        let removed = reg.remove(399);
-        assert!(removed.is_some());
-        assert_eq!(reg.len(), 0);
-        assert!(reg.remove(399).is_none());
-    }
-
-    #[test]
-    fn celestial_state_from_registry_includes_all() {
-        let mut reg = CelestialRegistry::new();
-        reg.add(earth());
-        reg.add(CelestialBody::dynamic_from_mass(
-            2000001,
-            Vector3::new(1e6, 0.0, 0.0),
-            Vector3::zeros(),
-            Kilograms::new(1e12),
-        ));
-        let state = celestial_state_from_registry(&reg);
-        assert_eq!(state.states.len(), 2);
-        assert_eq!(state.states[0].naif_id, 399);
-        assert_eq!(state.states[1].naif_id, 2000001);
+    fn celestial_kind_defaults_to_kinematic() {
+        assert_eq!(CelestialKind::default(), CelestialKind::Kinematic);
+        assert!(CelestialKind::Kinematic.is_kinematic());
+        assert!(!CelestialKind::Kinematic.is_dynamic());
+        assert!(CelestialKind::Dynamic.is_dynamic());
+        assert!(!CelestialKind::Dynamic.is_kinematic());
     }
 }

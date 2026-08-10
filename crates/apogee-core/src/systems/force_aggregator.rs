@@ -9,8 +9,7 @@ use crate::aero::nrlmsise00::Nrlmsise00;
 use crate::aero::{AtmosphericDrag, SolarRadiationPressure};
 use crate::components::kinematics::Kinematics;
 use crate::components::rigid_body::{RigidBody, SimulationConfig, SpacecraftConfig};
-use crate::ephemeris::kernel::SolarSystemState;
-use crate::gravity::PointMassGravity;
+use crate::gravity::{GravitySources, PointMassGravity};
 use hifitime::Epoch;
 
 /// Aggregated forces and torques on a body.
@@ -61,7 +60,7 @@ impl AggregatedForces {
 /// Compute all perturbative accelerations for a spacecraft.
 ///
 /// This is the main force aggregation for Phase 1.6. It uses:
-/// - point-mass gravity from all bodies in `celestial`
+/// - point-mass gravity from all bodies in `gravity_sources`
 /// - NRLMSISE-00 atmospheric drag
 /// - solar radiation pressure with cylindrical eclipse detection
 ///
@@ -69,12 +68,18 @@ impl AggregatedForces {
 /// via hifitime's `day_of_year()` accessor (1-based, fractional). Space-weather
 /// values are taken from `sim_config` rather than hardcoded so a federation can
 /// drive them from an external simulation.
+///
+/// `sun_position` is the inertial position of the Sun (NAIF ID 10), used for
+/// SRP eclipse detection. If no Sun entity exists in the world, the caller
+/// should pass a default position (SRP will fall back to a heliocentric
+/// approximation).
 pub fn aggregate_forces(
     kinematics: &Kinematics,
     rigid_body: &RigidBody,
     config: &SpacecraftConfig,
     sim_config: &SimulationConfig,
-    celestial: &SolarSystemState,
+    gravity_sources: &GravitySources,
+    sun_position: Position,
     epoch: Epoch,
 ) -> AggregatedForces {
     let doy_f64 = epoch.day_of_year(); // 1-based, fractional
@@ -82,7 +87,7 @@ pub fn aggregate_forces(
     let seconds_utc = (doy_f64 - doy_f64.floor()) * 86_400.0;
 
     let gravity = PointMassGravity
-        .acceleration(&kinematics.position, celestial)
+        .acceleration(&kinematics.position, gravity_sources)
         .unwrap_or_else(|_| AccelerationVector::new(Vector3::zeros()));
 
     let drag = {
@@ -110,15 +115,9 @@ pub fn aggregate_forces(
     };
 
     let srp = {
-        let sun_pos = celestial
-            .states
-            .iter()
-            .find(|s| s.naif_id == 10)
-            .map(|s| s.position)
-            .unwrap_or_else(|| Vector3::new(-apogee_common::constants::AU, 0.0, 0.0));
         SolarRadiationPressure.acceleration(
             &kinematics.position,
-            &sun_pos,
+            &sun_position,
             config.srp_area,
             Dimensionless::new(config.reflectivity),
             rigid_body.mass,
@@ -195,16 +194,21 @@ mod tests {
     fn test_aggregate_forces_finite() {
         let (kin, rb, cfg) = make_iss_components();
         let sim_config = SimulationConfig::default();
-        let celestial = SolarSystemState {
-            states: vec![crate::ephemeris::kernel::BodyState {
-                naif_id: 399,
-                position: Vector3::zeros(),
-                velocity: Vector3::zeros(),
-            }],
+        let gravity_sources = GravitySources {
+            sources: vec![(GM_EARTH, Vector3::zeros())],
         };
+        let sun_position = Vector3::new(-apogee_common::constants::AU, 0.0, 0.0);
         // Day 80, 12:00 UTC → 2026-03-21T12:00:00
         let epoch = Epoch::from_gregorian_utc(2026, 3, 21, 12, 0, 0, 0);
-        let forces = aggregate_forces(&kin, &rb, &cfg, &sim_config, &celestial, epoch);
+        let forces = aggregate_forces(
+            &kin,
+            &rb,
+            &cfg,
+            &sim_config,
+            &gravity_sources,
+            sun_position,
+            epoch,
+        );
         let total = forces.total();
         assert!(total.raw().iter().all(|v| v.is_finite()));
         assert!(forces.gravity.raw().norm() > 0.0);

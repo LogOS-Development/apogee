@@ -1,12 +1,18 @@
 //! ECS World built on [`hecs`].
 //!
-//! The [`World`] wraps a [`hecs::World`] for entity storage and holds shared
-//! simulation context ([`SimulationConfig`], celestial ephemeris state, the
-//! current simulation epoch). Entities are composed of individual components
-//! — [`Kinematics`], [`RigidBody`], [`SpacecraftConfig`] — rather than a
+//! The [`World`] wraps a [`hecs::World`] for entity and component storage and
+//! holds shared simulation context ([`SimulationConfig`], the current
+//! simulation epoch). Entities are composed of individual components —
+//! [`Kinematics`], [`RigidBody`], [`SpacecraftConfig`],
+//! [`GravitySource`], [`NaifIdComponent`], [`CelestialKind`] — rather than a
 //! monolithic bundle. This lets systems query only the components they need
-//! and allows future entity types (stations, asteroids, debris) to reuse
-//! shared components without fitting into a spacecraft-shaped bundle.
+//! and allows heterogeneous entity types (spacecraft, planets, asteroids,
+//! debris) to coexist with different component sets.
+//!
+//! Celestial bodies (Sun, planets, moons, asteroids) are first-class ECS
+//! entities, not a separate data structure. The force aggregator queries
+//! the ECS world for `(&GravitySource, &Kinematics)` to compute point-mass
+//! gravity, eliminating the old `SolarSystemState` / `CelestialRegistry`.
 //!
 //! [`hecs::Entity`] is a lightweight `Copy` handle. It wraps a `u64` internally
 //! and is safe to pass across the FFI boundary via [`Entity::to_bits`] /
@@ -14,9 +20,12 @@
 
 pub use hecs::Entity;
 
-use crate::components::celestial::CelestialRegistry;
+use crate::components::celestial::{
+    CelestialBodySpec, CelestialKind, GravitySource, NaifIdComponent,
+};
+use crate::components::kinematics::Kinematics;
 use crate::components::rigid_body::SimulationConfig;
-use crate::ephemeris::kernel::SolarSystemState;
+use apogee_common::NaifId;
 
 /// The simulation world.
 ///
@@ -28,14 +37,6 @@ pub struct World {
     pub ecs: hecs::World,
     /// Space-weather / environment configuration for force models.
     pub sim_config: SimulationConfig,
-    /// Celestial ephemeris state (positions and velocities of all bodies).
-    ///
-    /// This is kept for backward compatibility and is rebuilt from the
-    /// registry when `build_celestial_state()` is called. Direct mutation
-    /// should be replaced by `celestial_registry` operations.
-    pub celestial: SolarSystemState,
-    /// Registry of celestial bodies (kinematic + dynamic).
-    pub celestial_registry: CelestialRegistry,
     /// Current simulation epoch.
     pub epoch: hifitime::Epoch,
 }
@@ -52,34 +53,24 @@ impl World {
         Self {
             ecs: hecs::World::new(),
             sim_config: SimulationConfig::default(),
-            celestial: SolarSystemState::default(),
-            celestial_registry: CelestialRegistry::new(),
             epoch: hifitime::Epoch::from_tai_duration(hifitime::Duration::ZERO),
         }
     }
 
-    /// Create an empty world with the given simulation context.
-    pub fn with_config(sim_config: SimulationConfig, celestial: SolarSystemState) -> Self {
+    /// Create an empty world with the given simulation configuration.
+    pub fn with_config(sim_config: SimulationConfig) -> Self {
         Self {
             ecs: hecs::World::new(),
             sim_config,
-            celestial,
-            celestial_registry: CelestialRegistry::new(),
             epoch: hifitime::Epoch::from_tai_duration(hifitime::Duration::ZERO),
         }
     }
 
-    /// Create an empty world with the given simulation context and epoch.
-    pub fn with_config_and_epoch(
-        sim_config: SimulationConfig,
-        celestial: SolarSystemState,
-        epoch: hifitime::Epoch,
-    ) -> Self {
+    /// Create an empty world with the given simulation configuration and epoch.
+    pub fn with_config_and_epoch(sim_config: SimulationConfig, epoch: hifitime::Epoch) -> Self {
         Self {
             ecs: hecs::World::new(),
             sim_config,
-            celestial,
-            celestial_registry: CelestialRegistry::new(),
             epoch,
         }
     }
@@ -166,25 +157,84 @@ impl World {
     // Celestial body API
     // ------------------------------------------------------------------
 
-    /// Add a celestial body to the registry.
-    pub fn add_celestial_body(&mut self, body: crate::components::celestial::CelestialBody) {
-        self.celestial_registry.add(body);
+    /// Spawn a celestial body as an ECS entity.
+    ///
+    /// The body is spawned with `Kinematics + NaifIdComponent + CelestialKind +
+    /// GravitySource` (if GM is non-zero). Dynamic bodies also get a
+    /// `CelestialMass` component so the integrator can compute acceleration.
+    ///
+    /// Returns the entity handle.
+    pub fn add_celestial_body(&mut self, spec: CelestialBodySpec) -> Entity {
+        let kinematics = Kinematics {
+            position: spec.position,
+            velocity: spec.velocity,
+            attitude: nalgebra::Quaternion::identity(),
+            angular_velocity: nalgebra::Vector3::zeros(),
+        };
+        let naif_id = NaifIdComponent::new(spec.naif_id);
+        let kind = spec.kind;
+        let gm = spec.resolved_gm();
+        let mass = spec.resolved_mass();
+
+        if gm > 0.0 {
+            let gravity = GravitySource::from_gm(gm);
+            if kind.is_dynamic() {
+                let celestial_mass = crate::components::celestial::CelestialMass::new(mass);
+                self.spawn((kinematics, naif_id, kind, gravity, celestial_mass))
+            } else {
+                self.spawn((kinematics, naif_id, kind, gravity))
+            }
+        } else {
+            // No gravity contribution — still spawn with identity components
+            // so the body is visible to ephemeris-update queries.
+            self.spawn((kinematics, naif_id, kind))
+        }
     }
 
-    /// Rebuild the `celestial` (`SolarSystemState`) from the celestial
-    /// registry. This should be called before each `step_world` if the
-    /// registry has been modified (kinematic bodies updated from ephemeris,
-    /// or dynamic bodies integrated).
-    pub fn build_celestial_state(&mut self) {
-        self.celestial =
-            crate::components::celestial::celestial_state_from_registry(&self.celestial_registry);
+    /// Find a celestial body entity by NAIF ID.
+    pub fn find_celestial(&self, naif_id: NaifId) -> Option<Entity> {
+        for (entity, id) in self.ecs.query::<&NaifIdComponent>().iter() {
+            if id.0 == naif_id {
+                return Some(entity);
+            }
+        }
+        None
+    }
+
+    /// Update the position and velocity of a kinematic celestial body from
+    /// ephemeris data. Does nothing if the body is not found or is not
+    /// kinematic.
+    pub fn update_kinematic_celestial(
+        &mut self,
+        naif_id: NaifId,
+        position: apogee_common::Position,
+        velocity: apogee_common::Velocity,
+    ) {
+        let entity = match self.find_celestial(naif_id) {
+            Some(e) => e,
+            None => return,
+        };
+
+        // Check that the body is kinematic before updating.
+        if let Some(kind) = self.get_component::<CelestialKind>(entity) {
+            if !kind.is_kinematic() {
+                return;
+            }
+        }
+
+        if let Some(mut kin) = self.get_component_mut::<Kinematics>(entity) {
+            kin.position = position;
+            kin.velocity = velocity;
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::kinematics::Kinematics;
+    use crate::components::celestial::{
+        CelestialBodySpec, CelestialKind, GravitySource, NaifIdComponent,
+    };
     use crate::components::rigid_body::{RigidBody, SpacecraftConfig};
     use apogee_common::units::{Area, Kilograms};
     use approx::assert_relative_eq;
@@ -315,27 +365,15 @@ mod tests {
             f107a: 180.0,
             ap: 12.0,
         };
-        let celestial = SolarSystemState {
-            states: vec![crate::ephemeris::kernel::BodyState {
-                naif_id: 399,
-                position: Vector3::zeros(),
-                velocity: Vector3::zeros(),
-            }],
-        };
-        let world = World::with_config(sim_config, celestial.clone());
+        let world = World::with_config(sim_config);
         assert_relative_eq!(world.sim_config.f107, 200.0);
-        assert_eq!(world.celestial.states.len(), 1);
         assert_eq!(world.len(), 0);
     }
 
     #[test]
     fn with_config_and_epoch() {
         let epoch = hifitime::Epoch::from_gregorian_utc(2026, 3, 20, 12, 0, 0, 0);
-        let world = World::with_config_and_epoch(
-            SimulationConfig::default(),
-            SolarSystemState::default(),
-            epoch,
-        );
+        let world = World::with_config_and_epoch(SimulationConfig::default(), epoch);
         assert_eq!(world.epoch, epoch);
     }
 
@@ -359,5 +397,88 @@ mod tests {
         let _ = world.spawn((kin, rb, cfg));
         let bad = Entity::from_bits(u64::MAX).expect("non-zero bits should produce an Entity");
         assert!(!world.despawn(bad));
+    }
+
+    // ------------------------------------------------------------------
+    // Celestial body ECS entity tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn add_kinematic_celestial_body() {
+        let mut world = World::new();
+        let entity = world.add_celestial_body(CelestialBodySpec::kinematic(
+            399,
+            Vector3::zeros(),
+            Vector3::zeros(),
+        ));
+        assert!(world.get_component::<Kinematics>(entity).is_some());
+        assert!(world.get_component::<NaifIdComponent>(entity).is_some());
+        assert!(world.get_component::<CelestialKind>(entity).is_some());
+        let gs = world.get_component::<GravitySource>(entity);
+        assert!(gs.is_some());
+        assert_relative_eq!(gs.unwrap().gm, apogee_common::constants::GM_EARTH);
+    }
+
+    #[test]
+    fn add_dynamic_celestial_body() {
+        let mut world = World::new();
+        let entity = world.add_celestial_body(CelestialBodySpec::dynamic_from_mass(
+            2_000_001,
+            Vector3::new(1e6, 0.0, 0.0),
+            Vector3::zeros(),
+            Kilograms::new(1e12),
+        ));
+        assert!(world.get_component::<Kinematics>(entity).is_some());
+        let kind = world.get_component::<CelestialKind>(entity).unwrap();
+        assert!(kind.is_dynamic());
+        let gs = world.get_component::<GravitySource>(entity);
+        assert!(gs.is_some());
+        assert!(gs.unwrap().gm > 0.0);
+    }
+
+    #[test]
+    fn find_celestial_by_naif_id() {
+        let mut world = World::new();
+        let e = world.add_celestial_body(CelestialBodySpec::kinematic(
+            399,
+            Vector3::zeros(),
+            Vector3::zeros(),
+        ));
+        assert_eq!(world.find_celestial(399), Some(e));
+        assert!(world.find_celestial(999).is_none());
+    }
+
+    #[test]
+    fn update_kinematic_celestial() {
+        let mut world = World::new();
+        world.add_celestial_body(CelestialBodySpec::kinematic(
+            399,
+            Vector3::zeros(),
+            Vector3::zeros(),
+        ));
+        world.update_kinematic_celestial(
+            399,
+            Vector3::new(1e9, 0.0, 0.0),
+            Vector3::new(1e3, 0.0, 0.0),
+        );
+        let entity = world.find_celestial(399).unwrap();
+        let kin = world.get_component::<Kinematics>(entity).unwrap();
+        assert_relative_eq!(kin.position.x, 1e9);
+        assert_relative_eq!(kin.velocity.x, 1e3);
+    }
+
+    #[test]
+    fn update_kinematic_ignores_dynamic() {
+        let mut world = World::new();
+        world.add_celestial_body(CelestialBodySpec::dynamic_from_mass(
+            2_000_001,
+            Vector3::zeros(),
+            Vector3::zeros(),
+            Kilograms::new(1e12),
+        ));
+        world.update_kinematic_celestial(2_000_001, Vector3::new(1e9, 0.0, 0.0), Vector3::zeros());
+        let entity = world.find_celestial(2_000_001).unwrap();
+        let kin = world.get_component::<Kinematics>(entity).unwrap();
+        assert_relative_eq!(kin.position.x, 0.0);
     }
 }

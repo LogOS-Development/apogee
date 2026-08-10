@@ -16,14 +16,15 @@ use apogee_common::units::{AccelerationVector, TorqueVector};
 
 use crate::components::kinematics::Kinematics;
 use crate::components::rigid_body::{RigidBody, SimulationConfig, SpacecraftConfig};
-use crate::ephemeris::kernel::SolarSystemState;
+use crate::gravity::GravitySources;
 
 /// Shared context passed to every [`ForceModel`] during a single evaluation.
 ///
 /// Contains everything a force model might need: the body's kinematic state,
-/// its physical properties, spacecraft config, the celestial ephemeris, the
-/// space-weather environment, and the current simulation epoch. Individual
-/// force models read only the fields they need.
+/// its physical properties, spacecraft config, the gravity source snapshot,
+/// the Sun's position (for SRP), the space-weather environment, and the
+/// current simulation epoch. Individual force models read only the fields
+/// they need.
 pub struct ForceContext<'a> {
     /// Translational + rotational state of the body being evaluated.
     pub kinematics: &'a Kinematics,
@@ -33,8 +34,10 @@ pub struct ForceContext<'a> {
     pub config: &'a SpacecraftConfig,
     /// Space-weather / environment configuration.
     pub sim_config: &'a SimulationConfig,
-    /// Celestial ephemeris state (positions/velocities of all massive bodies).
-    pub celestial: &'a SolarSystemState,
+    /// Gravity source snapshot (GM + position of all massive bodies).
+    pub gravity_sources: &'a GravitySources,
+    /// Position of the Sun (NAIF ID 10), for SRP calculation.
+    pub sun_position: apogee_common::Position,
     /// Current simulation epoch.
     pub epoch: hifitime::Epoch,
 }

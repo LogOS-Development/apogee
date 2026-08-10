@@ -1,27 +1,26 @@
 //! Point-mass N-body gravity.
 //!
 //! Computes the total gravitational acceleration acting on a small body
-//! (spacecraft) due to a set of massive celestial bodies supplied by the
-//! ephemeris service.
+//! (spacecraft) due to a set of massive celestial bodies.
 
-use crate::ephemeris::kernel::{BodyState, SolarSystemState};
+use crate::gravity::GravitySources;
 use apogee_common::units::AccelerationVector;
-use apogee_common::{gravitational_parameter, Position};
+use apogee_common::Position;
 use nalgebra::Vector3;
 
 /// Point-mass gravity model.
 ///
 /// The model is stateless; all required masses and positions are taken from
-/// the provided [`SolarSystemState`]. Bodies whose NAIF ID is not present in
-/// the built-in GM table are skipped.
+/// the provided [`GravitySources`] snapshot, which is built from the ECS
+/// world by querying `(&GravitySource, &Kinematics)` entities.
 #[derive(Debug, Default)]
 pub struct PointMassGravity;
 
 impl PointMassGravity {
     /// Compute gravitational acceleration from all celestial bodies.
     ///
-    /// `position` is the inertial position of the spacecraft. `celestial`
-    /// contains the positions (and NAIF IDs) of the massive bodies. The
+    /// `position` is the inertial position of the spacecraft. `sources`
+    /// contains the (GM, position) pairs of all massive bodies. The
     /// acceleration is the sum over all bodies of:
     ///
     ///   a_i = GM_i * (r_i - r) / |r_i - r|^3
@@ -30,29 +29,24 @@ impl PointMassGravity {
     /// The returned vector carries an m/s² unit tag at the public API surface
     /// while the internal math remains on raw `Vector3<f64>`.
     ///
-    /// This is O(N) in the number of celestial bodies.
+    /// This is O(N) in the number of gravity sources.
     pub fn acceleration(
         &self,
         position: &Position,
-        celestial: &SolarSystemState,
+        sources: &GravitySources,
     ) -> Result<AccelerationVector, String> {
         let mut acc = Vector3::zeros();
 
-        for BodyState {
-            naif_id,
-            position: body_pos,
-            velocity: _,
-        } in &celestial.states
-        {
-            let Some(gm) = gravitational_parameter(*naif_id) else {
+        for &(gm, body_pos) in &sources.sources {
+            if gm == 0.0 {
                 continue;
-            };
+            }
 
             let delta = body_pos - position;
             let r2 = delta.norm_squared();
             if r2 == 0.0 {
                 return Err(format!(
-                    "coincident positions for body {naif_id}: singularity in point-mass gravity"
+                    "coincident positions with gravity source (GM={gm}): singularity in point-mass gravity"
                 ));
             }
             let r3 = r2 * r2.sqrt();
@@ -72,7 +66,7 @@ impl crate::systems::force_model::ForceModel for PointMassGravity {
     }
 
     fn acceleration(&self, ctx: &crate::systems::force_model::ForceContext) -> AccelerationVector {
-        self.acceleration(&ctx.kinematics.position, ctx.celestial)
+        self.acceleration(&ctx.kinematics.position, ctx.gravity_sources)
             .unwrap_or_else(|_| AccelerationVector::new(Vector3::zeros()))
     }
 }
@@ -80,14 +74,12 @@ impl crate::systems::force_model::ForceModel for PointMassGravity {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use apogee_common::gravitational_parameter;
     use approx::assert_relative_eq;
 
-    fn body_state(naif_id: i32, position: [f64; 3]) -> BodyState {
-        BodyState {
-            naif_id,
-            position: Vector3::new(position[0], position[1], position[2]),
-            velocity: Vector3::zeros(),
-        }
+    fn source(naif_id: i32, position: [f64; 3]) -> (f64, Position) {
+        let gm = gravitational_parameter(naif_id).unwrap_or(0.0);
+        (gm, Vector3::new(position[0], position[1], position[2]))
     }
 
     #[test]
@@ -95,11 +87,11 @@ mod tests {
         let gravity = PointMassGravity {};
         let spacecraft = Vector3::new(apogee_common::constants::AU, 0.0, 0.0);
 
-        let celestial = SolarSystemState {
-            states: vec![body_state(10, [0.0, 0.0, 0.0])],
+        let sources = GravitySources {
+            sources: vec![source(10, [0.0, 0.0, 0.0])],
         };
 
-        let acc = gravity.acceleration(&spacecraft, &celestial).unwrap();
+        let acc = gravity.acceleration(&spacecraft, &sources).unwrap();
         let raw = acc.raw();
         let expected = -apogee_common::constants::GM_SUN / apogee_common::constants::AU.powi(2);
 
@@ -119,14 +111,14 @@ mod tests {
 
         // Earth at origin, Sun 1 AU away on y-axis. The spacecraft is close
         // to Earth, so Earth dominates; the Sun adds a small orthogonal term.
-        let celestial = SolarSystemState {
-            states: vec![
-                body_state(399, [0.0, 0.0, 0.0]),
-                body_state(10, [0.0, apogee_common::constants::AU, 0.0]),
+        let sources = GravitySources {
+            sources: vec![
+                source(399, [0.0, 0.0, 0.0]),
+                source(10, [0.0, apogee_common::constants::AU, 0.0]),
             ],
         };
 
-        let acc = gravity.acceleration(&spacecraft, &celestial).unwrap();
+        let acc = gravity.acceleration(&spacecraft, &sources).unwrap();
         let earth_acc = apogee_common::constants::GM_EARTH / r.powi(2);
 
         // Total magnitude is slightly larger than the Earth-only radial
@@ -148,14 +140,14 @@ mod tests {
         let gravity = PointMassGravity {};
         let spacecraft = Vector3::new(apogee_common::constants::AU, 0.0, 0.0);
 
-        let celestial = SolarSystemState {
-            states: vec![
-                body_state(10, [0.0, 0.0, 0.0]),
-                body_state(123_456, [0.0, apogee_common::constants::AU, 0.0]),
+        let sources = GravitySources {
+            sources: vec![
+                source(10, [0.0, 0.0, 0.0]),
+                (0.0, Vector3::new(0.0, apogee_common::constants::AU, 0.0)),
             ],
         };
 
-        let acc = gravity.acceleration(&spacecraft, &celestial).unwrap();
+        let acc = gravity.acceleration(&spacecraft, &sources).unwrap();
         // Only the Sun contributes.
         let expected = -apogee_common::constants::GM_SUN / apogee_common::constants::AU.powi(2);
         assert_relative_eq!(acc.raw().x, expected, epsilon = 1e-6);
@@ -169,14 +161,14 @@ mod tests {
         let moon_distance = 384_400_000.0;
         // Spacecraft 1/4 of the way from Earth to Moon.
         let spacecraft = Vector3::new(moon_distance * 0.25, 0.0, 0.0);
-        let celestial = SolarSystemState {
-            states: vec![
-                body_state(399, [0.0, 0.0, 0.0]),
-                body_state(301, [moon_distance, 0.0, 0.0]),
+        let sources = GravitySources {
+            sources: vec![
+                source(399, [0.0, 0.0, 0.0]),
+                source(301, [moon_distance, 0.0, 0.0]),
             ],
         };
 
-        let acc = gravity.acceleration(&spacecraft, &celestial).unwrap();
+        let acc = gravity.acceleration(&spacecraft, &sources).unwrap();
 
         // Net pull is toward Earth (negative x) because Earth dominates.
         assert!(
@@ -199,11 +191,11 @@ mod tests {
     fn test_singularity_returns_error() {
         let gravity = PointMassGravity {};
         let spacecraft = Vector3::new(0.0, 0.0, 0.0);
-        let celestial = SolarSystemState {
-            states: vec![body_state(10, [0.0, 0.0, 0.0])],
+        let sources = GravitySources {
+            sources: vec![source(10, [0.0, 0.0, 0.0])],
         };
 
-        let result = gravity.acceleration(&spacecraft, &celestial);
+        let result = gravity.acceleration(&spacecraft, &sources);
         assert!(result.is_err());
     }
 }

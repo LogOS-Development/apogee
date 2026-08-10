@@ -1,7 +1,6 @@
 //! Shared test helpers.
 
-use crate::ephemeris::kernel::SolarSystemState;
-use crate::gravity::point_mass::PointMassGravity;
+use crate::gravity::{GravitySources, PointMassGravity};
 use crate::integrator::{StateDerivative, StateVector};
 
 /// Acceleration function for the RK4 integrator using point-mass gravity.
@@ -10,11 +9,11 @@ use crate::integrator::{StateDerivative, StateVector};
 /// vector extracted from the unit-aware [`AccelerationVector`].
 pub fn point_mass_derivative(
     state: &StateVector,
-    celestial: &SolarSystemState,
+    sources: &GravitySources,
     gravity: &PointMassGravity,
 ) -> StateDerivative {
     let acceleration = gravity
-        .acceleration(&state.position, celestial)
+        .acceleration(&state.position, sources)
         .expect("valid point-mass acceleration");
     StateDerivative {
         velocity: state.velocity,

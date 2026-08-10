@@ -7,19 +7,21 @@
 //! SPK state and comparing against the SPK reference at multiple epochs across
 //! the coverage window.
 
-use crate::ephemeris::kernel::{BodyState, Kernel, SolarSystemState};
+use crate::ephemeris::kernel::{BodyState, Kernel};
 use crate::gravity::point_mass::PointMassGravity;
+use crate::gravity::GravitySources;
 use crate::integrator::{Integrator, Rk4, StateVector};
 use crate::tests::helpers::point_mass_derivative;
+use apogee_common::gravitational_parameter;
 use apogee_common::units::Seconds;
 use nalgebra::Vector3;
 
 /// Path to the Artemis 2 SPK fixture.
 const ARTEMIS2_BSP: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/artemis2.bsp");
 
-/// Build a point-mass ephemeris from kernel states at a single epoch.
-fn build_celestial(kernel: &Kernel, et: f64) -> SolarSystemState {
-    let mut states = Vec::new();
+/// Build a point-mass gravity source set from kernel states at a single epoch.
+fn build_gravity_sources(kernel: &Kernel, et: f64) -> GravitySources {
+    let mut sources = GravitySources::new();
 
     // Earth is the center for the Artemis 2 kernel.
     let earth = kernel.state_at(399, et).unwrap_or_else(|_| BodyState {
@@ -27,17 +29,20 @@ fn build_celestial(kernel: &Kernel, et: f64) -> SolarSystemState {
         position: Vector3::zeros(),
         velocity: Vector3::zeros(),
     });
-    states.push(earth);
+    let gm_earth = gravitational_parameter(399).unwrap_or(0.0);
+    sources.push(gm_earth, earth.position);
 
     if let Ok(moon) = kernel.state_at(301, et) {
-        states.push(moon);
+        let gm_moon = gravitational_parameter(301).unwrap_or(0.0);
+        sources.push(gm_moon, moon.position);
     }
 
     if let Ok(sun) = kernel.state_at(10, et) {
-        states.push(sun);
+        let gm_sun = gravitational_parameter(10).unwrap_or(0.0);
+        sources.push(gm_sun, sun.position);
     }
 
-    SolarSystemState { states }
+    sources
 }
 
 #[test]
@@ -55,7 +60,7 @@ fn test_artemis2_propagation_vs_spk() {
 
     // Build celestial model at t0. For this test we fix the ephemeris at
     // t0; a full validation would update it during propagation.
-    let celestial = build_celestial(&kernel, et0);
+    let sources = build_gravity_sources(&kernel, et0);
 
     let gravity = PointMassGravity {};
     let mut integrator = Rk4::new(Seconds::new(30.0)); // 30 s fixed step
@@ -67,7 +72,7 @@ fn test_artemis2_propagation_vs_spk() {
         angular_velocity: nalgebra::Vector3::zeros(),
     };
 
-    let derivative_fn = |s: &StateVector| point_mass_derivative(s, &celestial, &gravity);
+    let derivative_fn = |s: &StateVector| point_mass_derivative(s, &sources, &gravity);
     let result = integrator.step(&mut state, &derivative_fn, Seconds::new(duration_s));
     assert!(result.accepted);
 
@@ -115,7 +120,7 @@ fn test_artemis2_multi_epoch_state_check() {
     ];
 
     let sc_initial = kernel.state_at(-24, et0).expect("Artemis 2 state at t0");
-    let celestial = build_celestial(&kernel, et0);
+    let sources = build_gravity_sources(&kernel, et0);
     let gravity = PointMassGravity {};
 
     for &dt in checkpoints {
@@ -132,7 +137,7 @@ fn test_artemis2_multi_epoch_state_check() {
         };
 
         let mut integrator = Rk4::new(Seconds::new(30.0));
-        let derivative_fn = |s: &StateVector| point_mass_derivative(s, &celestial, &gravity);
+        let derivative_fn = |s: &StateVector| point_mass_derivative(s, &sources, &gravity);
         let result = integrator.step(&mut state, &derivative_fn, Seconds::new(dt));
         assert!(result.accepted, "integrator failed at dt={dt}s");
 

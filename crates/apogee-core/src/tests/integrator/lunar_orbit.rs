@@ -5,11 +5,12 @@
 //! loosely inspired by the Apollo 11 lunar orbit: ~110 km altitude, circular
 //! orbit period ~2 hours.
 
-use crate::ephemeris::kernel::{BodyState, SolarSystemState};
 use crate::gravity::point_mass::PointMassGravity;
+use crate::gravity::GravitySources;
 use crate::integrator::{Integrator, Rk4, StateVector};
 use crate::tests::helpers::point_mass_derivative;
 use apogee_common::constants::GM_MOON;
+use apogee_common::gravitational_parameter;
 use apogee_common::units::Seconds;
 use approx::assert_relative_eq;
 use nalgebra::Vector3;
@@ -18,13 +19,10 @@ use nalgebra::Vector3;
 const R_MOON: f64 = 1_737_400.0;
 
 /// Build a single-body Moon-centered model for testing the integrator.
-fn moon_system() -> SolarSystemState {
-    SolarSystemState {
-        states: vec![BodyState {
-            naif_id: 301,
-            position: Vector3::zeros(),
-            velocity: Vector3::zeros(),
-        }],
+fn moon_system() -> GravitySources {
+    let gm = gravitational_parameter(301).unwrap_or(0.0);
+    GravitySources {
+        sources: vec![(gm, Vector3::zeros())],
     }
 }
 
@@ -101,10 +99,10 @@ fn test_apollo_11_style_lunar_orbit() {
         angular_velocity: nalgebra::Vector3::zeros(),
     };
 
-    let celestial = moon_system();
+    let sources = moon_system();
     let mut integrator = Rk4::new(Seconds::new(10.0)); // 10 s fixed step
 
-    let derivative_fn = |s: &StateVector| point_mass_derivative(s, &celestial, &gravity);
+    let derivative_fn = |s: &StateVector| point_mass_derivative(s, &sources, &gravity);
 
     // Propagate for one nominal lunar orbit period.
     let result = integrator.step(&mut state, &derivative_fn, Seconds::new(period_expected));
@@ -152,12 +150,9 @@ fn test_moon_geocentric_orbit_vs_horizons_apollo_era() {
 
     // Treat the Moon as the test particle and propagate it around the Earth
     // using a point-mass Earth+Moon model in the geocentric inertial frame.
-    let celestial = SolarSystemState {
-        states: vec![BodyState {
-            naif_id: 399,
-            position: Vector3::zeros(),
-            velocity: Vector3::zeros(),
-        }],
+    let gm_earth = gravitational_parameter(399).unwrap_or(0.0);
+    let sources = GravitySources {
+        sources: vec![(gm_earth, Vector3::zeros())],
     };
 
     let mut state = StateVector {
@@ -169,7 +164,7 @@ fn test_moon_geocentric_orbit_vs_horizons_apollo_era() {
 
     let gravity = PointMassGravity {};
     let mut integrator = Rk4::new(Seconds::new(60.0)); // 1 minute step
-    let derivative_fn = |s: &StateVector| point_mass_derivative(s, &celestial, &gravity);
+    let derivative_fn = |s: &StateVector| point_mass_derivative(s, &sources, &gravity);
 
     let result = integrator.step(&mut state, &derivative_fn, Seconds::new(duration_s));
     assert!(result.accepted);

@@ -9,14 +9,13 @@
 //!
 //! Those improvements are tracked in follow-up issues.
 
-use apogee_common::constants::R_EARTH_EQ;
+use apogee_common::constants::{GM_EARTH, R_EARTH_EQ};
 use apogee_common::units::{Area, Kilograms, Seconds};
 use hifitime::Epoch;
 use nalgebra::Vector3;
 
 use crate::components::kinematics::Kinematics;
 use crate::components::rigid_body::{RigidBody, SimulationConfig, SpacecraftConfig};
-use crate::ephemeris::kernel::{BodyState, SolarSystemState};
 use crate::systems::step::{propagate, step_world, SimContext};
 use crate::tle::Tle;
 use crate::world::World;
@@ -68,14 +67,9 @@ fn iss_components() -> (
     )
 }
 
-fn earth_only_celestial() -> SolarSystemState {
-    SolarSystemState {
-        states: vec![BodyState {
-            naif_id: 399,
-            position: Vector3::zeros(),
-            velocity: Vector3::zeros(),
-        }],
-    }
+/// Build a SimContext with Earth at the origin (single gravity source).
+fn earth_only_ctx(epoch: Epoch) -> SimContext {
+    SimContext::single_body(GM_EARTH, epoch)
 }
 
 #[test]
@@ -83,8 +77,7 @@ fn test_iss_one_orbit_energy_conservation() {
     let (_tle, mut kin, rb, cfg, sim_config) = iss_components();
     let mut ctx = SimContext {
         sim_config,
-        celestial: earth_only_celestial(),
-        epoch: iss_epoch(),
+        ..earth_only_ctx(iss_epoch())
     };
 
     let e0 = specific_energy(&kin.position, &kin.velocity);
@@ -118,8 +111,7 @@ fn test_iss_24h_propagation_stays_leo() {
     let (_tle, mut kin, rb, cfg, sim_config) = iss_components();
     let mut ctx = SimContext {
         sim_config,
-        celestial: earth_only_celestial(),
-        epoch: iss_epoch(),
+        ..earth_only_ctx(iss_epoch())
     };
 
     propagate(
@@ -148,14 +140,25 @@ fn test_iss_24h_propagation_stays_leo() {
 
 #[test]
 fn test_iss_one_orbit_via_step_world() {
-    let (_tle, kin, rb, cfg, sim_config) = iss_components();
-    let celestial = earth_only_celestial();
+    let (_tle, kin, rb, cfg, _sim_config) = iss_components();
 
-    let mut world = World::with_config_and_epoch(sim_config, celestial, iss_epoch());
+    let mut world = World::with_config_and_epoch(SimulationConfig::default(), iss_epoch());
+    // Spawn Earth as a kinematic celestial body at the origin.
+    world.add_celestial_body(crate::components::celestial::CelestialBodySpec::kinematic(
+        399,
+        Vector3::zeros(),
+        Vector3::zeros(),
+    ));
     let _entity = world.spawn((kin, rb, cfg));
 
     let e0 = {
-        let entity = world.entities().next().unwrap();
+        let entity = world
+            .ecs
+            .query::<(&Kinematics, &SpacecraftConfig)>()
+            .iter()
+            .next()
+            .unwrap()
+            .0;
         let kin = world.get_component::<Kinematics>(entity).unwrap();
         specific_energy(&kin.position, &kin.velocity)
     };
@@ -166,7 +169,13 @@ fn test_iss_one_orbit_via_step_world() {
     }
 
     let e1 = {
-        let entity = world.entities().next().unwrap();
+        let entity = world
+            .ecs
+            .query::<(&Kinematics, &SpacecraftConfig)>()
+            .iter()
+            .next()
+            .unwrap()
+            .0;
         let kin = world.get_component::<Kinematics>(entity).unwrap();
         specific_energy(&kin.position, &kin.velocity)
     };
@@ -183,8 +192,7 @@ fn test_iss_via_propagate() {
     let (_tle, mut kin, rb, cfg, sim_config) = iss_components();
     let mut ctx = SimContext {
         sim_config,
-        celestial: earth_only_celestial(),
-        epoch: iss_epoch(),
+        ..earth_only_ctx(iss_epoch())
     };
 
     let e0 = specific_energy(&kin.position, &kin.velocity);
@@ -206,6 +214,5 @@ fn test_iss_via_propagate() {
 }
 
 fn specific_energy(pos: &Vector3<f64>, vel: &Vector3<f64>) -> f64 {
-    use apogee_common::constants::GM_EARTH;
     vel.norm_squared() / 2.0 - GM_EARTH / pos.norm()
 }

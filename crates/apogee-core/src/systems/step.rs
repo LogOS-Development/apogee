@@ -8,13 +8,21 @@
 //! iterating all entities and stepping each one in-place via hecs queries.
 //! `step_spacecraft` now takes individual component references instead of a
 //! monolithic bundle.
+//!
+//! Issue #149: Celestial bodies are now first-class ECS entities. The force
+//! aggregator queries the ECS world for `(&GravitySource, &Kinematics)` to
+//! compute point-mass gravity, eliminating the separate `SolarSystemState`.
+//! Dynamic celestial bodies (asteroids, debris) are integrated like spacecraft
+//! — they have `Kinematics + GravitySource + CelestialKind::Dynamic +
+//! CelestialMass` components.
 
 use apogee_common::units::Seconds;
 use nalgebra::Vector3;
 
+use crate::components::celestial::{CelestialKind, CelestialMass, GravitySource, NaifIdComponent};
 use crate::components::kinematics::Kinematics;
 use crate::components::rigid_body::{RigidBody, SimulationConfig, SpacecraftConfig};
-use crate::ephemeris::kernel::SolarSystemState;
+use crate::gravity::GravitySources;
 use crate::integrator::{IntegrationResult, Integrator, Rk4, StateDerivative, StateVector};
 use crate::systems::force_aggregator::aggregate_forces;
 use crate::world::World;
@@ -22,31 +30,72 @@ use hifitime::{Epoch, Unit};
 
 /// Shared simulation environment passed to propagation functions.
 ///
-/// Groups the three values that are constant across all entities during a
-/// single integration step: space-weather configuration, celestial ephemeris
-/// state, and the current simulation epoch. Extracting them into a struct
-/// keeps function signatures manageable and makes the environment boundary
-/// explicit.
+/// Groups the values that are constant across all entities during a single
+/// integration step: space-weather configuration, gravity source snapshot,
+/// the Sun's position, and the current simulation epoch. Extracting them into
+/// a struct keeps function signatures manageable and makes the environment
+/// boundary explicit.
 #[derive(Debug, Clone)]
 pub struct SimContext {
     /// Space-weather / environment configuration for force models.
     pub sim_config: SimulationConfig,
-    /// Celestial ephemeris state (positions and velocities of all bodies).
-    pub celestial: SolarSystemState,
+    /// Gravity source snapshot (GM + position of all massive bodies).
+    pub gravity_sources: GravitySources,
+    /// Position of the Sun (NAIF ID 10), for SRP calculation.
+    pub sun_position: apogee_common::Position,
     /// Current simulation epoch.
     pub epoch: Epoch,
 }
 
 impl SimContext {
     /// Build a `SimContext` from a `World`'s shared state.
-    /// Clones the celestial ephemeris; copies `sim_config` and `epoch`.
+    ///
+    /// Collects gravity sources from all ECS entities that have
+    /// `GravitySource + Kinematics` components, and finds the Sun's position
+    /// by looking up NAIF ID 10.
     pub fn from_world(world: &World) -> Self {
+        let mut gravity_sources = GravitySources::new();
+        for (_, (gs, kin)) in world.ecs.query::<(&GravitySource, &Kinematics)>().iter() {
+            gravity_sources.push(gs.gm, kin.position);
+        }
+
+        let sun_position = find_sun_position(world);
+
         Self {
             sim_config: world.sim_config,
-            celestial: world.celestial.clone(),
+            gravity_sources,
+            sun_position,
             epoch: world.epoch,
         }
     }
+
+    /// Create a `SimContext` with a single gravity source at the origin.
+    ///
+    /// Convenience for tests that need a simple Earth-at-origin gravity model
+    /// without setting up a full ECS world.
+    pub fn single_body(gm: f64, epoch: Epoch) -> Self {
+        let mut gravity_sources = GravitySources::new();
+        gravity_sources.push(gm, Vector3::zeros());
+        Self {
+            sim_config: SimulationConfig::default(),
+            gravity_sources,
+            sun_position: Vector3::new(-apogee_common::constants::AU, 0.0, 0.0),
+            epoch,
+        }
+    }
+}
+
+/// Find the Sun's position from the ECS world (NAIF ID 10).
+///
+/// Returns a default position (−1 AU on x-axis) if no Sun entity exists,
+/// so SRP falls back to a heliocentric approximation.
+fn find_sun_position(world: &World) -> apogee_common::Position {
+    for (_, (id, kin)) in world.ecs.query::<(&NaifIdComponent, &Kinematics)>().iter() {
+        if id.0 == 10 {
+            return kin.position;
+        }
+    }
+    Vector3::new(-apogee_common::constants::AU, 0.0, 0.0)
 }
 
 /// Advance a single spacecraft's translational state by `dt` seconds using
@@ -77,7 +126,8 @@ pub fn step_spacecraft(
     let rb = rigid_body.clone();
     let cfg = *config;
     let sim_config = ctx.sim_config;
-    let celestial = ctx.celestial.clone();
+    let gravity_sources = ctx.gravity_sources.clone();
+    let sun_position = ctx.sun_position;
     let epoch = ctx.epoch;
 
     let derivative_fn = |s: &StateVector| {
@@ -89,7 +139,15 @@ pub fn step_spacecraft(
             attitude: s.attitude,
             angular_velocity: s.angular_velocity,
         };
-        let forces = aggregate_forces(&trial_kinematics, &rb, &cfg, &sim_config, &celestial, epoch);
+        let forces = aggregate_forces(
+            &trial_kinematics,
+            &rb,
+            &cfg,
+            &sim_config,
+            &gravity_sources,
+            sun_position,
+            epoch,
+        );
 
         // Translational acceleration = F / m. The unit-aware newtype collapses
         // to a raw vector for the integrator's hot path; the type tag is
@@ -122,20 +180,15 @@ pub fn step_spacecraft(
 /// Step the entire simulation world forward by `dt` seconds.
 ///
 /// Iterates all live entities that have `Kinematics + RigidBody +
-/// SpacecraftConfig`, calling `step_spacecraft` on each one in-place. The
-/// simulation config, celestial state, and epoch are read from the `World`.
-/// The world epoch is advanced by `dt` after all entities have been stepped.
+/// SpacecraftConfig`, calling `step_spacecraft` on each one in-place. Then
+/// integrates dynamic celestial bodies (entities with `Kinematics +
+/// GravitySource + CelestialKind::Dynamic + CelestialMass`). Kinematic
+/// celestial bodies are left untouched (their positions are driven by the
+/// ephemeris service). The world epoch is advanced by `dt` after all
+/// entities have been stepped.
 pub fn step_world(world: &mut World, dt: Seconds<f64>) {
-    // Rebuild the celestial state from the registry so force models see
-    // current body positions. Skip if the registry is empty — callers that
-    // set up `world.celestial` directly (without using the registry) keep
-    // their state intact.
-    if !world.celestial_registry.is_empty() {
-        world.build_celestial_state();
-    }
-
-    // Snapshot the simulation context so we can borrow world.ecs mutably
-    // without simultaneously borrowing world.sim_config / world.celestial.
+    // Build the simulation context from the ECS world — this collects
+    // gravity sources and the Sun's position from celestial body entities.
     let ctx = SimContext::from_world(world);
 
     // Each entity gets its own integrator instance. In Phase 1.6 all
@@ -152,42 +205,68 @@ pub fn step_world(world: &mut World, dt: Seconds<f64>) {
     }
 
     // Integrate dynamic celestial bodies under point-mass gravity from
-    // all bodies in the registry. Kinematic bodies are left untouched.
-    integrate_dynamic_celestials(&mut world.celestial_registry, &ctx, &mut integrator, dt);
-
-    // Rebuild celestial state after propagated bodies have moved.
-    if !world.celestial_registry.is_empty() {
-        world.build_celestial_state();
-    }
+    // all gravity sources. Kinematic bodies are left untouched.
+    integrate_dynamic_celestials(world, &ctx, &mut integrator, dt);
 
     // Advance the world clock.
     world.epoch += dt.into_value() * Unit::Second;
 }
 
-/// Integrate all dynamic celestial bodies in the registry one step forward.
+/// Integrate all dynamic celestial bodies in the ECS world one step forward.
 ///
-/// Each propagated body is accelerated by point-mass gravity from every body
-/// in the registry (including itself — a body's own GM produces zero net force
-/// since r→0 is never hit; the body's position is its own). Kinematic bodies
-/// are skipped: their positions are driven by the ephemeris service.
+/// Each dynamic body is accelerated by point-mass gravity from every other
+/// gravity source in the world (excluding itself — a body does not feel its
+/// own gravity). Kinematic bodies are skipped: their positions are driven by
+/// the ephemeris service.
 fn integrate_dynamic_celestials(
-    registry: &mut crate::components::celestial::CelestialRegistry,
+    world: &mut World,
     ctx: &SimContext,
     integrator: &mut Rk4,
     dt: Seconds<f64>,
 ) {
-    for body in registry.dynamic_mut() {
-        // Build a temporary kinematics for the force aggregator.
-        let mut kin = Kinematics {
-            position: body.position,
-            velocity: body.velocity,
-            attitude: nalgebra::Quaternion::identity(),
-            angular_velocity: Vector3::zeros(),
+    // Collect entity IDs + positions of dynamic celestial bodies first, so we
+    // can borrow the world mutably without holding a query borrow alive.
+    let dynamic_bodies: Vec<(hecs::Entity, apogee_common::Position)> = world
+        .ecs
+        .query::<(&CelestialKind, &Kinematics)>()
+        .iter()
+        .filter(|(_, (kind, _))| kind.is_dynamic())
+        .map(|(e, (_, kin))| (e, kin.position))
+        .collect();
+
+    for (entity, body_position) in dynamic_bodies {
+        // Read mass for this dynamic body.
+        let mass = match world.get_component::<CelestialMass>(entity) {
+            Some(m) => m.mass(),
+            None => continue,
+        };
+
+        let mut kin = match world.get_component_mut::<Kinematics>(entity) {
+            Some(k) => k,
+            None => continue,
+        };
+
+        // Build a gravity sources snapshot excluding this body's own
+        // gravity source (identified by matching position). A body should
+        // not feel its own gravity — including it produces a singularity
+        // at the initial position that silently zeroes the k1 acceleration.
+        let mut body_gs = GravitySources::new();
+        for &(gm, pos) in &ctx.gravity_sources.sources {
+            if pos != body_position {
+                body_gs.push(gm, pos);
+            }
+        }
+
+        let body_ctx = SimContext {
+            sim_config: ctx.sim_config,
+            gravity_sources: body_gs,
+            sun_position: ctx.sun_position,
+            epoch: ctx.epoch,
         };
 
         // Dynamic bodies only feel gravity — zero out drag/SRP areas.
         let rb = RigidBody {
-            mass: body.mass,
+            mass,
             inertia: nalgebra::Matrix3::identity(),
             cg_offset: Vector3::zeros(),
         };
@@ -195,12 +274,10 @@ fn integrate_dynamic_celestials(
             ballistic_coefficient: 0.0,
             srp_area: apogee_common::units::Area::new(0.0),
             reflectivity: 0.0,
-            reference_mass_kg: body.mass.into_value(),
+            reference_mass_kg: mass.into_value(),
         };
 
-        step_spacecraft(&mut kin, &rb, &cfg, ctx, integrator, dt);
-        body.position = kin.position;
-        body.velocity = kin.velocity;
+        step_spacecraft(&mut kin, &rb, &cfg, &body_ctx, integrator, dt);
     }
 }
 
@@ -251,6 +328,7 @@ mod tests {
     use nalgebra::Vector3;
 
     use super::*;
+    use crate::components::celestial::CelestialBodySpec;
     use crate::components::kinematics::Kinematics;
 
     fn make_orbit_components() -> (Kinematics, RigidBody, SpacecraftConfig) {
@@ -277,16 +355,6 @@ mod tests {
         )
     }
 
-    fn earth_only() -> SolarSystemState {
-        SolarSystemState {
-            states: vec![crate::ephemeris::kernel::BodyState {
-                naif_id: 399,
-                position: Vector3::zeros(),
-                velocity: Vector3::zeros(),
-            }],
-        }
-    }
-
     fn test_epoch() -> Epoch {
         Epoch::from_gregorian_utc(2026, 3, 21, 0, 0, 0, 0)
     }
@@ -294,11 +362,7 @@ mod tests {
     #[test]
     fn test_two_body_orbit_energy_conservation() {
         let (mut kin, rb, cfg) = make_orbit_components();
-        let mut ctx = SimContext {
-            sim_config: SimulationConfig::default(),
-            celestial: earth_only(),
-            epoch: test_epoch(),
-        };
+        let mut ctx = SimContext::single_body(GM_EARTH, test_epoch());
 
         let e0 = orbital_energy(&kin.position, &kin.velocity);
         propagate(
@@ -317,13 +381,25 @@ mod tests {
     #[test]
     fn test_step_world_single_entity() {
         let (kin, rb, cfg) = make_orbit_components();
-        let mut world =
-            World::with_config_and_epoch(SimulationConfig::default(), earth_only(), test_epoch());
+        let mut world = World::with_config_and_epoch(SimulationConfig::default(), test_epoch());
+        // Spawn Earth as a kinematic celestial body at the origin.
+        world.add_celestial_body(CelestialBodySpec::kinematic(
+            399,
+            Vector3::zeros(),
+            Vector3::zeros(),
+        ));
         let _entity = world.spawn((kin, rb, cfg));
 
         let e0 = {
-            let entity = world.entities().next().unwrap();
-            let kin = world.get_component::<Kinematics>(entity).unwrap();
+            // Find the spacecraft entity (not the celestial body).
+            let sc_entity = world
+                .ecs
+                .query::<(&Kinematics, &SpacecraftConfig)>()
+                .iter()
+                .next()
+                .unwrap()
+                .0;
+            let kin = world.get_component::<Kinematics>(sc_entity).unwrap();
             orbital_energy(&kin.position, &kin.velocity)
         };
 
@@ -333,8 +409,14 @@ mod tests {
         }
 
         let e1 = {
-            let entity = world.entities().next().unwrap();
-            let kin = world.get_component::<Kinematics>(entity).unwrap();
+            let sc_entity = world
+                .ecs
+                .query::<(&Kinematics, &SpacecraftConfig)>()
+                .iter()
+                .next()
+                .unwrap()
+                .0;
+            let kin = world.get_component::<Kinematics>(sc_entity).unwrap();
             orbital_energy(&kin.position, &kin.velocity)
         };
         let rel_err = (e1 - e0).abs() / e0.abs();
@@ -347,8 +429,12 @@ mod tests {
 
     #[test]
     fn test_step_world_multi_entity() {
-        let mut world =
-            World::with_config_and_epoch(SimulationConfig::default(), earth_only(), test_epoch());
+        let mut world = World::with_config_and_epoch(SimulationConfig::default(), test_epoch());
+        world.add_celestial_body(CelestialBodySpec::kinematic(
+            399,
+            Vector3::zeros(),
+            Vector3::zeros(),
+        ));
 
         // Two entities with different initial positions.
         let (kin0, rb0, cfg0) = make_orbit_components();
@@ -378,14 +464,14 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Celestial registry integration tests
+    // Celestial ECS entity integration tests
     // ------------------------------------------------------------------
 
     #[test]
     fn test_kinematic_body_does_not_move() {
         // A kinematic Earth at the origin should not be moved by step_world.
         let mut world = World::new();
-        world.add_celestial_body(crate::components::celestial::CelestialBody::kinematic(
+        world.add_celestial_body(CelestialBodySpec::kinematic(
             399,
             Vector3::zeros(),
             Vector3::zeros(),
@@ -395,16 +481,17 @@ mod tests {
             step_world(&mut world, Seconds::new(60.0));
         }
 
-        let earth = world.celestial_registry.find(399).unwrap();
-        assert_relative_eq!(earth.position.norm(), 0.0);
-        assert_relative_eq!(earth.velocity.norm(), 0.0);
+        let earth = world.find_celestial(399).unwrap();
+        let kin = world.get_component::<Kinematics>(earth).unwrap();
+        assert_relative_eq!(kin.position.norm(), 0.0);
+        assert_relative_eq!(kin.velocity.norm(), 0.0);
     }
 
     #[test]
     fn test_dynamic_celestial_orbits_kinematic_body() {
         // A small dynamic body (asteroid) should orbit a kinematic Earth.
         let mut world = World::new();
-        world.add_celestial_body(crate::components::celestial::CelestialBody::kinematic(
+        world.add_celestial_body(CelestialBodySpec::kinematic(
             399,
             Vector3::zeros(),
             Vector3::zeros(),
@@ -413,25 +500,28 @@ mod tests {
         // Asteroid at 400 km altitude, circular orbit velocity.
         let r = R_EARTH_EQ + 400_000.0;
         let v = (GM_EARTH / r).sqrt();
-        world.add_celestial_body(
-            crate::components::celestial::CelestialBody::dynamic_from_mass(
-                2_000_001,
-                Vector3::new(r, 0.0, 0.0),
-                Vector3::new(0.0, v, 0.0),
-                Kilograms::new(1e6),
-            ),
-        );
+        world.add_celestial_body(CelestialBodySpec::dynamic_from_mass(
+            2_000_001,
+            Vector3::new(r, 0.0, 0.0),
+            Vector3::new(0.0, v, 0.0),
+            Kilograms::new(1e6),
+        ));
 
-        let asteroid = world.celestial_registry.find(2_000_001).unwrap();
-        let e0 = orbital_energy(&asteroid.position, &asteroid.velocity);
+        let asteroid = world.find_celestial(2_000_001).unwrap();
+        let e0 = {
+            let kin = world.get_component::<Kinematics>(asteroid).unwrap();
+            orbital_energy(&kin.position, &kin.velocity)
+        };
 
         // Step for ~1 orbit (92 min).
         for _ in 0..92 {
             step_world(&mut world, Seconds::new(60.0));
         }
 
-        let asteroid = world.celestial_registry.find(2_000_001).unwrap();
-        let e1 = orbital_energy(&asteroid.position, &asteroid.velocity);
+        let e1 = {
+            let kin = world.get_component::<Kinematics>(asteroid).unwrap();
+            orbital_energy(&kin.position, &kin.velocity)
+        };
         let rel_err = (e1 - e0).abs() / e0.abs();
         assert!(
             rel_err < 1e-4,
@@ -445,7 +535,7 @@ mod tests {
         // Spacecraft orbits a kinematic Earth while a propagated asteroid
         // also orbits. Both should maintain stable orbits.
         let mut world = World::new();
-        world.add_celestial_body(crate::components::celestial::CelestialBody::kinematic(
+        world.add_celestial_body(CelestialBodySpec::kinematic(
             399,
             Vector3::zeros(),
             Vector3::zeros(),
@@ -454,14 +544,12 @@ mod tests {
         // Propagated asteroid at 1000 km altitude.
         let r_ast = R_EARTH_EQ + 1_000_000.0;
         let v_ast = (GM_EARTH / r_ast).sqrt();
-        world.add_celestial_body(
-            crate::components::celestial::CelestialBody::dynamic_from_mass(
-                2_000_001,
-                Vector3::new(r_ast, 0.0, 0.0),
-                Vector3::new(0.0, v_ast, 0.0),
-                Kilograms::new(1e10),
-            ),
-        );
+        world.add_celestial_body(CelestialBodySpec::dynamic_from_mass(
+            2_000_001,
+            Vector3::new(r_ast, 0.0, 0.0),
+            Vector3::new(0.0, v_ast, 0.0),
+            Kilograms::new(1e10),
+        ));
 
         // Spacecraft at 400 km altitude (well inside the asteroid orbit).
         let r_sc = R_EARTH_EQ + 400_000.0;

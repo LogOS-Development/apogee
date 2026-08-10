@@ -10,8 +10,10 @@
 //! real mission data.
 
 use crate::gravity::point_mass::PointMassGravity;
+use crate::gravity::GravitySources;
 use crate::integrator::{Integrator, Rk4, StateVector};
 use crate::tests::helpers::point_mass_derivative;
+use apogee_common::constants::GM_MOON;
 use apogee_common::units::Seconds;
 use nalgebra::Vector3;
 
@@ -54,14 +56,10 @@ fn load_reference() -> Option<Vec<Sample>> {
     Some(out)
 }
 
-/// Build a Moon-centered celestial model with Moon as the origin.
-fn moon_only_system() -> crate::ephemeris::kernel::SolarSystemState {
-    crate::ephemeris::kernel::SolarSystemState {
-        states: vec![crate::ephemeris::kernel::BodyState {
-            naif_id: 301,
-            position: Vector3::zeros(),
-            velocity: Vector3::zeros(),
-        }],
+/// Build a Moon-centered gravity source set with Moon as the origin.
+fn moon_only_sources() -> GravitySources {
+    GravitySources {
+        sources: vec![(GM_MOON, Vector3::zeros())],
     }
 }
 
@@ -75,7 +73,7 @@ fn test_apollo15_lunar_orbit_vs_reference() {
     );
 
     let gravity = PointMassGravity {};
-    let celestial = moon_only_system();
+    let sources = moon_only_sources();
     let mut integrator = Rk4::new(Seconds::new(10.0)); // 10 s fixed step
 
     let (et0, pos0, vel0) = reference[0];
@@ -86,7 +84,7 @@ fn test_apollo15_lunar_orbit_vs_reference() {
         angular_velocity: nalgebra::Vector3::zeros(),
     };
 
-    let derivative_fn = |s: &StateVector| point_mass_derivative(s, &celestial, &gravity);
+    let derivative_fn = |s: &StateVector| point_mass_derivative(s, &sources, &gravity);
 
     // Propagate from the first reference state to the last one.
     let (et_end, pos_ref_end, vel_ref_end) = *reference.last().unwrap();
@@ -126,11 +124,11 @@ fn test_apollo15_multi_point_trajectory() {
     );
 
     let gravity = PointMassGravity {};
-    let celestial = moon_only_system();
+    let sources = moon_only_sources();
     let mut integrator = Rk4::new(Seconds::new(10.0));
 
     let (et0, pos0, vel0) = reference[0];
-    let derivative_fn = |s: &StateVector| point_mass_derivative(s, &celestial, &gravity);
+    let derivative_fn = |s: &StateVector| point_mass_derivative(s, &sources, &gravity);
 
     // Propagate to each reference point and compare. We re-initialise from
     // the reference at each checkpoint to isolate per-segment error, which
