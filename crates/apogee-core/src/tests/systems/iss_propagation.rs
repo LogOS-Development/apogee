@@ -14,7 +14,6 @@ use apogee_common::units::{Area, Kilograms, Seconds};
 use hifitime::Epoch;
 use nalgebra::Vector3;
 
-use crate::components::celestial::CelestialBody;
 use crate::components::kinematics::Kinematics;
 use crate::components::rigid_body::{RigidBody, SimulationConfig, SpacecraftConfig};
 use crate::ephemeris::kernel::{BodyState, SolarSystemState};
