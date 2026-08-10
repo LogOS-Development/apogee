@@ -23,6 +23,176 @@ use godot::prelude::*;
 use hifitime::Epoch;
 use nalgebra::{Matrix3, Quaternion as NaQuaternion, Vector3 as NaVector3};
 
+// -----------------------------------------------------------------------
+// Pure-Rust component parsing (testable without the Godot runtime)
+// -----------------------------------------------------------------------
+
+/// Raw field values for a `Kinematics` component, extracted from a
+/// Godot Dictionary by the FFI layer. All fields use plain Rust types so
+/// the parsing logic can be unit-tested without the Godot engine.
+#[derive(Debug, Clone, Default)]
+pub struct KinematicsInput {
+    pub position: [f64; 3],
+    pub velocity: [f64; 3],
+}
+
+/// Raw field values for a `RigidBody` component.
+#[derive(Debug, Clone, Default)]
+pub struct RigidBodyInput {
+    pub mass: Option<f64>,
+    pub cg_offset: [f64; 3],
+}
+
+/// Raw field values for a `SpacecraftConfig` component.
+#[derive(Debug, Clone, Default)]
+pub struct SpacecraftConfigInput {
+    pub ballistic_coefficient: Option<f64>,
+    pub srp_area: Option<f64>,
+    pub reflectivity: Option<f64>,
+    pub reference_mass_kg: Option<f64>,
+}
+
+/// A parsed component set ready for spawning into the ECS World.
+///
+/// Only the components the caller provided are present; the FFI layer spawns
+/// the appropriate tuple shape based on which fields are `Some`.
+#[derive(Debug, Clone, Default)]
+pub struct ComponentSet {
+    pub kinematics: Option<KinematicsInput>,
+    pub rigid_body: Option<RigidBodyInput>,
+    pub spacecraft_config: Option<SpacecraftConfigInput>,
+}
+
+impl ComponentSet {
+    /// Build a `Kinematics` from the input, or `None` if required fields
+    /// (position, velocity) are missing.
+    fn build_kinematics(input: &KinematicsInput) -> Kinematics {
+        let [px, py, pz] = input.position;
+        let [vx, vy, vz] = input.velocity;
+        Kinematics {
+            position: NaVector3::new(px, py, pz),
+            velocity: NaVector3::new(vx, vy, vz),
+            attitude: NaQuaternion::identity(),
+            angular_velocity: NaVector3::zeros(),
+        }
+    }
+
+    /// Build a `RigidBody` from the input. Returns `None` if `mass` is missing.
+    fn build_rigid_body(input: &RigidBodyInput) -> Option<RigidBody> {
+        let [cx, cy, cz] = input.cg_offset;
+        Some(RigidBody {
+            mass: Kilograms::new(input.mass?),
+            inertia: Matrix3::identity(),
+            cg_offset: NaVector3::new(cx, cy, cz),
+        })
+    }
+
+    /// Build a `SpacecraftConfig` from the input, defaulting unset fields.
+    /// `reference_mass_kg` defaults to the rigid_body mass if not specified.
+    fn build_spacecraft_config(
+        input: &SpacecraftConfigInput,
+        fallback_mass: f64,
+    ) -> SpacecraftConfig {
+        SpacecraftConfig {
+            ballistic_coefficient: input.ballistic_coefficient.unwrap_or(0.01),
+            srp_area: Area::new(input.srp_area.unwrap_or(10.0)),
+            reflectivity: input.reflectivity.unwrap_or(1.2),
+            reference_mass_kg: input.reference_mass_kg.unwrap_or(fallback_mass),
+        }
+    }
+
+    /// Spawn the component set into the world, choosing the right tuple
+    /// shape based on which components are present. Returns `None` if
+    /// `kinematics` is missing (required for any propagated entity).
+    ///
+    /// This is a pure-Rust method: it takes `&mut CoreWorld` directly, so
+    /// it can be unit-tested without the Godot engine.
+    pub fn spawn_into(&self, world: &mut CoreWorld) -> Option<Entity> {
+        let kin_input = self.kinematics.as_ref()?;
+        let kin = Self::build_kinematics(kin_input);
+
+        match (&self.rigid_body, &self.spacecraft_config) {
+            (Some(rb_input), Some(sc_input)) => {
+                let rb = Self::build_rigid_body(rb_input)?;
+                let fallback_mass = rb.mass.into_value();
+                let cfg = Self::build_spacecraft_config(sc_input, fallback_mass);
+                Some(world.spawn((kin, rb, cfg)))
+            }
+            (Some(rb_input), None) => {
+                let rb = Self::build_rigid_body(rb_input)?;
+                Some(world.spawn((kin, rb)))
+            }
+            (None, _) => Some(world.spawn((kin,))),
+        }
+    }
+}
+
+// -----------------------------------------------------------------------
+// Godot Dictionary ↔ Rust type adapters (thin, untestable in isolation)
+// -----------------------------------------------------------------------
+
+/// Extract a Godot `Vector3` from a `VarDictionary` key, or `None`.
+fn dict_get_vec3(dict: &VarDictionary, key: &str) -> Option<Vector3> {
+    dict.get(key).map(|v| v.to::<Vector3>())
+}
+
+/// Extract an `f64` from a `VarDictionary` key, or `None`.
+fn dict_get_f64(dict: &VarDictionary, key: &str) -> Option<f64> {
+    dict.get(key).map(|v| v.to::<f64>())
+}
+
+/// Extract an `i32` from a `VarDictionary` key, or `None`.
+fn dict_get_i32(dict: &VarDictionary, key: &str) -> Option<i32> {
+    dict.get(key).map(|v| v.to::<i32>())
+}
+
+/// Convert a Godot `Vector3` to a `[f64; 3]`.
+fn vec3_to_array(v: Vector3) -> [f64; 3] {
+    [v.x as f64, v.y as f64, v.z as f64]
+}
+
+/// Parse a Godot `VarDictionary` of component type names → field dicts
+/// into a `ComponentSet`. Unknown component types are silently skipped
+/// (future versions could register custom parsers).
+fn parse_component_dict(components: &VarDictionary) -> ComponentSet {
+    let mut set = ComponentSet::default();
+    for (key, value) in components.iter_shared() {
+        let key_str = key.to::<GString>().to_string();
+        let fields = value.to::<VarDictionary>();
+        match key_str.as_str() {
+            "kinematics" => {
+                let position = dict_get_vec3(&fields, "position").map(vec3_to_array);
+                let velocity = dict_get_vec3(&fields, "velocity").map(vec3_to_array);
+                if let (Some(position), Some(velocity)) = (position, velocity) {
+                    set.kinematics = Some(KinematicsInput { position, velocity });
+                }
+            }
+            "rigid_body" => {
+                set.rigid_body = Some(RigidBodyInput {
+                    mass: dict_get_f64(&fields, "mass"),
+                    cg_offset: dict_get_vec3(&fields, "cg_offset")
+                        .map(vec3_to_array)
+                        .unwrap_or([0.0; 3]),
+                });
+            }
+            "spacecraft_config" => {
+                set.spacecraft_config = Some(SpacecraftConfigInput {
+                    ballistic_coefficient: dict_get_f64(&fields, "ballistic_coefficient"),
+                    srp_area: dict_get_f64(&fields, "srp_area"),
+                    reflectivity: dict_get_f64(&fields, "reflectivity"),
+                    reference_mass_kg: dict_get_f64(&fields, "reference_mass_kg"),
+                });
+            }
+            _ => { /* unknown component — skip */ }
+        }
+    }
+    set
+}
+
+// -----------------------------------------------------------------------
+// ApogeeWorld Godot class
+// -----------------------------------------------------------------------
+
 /// Godot node wrapping the Apogee ECS `World`.
 ///
 /// Create one of these in your scene to manage the simulation. Call
@@ -71,132 +241,6 @@ impl INode for ApogeeWorld {
     }
 }
 
-/// Extract a Godot `Vector3` from a `VarDictionary` key, or `None`.
-fn dict_get_vec3(dict: &VarDictionary, key: &str) -> Option<Vector3> {
-    dict.get(key).map(|v| v.to::<Vector3>())
-}
-
-/// Extract an `f64` from a `VarDictionary` key, or `None`.
-fn dict_get_f64(dict: &VarDictionary, key: &str) -> Option<f64> {
-    dict.get(key).map(|v| v.to::<f64>())
-}
-
-/// Extract an `i32` from a `VarDictionary` key, or `None`.
-fn dict_get_i32(dict: &VarDictionary, key: &str) -> Option<i32> {
-    dict.get(key).map(|v| v.to::<i32>())
-}
-
-/// Build a `Kinematics` from a Godot Dictionary.
-///
-/// Required keys: `position` (Vector3), `velocity` (Vector3).
-/// Optional: `attitude` (Quaternion, default identity),
-///           `angular_velocity` (Vector3, default zero).
-fn parse_kinematics(d: &VarDictionary) -> Option<Kinematics> {
-    let position = dict_get_vec3(d, "position")?;
-    let velocity = dict_get_vec3(d, "velocity")?;
-    let attitude = dict_get_vec3(d, "attitude")
-        .map(|v| NaQuaternion::new(0.0, v.x as f64, v.y as f64, v.z as f64))
-        .unwrap_or_else(NaQuaternion::identity);
-    let angular_velocity = dict_get_vec3(d, "angular_velocity")
-        .map(|v| NaVector3::new(v.x as f64, v.y as f64, v.z as f64))
-        .unwrap_or_else(NaVector3::zeros);
-    Some(Kinematics {
-        position: NaVector3::new(position.x as f64, position.y as f64, position.z as f64),
-        velocity: NaVector3::new(velocity.x as f64, velocity.y as f64, velocity.z as f64),
-        attitude,
-        angular_velocity,
-    })
-}
-
-/// Build a `RigidBody` from a Godot Dictionary.
-///
-/// Required: `mass` (float, kg).
-/// Optional: `inertia` (Vector3 diagonal, default identity matrix),
-///           `cg_offset` (Vector3, default zero).
-fn parse_rigid_body(d: &VarDictionary) -> Option<RigidBody> {
-    let mass = dict_get_f64(d, "mass")?;
-    let cg_offset = dict_get_vec3(d, "cg_offset")
-        .map(|v| NaVector3::new(v.x as f64, v.y as f64, v.z as f64))
-        .unwrap_or_else(NaVector3::zeros);
-    Some(RigidBody {
-        mass: Kilograms::new(mass),
-        inertia: Matrix3::identity(),
-        cg_offset,
-    })
-}
-
-/// Build a `SpacecraftConfig` from a Godot Dictionary.
-///
-/// Optional (defaults shown):
-/// - `ballistic_coefficient`: float, default 0.01
-/// - `srp_area`: float (m²), default 10.0
-/// - `reflectivity`: float, default 1.2
-/// - `reference_mass_kg`: float, defaults to `mass` from the rigid_body dict.
-fn parse_spacecraft_config(d: &VarDictionary, reference_mass_kg: f64) -> SpacecraftConfig {
-    SpacecraftConfig {
-        ballistic_coefficient: dict_get_f64(d, "ballistic_coefficient").unwrap_or(0.01),
-        srp_area: Area::new(dict_get_f64(d, "srp_area").unwrap_or(10.0)),
-        reflectivity: dict_get_f64(d, "reflectivity").unwrap_or(1.2),
-        reference_mass_kg: dict_get_f64(d, "reference_mass_kg").unwrap_or(reference_mass_kg),
-    }
-}
-
-/// Parse a component Dictionary by its `type` key.
-///
-/// Returns a boxed dynamic bundle that can be spawned into the World.
-/// The caller is responsible for providing the correct component set for
-/// the entity type they want.
-fn parse_component_set(components: &VarDictionary) -> Option<Vec<(&'static str, ComponentSpec)>> {
-    // The Dictionary maps component type names to their field dictionaries.
-    // e.g. { "kinematics": { "position": ..., "velocity": ... },
-    //        "rigid_body": { "mass": ... },
-    //        "spacecraft_config": { "ballistic_coefficient": ... } }
-    //
-    // We collect the parsed components and spawn them as a tuple.
-    let mut specs = Vec::new();
-    for (key, value) in components.iter_shared() {
-        let key_str = key.to::<GString>().to_string();
-        let fields = value.to::<VarDictionary>();
-        match key_str.as_str() {
-            "kinematics" => {
-                let kin = parse_kinematics(&fields)?;
-                specs.push(("kinematics", ComponentSpec::Kinematics(kin)));
-            }
-            "rigid_body" => {
-                let rb = parse_rigid_body(&fields)?;
-                specs.push(("rigid_body", ComponentSpec::RigidBody(rb)));
-            }
-            "spacecraft_config" => {
-                // reference_mass_kg defaults to the rigid_body mass if present
-                let ref_mass = specs
-                    .iter()
-                    .find_map(|(_, s)| match s {
-                        ComponentSpec::RigidBody(rb) => Some(rb.mass.into_value()),
-                        _ => None,
-                    })
-                    .unwrap_or(1.0);
-                let cfg = parse_spacecraft_config(&fields, ref_mass);
-                specs.push(("spacecraft_config", ComponentSpec::SpacecraftConfig(cfg)));
-            }
-            _ => {
-                // Unknown component type — skip for now. Future versions
-                // could register custom component parsers.
-            }
-        }
-    }
-    if specs.is_empty() {
-        return None;
-    }
-    Some(specs)
-}
-
-/// Parsed component ready for spawning.
-enum ComponentSpec {
-    Kinematics(Kinematics),
-    RigidBody(RigidBody),
-    SpacecraftConfig(SpacecraftConfig),
-}
-
 #[godot_api]
 impl ApogeeWorld {
     /// Spawn an entity from a Dictionary mapping component type names to
@@ -230,56 +274,11 @@ impl ApogeeWorld {
     /// Returns the entity ID as an i64, or -1 if a required field is missing.
     #[func]
     fn spawn_entity(&mut self, components: VarDictionary) -> i64 {
-        let Some(specs) = parse_component_set(&components) else {
-            return -1;
-        };
-
-        // Spawn by matching on which components were provided. hecs requires
-        // owned bundles, so we destructure the parsed specs into the right
-        // tuple shape.
-        let has_rigid = specs.iter().any(|(n, _)| *n == "rigid_body");
-        let has_sc_config = specs.iter().any(|(n, _)| *n == "spacecraft_config");
-
-        let entity = {
-            let kin = specs.iter().find_map(|(_, s)| match s {
-                ComponentSpec::Kinematics(k) => Some(k.clone()),
-                _ => None,
-            });
-            let Some(kin) = kin else {
-                return -1;
-            };
-
-            if has_rigid && has_sc_config {
-                let rb = specs
-                    .iter()
-                    .find_map(|(_, s)| match s {
-                        ComponentSpec::RigidBody(rb) => Some(rb.clone()),
-                        _ => None,
-                    })
-                    .unwrap();
-                let cfg = specs
-                    .iter()
-                    .find_map(|(_, s)| match s {
-                        ComponentSpec::SpacecraftConfig(cfg) => Some(*cfg),
-                        _ => None,
-                    })
-                    .unwrap();
-                self.world.spawn((kin, rb, cfg))
-            } else if has_rigid {
-                let rb = specs
-                    .iter()
-                    .find_map(|(_, s)| match s {
-                        ComponentSpec::RigidBody(rb) => Some(rb.clone()),
-                        _ => None,
-                    })
-                    .unwrap();
-                self.world.spawn((kin, rb))
-            } else {
-                self.world.spawn((kin,))
-            }
-        };
-
-        entity.to_bits().get() as i64
+        let set = parse_component_dict(&components);
+        match set.spawn_into(&mut self.world) {
+            Some(entity) => entity.to_bits().get() as i64,
+            None => -1,
+        }
     }
 
     /// Advance the simulation by `delta_time` seconds.
@@ -406,15 +405,150 @@ impl ApogeeWorld {
 
 #[cfg(test)]
 mod tests {
-    //! Integration tests for the ApogeeWorld FFI surface.
+    //! Tests for the ApogeeWorld FFI surface.
     //!
-    //! These tests exercise the underlying `CoreWorld` API (which `ApogeeWorld`
-    //! wraps) rather than the Godot class directly, since instantiating
-    //! `ApogeeWorld` requires the Godot engine runtime. The tests verify the
-    //! full path: spawn → step 100x → verify position changes.
+    //! Two categories:
+    //! 1. **ComponentSet::spawn_into** — exercises the pure-Rust parsing and
+    //!    spawning logic (component composition, default filling, error
+    //!    handling) without the Godot engine.
+    //! 2. **CoreWorld integration** — end-to-end spawn → step → verify cycles
+    //!    that exercise the underlying ECS API directly.
 
     use super::*;
     use apogee_common::constants::{GM_EARTH, R_EARTH_EQ};
+
+    // -- ComponentSet::spawn_into tests (no Godot runtime needed) --
+
+    #[test]
+    fn test_spawn_kinematics_only() {
+        let mut world = CoreWorld::new();
+        let set = ComponentSet {
+            kinematics: Some(KinematicsInput {
+                position: [1.0, 2.0, 3.0],
+                velocity: [0.0, 0.0, 0.0],
+            }),
+            ..Default::default()
+        };
+        let entity = set.spawn_into(&mut world).unwrap();
+        assert!(world.get_component::<Kinematics>(entity).is_some());
+        assert!(world.get_component::<RigidBody>(entity).is_none());
+    }
+
+    #[test]
+    fn test_spawn_kinematics_and_rigid_body() {
+        let mut world = CoreWorld::new();
+        let set = ComponentSet {
+            kinematics: Some(KinematicsInput {
+                position: [7.0e6, 0.0, 0.0],
+                velocity: [0.0, 7700.0, 0.0],
+            }),
+            rigid_body: Some(RigidBodyInput {
+                mass: Some(500.0),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let entity = set.spawn_into(&mut world).unwrap();
+        assert!(world.get_component::<Kinematics>(entity).is_some());
+        assert!(world.get_component::<RigidBody>(entity).is_some());
+        assert!(world.get_component::<SpacecraftConfig>(entity).is_none());
+    }
+
+    #[test]
+    fn test_spawn_full_spacecraft() {
+        let mut world = CoreWorld::new();
+        let set = ComponentSet {
+            kinematics: Some(KinematicsInput {
+                position: [6.7e6, 0.0, 0.0],
+                velocity: [0.0, 7700.0, 0.0],
+            }),
+            rigid_body: Some(RigidBodyInput {
+                mass: Some(1000.0),
+                ..Default::default()
+            }),
+            spacecraft_config: Some(SpacecraftConfigInput {
+                ballistic_coefficient: Some(0.02),
+                srp_area: Some(5.0),
+                reflectivity: Some(1.0),
+                reference_mass_kg: None, // should default to rigid_body mass
+            }),
+        };
+        let entity = set.spawn_into(&mut world).unwrap();
+        assert!(world.get_component::<Kinematics>(entity).is_some());
+        assert!(world.get_component::<RigidBody>(entity).is_some());
+        let cfg = world.get_component::<SpacecraftConfig>(entity).unwrap();
+        assert_eq!(cfg.reference_mass_kg, 1000.0);
+    }
+
+    #[test]
+    fn test_spawn_without_kinematics_fails() {
+        let mut world = CoreWorld::new();
+        let set = ComponentSet {
+            rigid_body: Some(RigidBodyInput {
+                mass: Some(500.0),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(set.spawn_into(&mut world).is_none());
+    }
+
+    #[test]
+    fn test_spawn_rigid_body_without_mass_fails() {
+        let mut world = CoreWorld::new();
+        let set = ComponentSet {
+            kinematics: Some(KinematicsInput {
+                position: [1.0; 3],
+                velocity: [0.0; 3],
+            }),
+            rigid_body: Some(RigidBodyInput {
+                mass: None,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(set.spawn_into(&mut world).is_none());
+    }
+
+    #[test]
+    fn test_spacecraft_config_defaults() {
+        let mut world = CoreWorld::new();
+        let set = ComponentSet {
+            kinematics: Some(KinematicsInput {
+                position: [1.0; 3],
+                velocity: [0.0; 3],
+            }),
+            rigid_body: Some(RigidBodyInput {
+                mass: Some(250.0),
+                ..Default::default()
+            }),
+            spacecraft_config: Some(SpacecraftConfigInput::default()),
+        };
+        let entity = set.spawn_into(&mut world).unwrap();
+        let cfg = world.get_component::<SpacecraftConfig>(entity).unwrap();
+        assert_eq!(cfg.ballistic_coefficient, 0.01);
+        assert_eq!(cfg.srp_area.value, 10.0);
+        assert_eq!(cfg.reflectivity, 1.2);
+        assert_eq!(cfg.reference_mass_kg, 250.0);
+    }
+
+    #[test]
+    fn test_entity_count_after_multiple_spawns() {
+        let mut world = CoreWorld::new();
+        for _ in 0..5 {
+            let set = ComponentSet {
+                kinematics: Some(KinematicsInput {
+                    position: [1.0; 3],
+                    velocity: [0.0; 3],
+                }),
+                ..Default::default()
+            };
+            set.spawn_into(&mut world).unwrap();
+        }
+        assert_eq!(world.len(), 5);
+    }
+
+    // -- CoreWorld integration tests --
 
     #[test]
     fn test_spawn_step_query_cycle() {
@@ -428,10 +562,8 @@ mod tests {
                 }],
             },
         );
-        // Set epoch to day 80, midnight UTC (matches old day_of_year=80, seconds_utc=0).
         world.epoch = Epoch::from_gregorian_utc(2026, 3, 21, 0, 0, 0, 0);
 
-        // Spawn an entity in a circular LEO orbit — full spacecraft component set.
         let r = R_EARTH_EQ + 400_000.0;
         let v = (GM_EARTH / r).sqrt();
         let kinematics = Kinematics {
@@ -455,7 +587,6 @@ mod tests {
         let entity = world.spawn((kinematics, rigid_body, config));
         let pos0 = world.get_component::<Kinematics>(entity).unwrap().position;
 
-        // Step 100 times at 60s per step.
         for _ in 0..100 {
             step_world(&mut world, Seconds::new(60.0));
         }
@@ -463,36 +594,17 @@ mod tests {
         let kin = world.get_component::<Kinematics>(entity).unwrap();
         let pos1 = (*kin).clone().position;
 
-        // Position must have changed.
         let displacement = (pos1 - pos0).norm();
         assert!(
             displacement > 1_000.0,
             "entity did not move: displacement = {displacement} m"
         );
 
-        // Entity should still be in LEO.
         let altitude = pos1.norm() - R_EARTH_EQ;
         assert!(
             altitude > 350_000.0 && altitude < 500_000.0,
             "altitude out of LEO range: {altitude:.0} m"
         );
-    }
-
-    #[test]
-    fn test_spawn_kinematics_only() {
-        // An entity with only Kinematics (no RigidBody or SpacecraftConfig)
-        // should still be spawnable — the generic spawn accepts any component set.
-        let mut world = CoreWorld::new();
-        let kin = Kinematics {
-            position: NaVector3::new(1.0, 2.0, 3.0),
-            velocity: NaVector3::zeros(),
-            attitude: NaQuaternion::identity(),
-            angular_velocity: NaVector3::zeros(),
-        };
-        let entity = world.spawn((kin,));
-        assert_eq!(world.len(), 1);
-        assert!(world.get_component::<Kinematics>(entity).is_some());
-        assert!(world.get_component::<RigidBody>(entity).is_none());
     }
 
     #[test]
@@ -507,18 +619,5 @@ mod tests {
         assert!(world.despawn(entity));
         assert_eq!(world.len(), 0);
         assert!(world.get_component::<Kinematics>(entity).is_none());
-    }
-
-    #[test]
-    fn test_entity_count_after_multiple_spawns() {
-        let mut world = CoreWorld::new();
-        for _ in 0..5 {
-            world.spawn((
-                Kinematics::default(),
-                RigidBody::default(),
-                SpacecraftConfig::default(),
-            ));
-        }
-        assert_eq!(world.len(), 5);
     }
 }
