@@ -4,7 +4,7 @@
 //! spacecraft at runtime without holding Rust references across frames.
 //!
 //! Entity IDs are passed as `i64` across the FFI boundary (the `Entity` handle
-//! is a 64-bit generational index packed as a `u64`).
+//! is a 64-bit value accessible via `Entity::to_bits` / `Entity::from_bits`).
 //!
 //! Note: godot 0.5 uses `real = f32` by default. Positions and velocities are
 //! converted from `f64` (internal) to `f32` (Godot) at the boundary.
@@ -12,13 +12,13 @@
 use apogee_common::units::{Area, Kilograms, Seconds};
 use apogee_core::components::kinematics::Kinematics;
 use apogee_core::components::rigid_body::{RigidBody, SimulationConfig, SpacecraftConfig};
-use apogee_core::components::spacecraft::SpacecraftBundle;
 use apogee_core::ephemeris::kernel::{BodyState, SolarSystemState};
 use apogee_core::systems::step::step_world;
 use apogee_core::world::Entity;
 use apogee_core::world::World as CoreWorld;
 use godot::classes::Node;
 use godot::prelude::*;
+use hifitime::Epoch;
 use nalgebra::{Matrix3, Quaternion as NaQuaternion, Vector3 as NaVector3};
 
 /// Godot node wrapping the Apogee ECS `World`.
@@ -114,28 +114,28 @@ impl ApogeeWorld {
         let srp_area = dict_get_f64(&config, "srp_area").unwrap_or(10.0);
         let reflectivity = dict_get_f64(&config, "reflectivity").unwrap_or(1.2);
 
-        let bundle = SpacecraftBundle {
-            kinematics: Kinematics {
-                position: NaVector3::new(position.x as f64, position.y as f64, position.z as f64),
-                velocity: NaVector3::new(velocity.x as f64, velocity.y as f64, velocity.z as f64),
-                attitude: NaQuaternion::identity(),
-                angular_velocity: NaVector3::zeros(),
-            },
-            rigid_body: RigidBody {
-                mass: Kilograms::new(mass),
-                inertia: Matrix3::identity(),
-                cg_offset: NaVector3::zeros(),
-            },
-            config: SpacecraftConfig {
-                ballistic_coefficient,
-                srp_area: Area::new(srp_area),
-                reflectivity,
-                reference_mass_kg: mass,
-            },
+        let kinematics = Kinematics {
+            position: NaVector3::new(position.x as f64, position.y as f64, position.z as f64),
+            velocity: NaVector3::new(velocity.x as f64, velocity.y as f64, velocity.z as f64),
+            attitude: NaQuaternion::identity(),
+            angular_velocity: NaVector3::zeros(),
+        };
+        let rigid_body = RigidBody {
+            mass: Kilograms::new(mass),
+            inertia: Matrix3::identity(),
+            cg_offset: NaVector3::zeros(),
+        };
+        let spacecraft_config = SpacecraftConfig {
+            ballistic_coefficient,
+            srp_area: Area::new(srp_area),
+            reflectivity,
+            reference_mass_kg: mass,
         };
 
-        let entity = self.world.spawn(bundle);
-        entity.to_raw() as i64
+        let entity = self
+            .world
+            .spawn((kinematics, rigid_body, spacecraft_config));
+        entity.to_bits().get() as i64
     }
 
     /// Advance the simulation by `delta_time` seconds.
@@ -145,25 +145,36 @@ impl ApogeeWorld {
         self.world.sim_config.f107 = self.f107;
         self.world.sim_config.f107a = self.f107a;
         self.world.sim_config.ap = self.ap;
-        self.world.day_of_year = self.day_of_year.clamp(1, 366) as u16;
-        self.world.seconds_utc = self.seconds_utc;
+
+        // Reconstruct the epoch from Godot-exposed day_of_year + seconds_utc
+        // so Godot-side changes to those vars are respected. The epoch is
+        // built from the start of the current year plus the day/second offset.
+        let year = self.world.epoch.year();
+        let year_start = Epoch::from_gregorian_utc_at_midnight(year, 1, 1);
+        let doy_offset = hifitime::Duration::from_seconds(
+            (self.day_of_year.clamp(1, 366) as f64 - 1.0) * 86_400.0 + self.seconds_utc,
+        );
+        self.world.epoch = year_start + doy_offset;
 
         step_world(&mut self.world, Seconds::new(delta_time));
 
         // Read back the advanced clock.
-        self.seconds_utc = self.world.seconds_utc;
-        self.day_of_year = self.world.day_of_year as i32;
+        let doy_f64 = self.world.epoch.day_of_year();
+        self.day_of_year = doy_f64 as i32;
+        self.seconds_utc = (doy_f64 - doy_f64.floor()) * 86_400.0;
     }
 
     /// Get the inertial position of the entity as a Godot Vector3.
     #[func]
     fn get_position(&self, entity_id: i64) -> Vector3 {
-        let entity = Entity::from_raw(entity_id as u64);
-        match self.world.get(entity) {
-            Some(bundle) => Vector3::new(
-                bundle.kinematics.position.x as real,
-                bundle.kinematics.position.y as real,
-                bundle.kinematics.position.z as real,
+        let Some(entity) = Entity::from_bits(entity_id as u64) else {
+            return Vector3::ZERO;
+        };
+        match self.world.get_component::<Kinematics>(entity) {
+            Some(kin) => Vector3::new(
+                kin.position.x as real,
+                kin.position.y as real,
+                kin.position.z as real,
             ),
             None => Vector3::ZERO,
         }
@@ -172,12 +183,14 @@ impl ApogeeWorld {
     /// Get the inertial velocity of the entity as a Godot Vector3.
     #[func]
     fn get_velocity(&self, entity_id: i64) -> Vector3 {
-        let entity = Entity::from_raw(entity_id as u64);
-        match self.world.get(entity) {
-            Some(bundle) => Vector3::new(
-                bundle.kinematics.velocity.x as real,
-                bundle.kinematics.velocity.y as real,
-                bundle.kinematics.velocity.z as real,
+        let Some(entity) = Entity::from_bits(entity_id as u64) else {
+            return Vector3::ZERO;
+        };
+        match self.world.get_component::<Kinematics>(entity) {
+            Some(kin) => Vector3::new(
+                kin.velocity.x as real,
+                kin.velocity.y as real,
+                kin.velocity.z as real,
             ),
             None => Vector3::ZERO,
         }
@@ -186,13 +199,15 @@ impl ApogeeWorld {
     /// Get the attitude quaternion of the entity as a Godot Quaternion.
     #[func]
     fn get_attitude(&self, entity_id: i64) -> Quaternion {
-        let entity = Entity::from_raw(entity_id as u64);
-        match self.world.get(entity) {
-            Some(bundle) => Quaternion::new(
-                bundle.kinematics.attitude.i as real,
-                bundle.kinematics.attitude.j as real,
-                bundle.kinematics.attitude.k as real,
-                bundle.kinematics.attitude.w as real,
+        let Some(entity) = Entity::from_bits(entity_id as u64) else {
+            return Quaternion::IDENTITY;
+        };
+        match self.world.get_component::<Kinematics>(entity) {
+            Some(kin) => Quaternion::new(
+                kin.attitude.i as real,
+                kin.attitude.j as real,
+                kin.attitude.k as real,
+                kin.attitude.w as real,
             ),
             None => Quaternion::IDENTITY,
         }
@@ -201,7 +216,9 @@ impl ApogeeWorld {
     /// Despawn an entity by ID. Returns true if the entity was found and removed.
     #[func]
     fn despawn(&mut self, entity_id: i64) -> bool {
-        let entity = Entity::from_raw(entity_id as u64);
+        let Some(entity) = Entity::from_bits(entity_id as u64) else {
+            return false;
+        };
         self.world.despawn(entity)
     }
 
@@ -267,41 +284,40 @@ mod tests {
                 }],
             },
         );
-        world.day_of_year = 80;
-        world.seconds_utc = 0.0;
+        // Set epoch to day 80, midnight UTC (matches old day_of_year=80, seconds_utc=0).
+        world.epoch = Epoch::from_gregorian_utc(2026, 3, 21, 0, 0, 0, 0);
 
         // Spawn a spacecraft in a circular LEO orbit.
         let r = R_EARTH_EQ + 400_000.0;
         let v = (GM_EARTH / r).sqrt();
-        let bundle = SpacecraftBundle {
-            kinematics: Kinematics {
-                position: NaVector3::new(r, 0.0, 0.0),
-                velocity: NaVector3::new(0.0, v, 0.0),
-                attitude: NaQuaternion::identity(),
-                angular_velocity: NaVector3::zeros(),
-            },
-            rigid_body: RigidBody {
-                mass: Kilograms::new(1_000.0),
-                inertia: Matrix3::identity(),
-                cg_offset: NaVector3::zeros(),
-            },
-            config: SpacecraftConfig {
-                ballistic_coefficient: 0.0,
-                srp_area: Area::new(0.0),
-                reflectivity: 0.0,
-                reference_mass_kg: 1_000.0,
-            },
+        let kinematics = Kinematics {
+            position: NaVector3::new(r, 0.0, 0.0),
+            velocity: NaVector3::new(0.0, v, 0.0),
+            attitude: NaQuaternion::identity(),
+            angular_velocity: NaVector3::zeros(),
+        };
+        let rigid_body = RigidBody {
+            mass: Kilograms::new(1_000.0),
+            inertia: Matrix3::identity(),
+            cg_offset: NaVector3::zeros(),
+        };
+        let config = SpacecraftConfig {
+            ballistic_coefficient: 0.0,
+            srp_area: Area::new(0.0),
+            reflectivity: 0.0,
+            reference_mass_kg: 1_000.0,
         };
 
-        let entity = world.spawn(bundle);
-        let pos0 = world.get(entity).unwrap().kinematics.position;
+        let entity = world.spawn((kinematics, rigid_body, config));
+        let pos0 = world.get_component::<Kinematics>(entity).unwrap().position;
 
         // Step 100 times at 60s per step.
         for _ in 0..100 {
             step_world(&mut world, Seconds::new(60.0));
         }
 
-        let pos1 = world.get(entity).unwrap().kinematics.position;
+        let kin = world.get_component::<Kinematics>(entity).unwrap();
+        let pos1 = (*kin).clone().position;
 
         // Position must have changed.
         let displacement = (pos1 - pos0).norm();
@@ -321,19 +337,26 @@ mod tests {
     #[test]
     fn test_despawn_removes_entity() {
         let mut world = CoreWorld::new();
-        let bundle = SpacecraftBundle::default();
-        let entity = world.spawn(bundle);
+        let entity = world.spawn((
+            Kinematics::default(),
+            RigidBody::default(),
+            SpacecraftConfig::default(),
+        ));
         assert_eq!(world.len(), 1);
         assert!(world.despawn(entity));
         assert_eq!(world.len(), 0);
-        assert!(world.get(entity).is_none());
+        assert!(world.get_component::<Kinematics>(entity).is_none());
     }
 
     #[test]
     fn test_entity_count_after_multiple_spawns() {
         let mut world = CoreWorld::new();
         for _ in 0..5 {
-            world.spawn(SpacecraftBundle::default());
+            world.spawn((
+                Kinematics::default(),
+                RigidBody::default(),
+                SpacecraftConfig::default(),
+            ));
         }
         assert_eq!(world.len(), 5);
     }
