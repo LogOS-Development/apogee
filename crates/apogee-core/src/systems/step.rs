@@ -10,6 +10,7 @@
 //! monolithic bundle.
 
 use apogee_common::units::Seconds;
+use nalgebra::Vector3;
 
 use crate::components::kinematics::Kinematics;
 use crate::components::rigid_body::{RigidBody, SimulationConfig, SpacecraftConfig};
@@ -125,6 +126,14 @@ pub fn step_spacecraft(
 /// simulation config, celestial state, and epoch are read from the `World`.
 /// The world epoch is advanced by `dt` after all entities have been stepped.
 pub fn step_world(world: &mut World, dt: Seconds<f64>) {
+    // Rebuild the celestial state from the registry so force models see
+    // current body positions. Skip if the registry is empty — callers that
+    // set up `world.celestial` directly (without using the registry) keep
+    // their state intact.
+    if !world.celestial_registry.is_empty() {
+        world.build_celestial_state();
+    }
+
     // Snapshot the simulation context so we can borrow world.ecs mutably
     // without simultaneously borrowing world.sim_config / world.celestial.
     let ctx = SimContext::from_world(world);
@@ -133,7 +142,7 @@ pub fn step_world(world: &mut World, dt: Seconds<f64>) {
     // entities share the same fixed step size.
     let mut integrator = Rk4::new(dt);
 
-    // Query all entities with the full spacecraft component set.
+    // Step all spacecraft entities (Kinematics + RigidBody + SpacecraftConfig).
     for (_entity, (kin, rb, cfg)) in world
         .ecs
         .query::<(&mut Kinematics, &RigidBody, &SpacecraftConfig)>()
@@ -142,8 +151,57 @@ pub fn step_world(world: &mut World, dt: Seconds<f64>) {
         step_spacecraft(kin, rb, cfg, &ctx, &mut integrator, dt);
     }
 
+    // Integrate dynamic celestial bodies under point-mass gravity from
+    // all bodies in the registry. Kinematic bodies are left untouched.
+    integrate_dynamic_celestials(&mut world.celestial_registry, &ctx, &mut integrator, dt);
+
+    // Rebuild celestial state after propagated bodies have moved.
+    if !world.celestial_registry.is_empty() {
+        world.build_celestial_state();
+    }
+
     // Advance the world clock.
     world.epoch += dt.into_value() * Unit::Second;
+}
+
+/// Integrate all dynamic celestial bodies in the registry one step forward.
+///
+/// Each propagated body is accelerated by point-mass gravity from every body
+/// in the registry (including itself — a body's own GM produces zero net force
+/// since r→0 is never hit; the body's position is its own). Kinematic bodies
+/// are skipped: their positions are driven by the ephemeris service.
+fn integrate_dynamic_celestials(
+    registry: &mut crate::components::celestial::CelestialRegistry,
+    ctx: &SimContext,
+    integrator: &mut Rk4,
+    dt: Seconds<f64>,
+) {
+    for body in registry.dynamic_mut() {
+        // Build a temporary kinematics for the force aggregator.
+        let mut kin = Kinematics {
+            position: body.position,
+            velocity: body.velocity,
+            attitude: nalgebra::Quaternion::identity(),
+            angular_velocity: Vector3::zeros(),
+        };
+
+        // Dynamic bodies only feel gravity — zero out drag/SRP areas.
+        let rb = RigidBody {
+            mass: body.mass,
+            inertia: nalgebra::Matrix3::identity(),
+            cg_offset: Vector3::zeros(),
+        };
+        let cfg = SpacecraftConfig {
+            ballistic_coefficient: 0.0,
+            srp_area: apogee_common::units::Area::new(0.0),
+            reflectivity: 0.0,
+            reference_mass_kg: body.mass.into_value(),
+        };
+
+        step_spacecraft(&mut kin, &rb, &cfg, ctx, integrator, dt);
+        body.position = kin.position;
+        body.velocity = kin.velocity;
+    }
 }
 
 /// Propagate a single spacecraft for `duration_s` seconds with a fixed `dt` step.
@@ -189,6 +247,7 @@ pub fn propagate(
 mod tests {
     use apogee_common::constants::{GM_EARTH, R_EARTH_EQ};
     use apogee_common::units::{Area, Kilograms, Seconds};
+    use approx::assert_relative_eq;
     use nalgebra::Vector3;
 
     use super::*;
@@ -316,5 +375,140 @@ mod tests {
         let r = pos.norm();
         let v2 = vel.norm_squared();
         v2 / 2.0 - GM_EARTH / r
+    }
+
+    // ------------------------------------------------------------------
+    // Celestial registry integration tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_kinematic_body_does_not_move() {
+        // A kinematic Earth at the origin should not be moved by step_world.
+        let mut world = World::new();
+        world.add_celestial_body(crate::components::celestial::CelestialBody::kinematic(
+            399,
+            Vector3::zeros(),
+            Vector3::zeros(),
+        ));
+
+        for _ in 0..10 {
+            step_world(&mut world, Seconds::new(60.0));
+        }
+
+        let earth = world.celestial_registry.find(399).unwrap();
+        assert_relative_eq!(earth.position.norm(), 0.0);
+        assert_relative_eq!(earth.velocity.norm(), 0.0);
+    }
+
+    #[test]
+    fn test_dynamic_celestial_orbits_kinematic_body() {
+        // A small dynamic body (asteroid) should orbit a kinematic Earth.
+        let mut world = World::new();
+        world.add_celestial_body(crate::components::celestial::CelestialBody::kinematic(
+            399,
+            Vector3::zeros(),
+            Vector3::zeros(),
+        ));
+
+        // Asteroid at 400 km altitude, circular orbit velocity.
+        let r = R_EARTH_EQ + 400_000.0;
+        let v = (GM_EARTH / r).sqrt();
+        world.add_celestial_body(
+            crate::components::celestial::CelestialBody::dynamic_from_mass(
+                2_000_001,
+                Vector3::new(r, 0.0, 0.0),
+                Vector3::new(0.0, v, 0.0),
+                Kilograms::new(1e6),
+            ),
+        );
+
+        let asteroid = world.celestial_registry.find(2_000_001).unwrap();
+        let e0 = orbital_energy(&asteroid.position, &asteroid.velocity);
+
+        // Step for ~1 orbit (92 min).
+        for _ in 0..92 {
+            step_world(&mut world, Seconds::new(60.0));
+        }
+
+        let asteroid = world.celestial_registry.find(2_000_001).unwrap();
+        let e1 = orbital_energy(&asteroid.position, &asteroid.velocity);
+        let rel_err = (e1 - e0).abs() / e0.abs();
+        assert!(
+            rel_err < 1e-4,
+            "dynamic celestial energy drift too large: {}",
+            rel_err
+        );
+    }
+
+    #[test]
+    fn test_spacecraft_orbits_with_kinematic_and_propagated_bodies() {
+        // Spacecraft orbits a kinematic Earth while a propagated asteroid
+        // also orbits. Both should maintain stable orbits.
+        let mut world = World::new();
+        world.add_celestial_body(crate::components::celestial::CelestialBody::kinematic(
+            399,
+            Vector3::zeros(),
+            Vector3::zeros(),
+        ));
+
+        // Propagated asteroid at 1000 km altitude.
+        let r_ast = R_EARTH_EQ + 1_000_000.0;
+        let v_ast = (GM_EARTH / r_ast).sqrt();
+        world.add_celestial_body(
+            crate::components::celestial::CelestialBody::dynamic_from_mass(
+                2_000_001,
+                Vector3::new(r_ast, 0.0, 0.0),
+                Vector3::new(0.0, v_ast, 0.0),
+                Kilograms::new(1e10),
+            ),
+        );
+
+        // Spacecraft at 400 km altitude (well inside the asteroid orbit).
+        let r_sc = R_EARTH_EQ + 400_000.0;
+        let v_sc = (GM_EARTH / r_sc).sqrt();
+        let kin = Kinematics {
+            position: Vector3::new(r_sc, 0.0, 0.0),
+            velocity: Vector3::new(0.0, v_sc, 0.0),
+            attitude: nalgebra::Quaternion::identity(),
+            angular_velocity: Vector3::zeros(),
+        };
+        let rb = crate::components::rigid_body::RigidBody {
+            mass: Kilograms::new(1_000.0),
+            inertia: nalgebra::Matrix3::identity(),
+            cg_offset: Vector3::zeros(),
+        };
+        let cfg = crate::components::rigid_body::SpacecraftConfig {
+            ballistic_coefficient: 0.0,
+            srp_area: Area::new(0.0),
+            reflectivity: 0.0,
+            reference_mass_kg: 1_000.0,
+        };
+        let sc_entity = world.spawn((kin, rb, cfg));
+
+        let sc_e0 = {
+            let kin = world.get_component::<Kinematics>(sc_entity).unwrap();
+            orbital_energy(&kin.position, &kin.velocity)
+        };
+
+        // Step 10 minutes.
+        for _ in 0..10 {
+            step_world(&mut world, Seconds::new(60.0));
+        }
+
+        let sc_e1 = {
+            let kin = world.get_component::<Kinematics>(sc_entity).unwrap();
+            orbital_energy(&kin.position, &kin.velocity)
+        };
+        let sc_rel_err = (sc_e1 - sc_e0).abs() / sc_e0.abs();
+        assert!(
+            sc_rel_err < 1e-4,
+            "spacecraft energy drift with celestial registry: {}",
+            sc_rel_err
+        );
+
+        // Spacecraft should still be in LEO.
+        let kin = world.get_component::<Kinematics>(sc_entity).unwrap();
+        let sc_alt = kin.position.norm() - R_EARTH_EQ;
+        assert!(sc_alt > 350_000.0 && sc_alt < 500_000.0);
     }
 }
