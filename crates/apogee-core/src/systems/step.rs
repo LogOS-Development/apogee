@@ -5,18 +5,48 @@
 //! Phase 1.5 issue.
 //!
 //! Phase 2 (issue #102): `step_world` operates on the ECS `World` directly,
-//! iterating all entities and stepping each one in-place. `step_spacecraft`
-//! now takes a `SpacecraftBundle` instead of individual component refs.
+//! iterating all entities and stepping each one in-place via hecs queries.
+//! `step_spacecraft` now takes individual component references instead of a
+//! monolithic bundle.
 
 use apogee_common::units::Seconds;
 
 use crate::components::kinematics::Kinematics;
-use crate::components::rigid_body::SimulationConfig;
-use crate::components::spacecraft::SpacecraftBundle;
+use crate::components::rigid_body::{RigidBody, SimulationConfig, SpacecraftConfig};
 use crate::ephemeris::kernel::SolarSystemState;
 use crate::integrator::{IntegrationResult, Integrator, Rk4, StateDerivative, StateVector};
 use crate::systems::force_aggregator::aggregate_forces;
 use crate::world::World;
+use hifitime::{Epoch, Unit};
+
+/// Shared simulation environment passed to propagation functions.
+///
+/// Groups the three values that are constant across all entities during a
+/// single integration step: space-weather configuration, celestial ephemeris
+/// state, and the current simulation epoch. Extracting them into a struct
+/// keeps function signatures manageable and makes the environment boundary
+/// explicit.
+#[derive(Debug, Clone)]
+pub struct SimContext {
+    /// Space-weather / environment configuration for force models.
+    pub sim_config: SimulationConfig,
+    /// Celestial ephemeris state (positions and velocities of all bodies).
+    pub celestial: SolarSystemState,
+    /// Current simulation epoch.
+    pub epoch: Epoch,
+}
+
+impl SimContext {
+    /// Build a `SimContext` from a `World`'s shared state.
+    /// Clones the celestial ephemeris; copies `sim_config` and `epoch`.
+    pub fn from_world(world: &World) -> Self {
+        Self {
+            sim_config: world.sim_config,
+            celestial: world.celestial.clone(),
+            epoch: world.epoch,
+        }
+    }
+}
 
 /// Advance a single spacecraft's translational state by `dt` seconds using
 /// the fixed-step RK4 integrator configured by `integrator`.
@@ -26,27 +56,28 @@ use crate::world::World;
 /// Selectable propagators and adaptive step sizing are tracked in follow-up
 /// issues for per-object fidelity and federated simulation support.
 pub fn step_spacecraft(
-    bundle: &mut SpacecraftBundle,
-    sim_config: &SimulationConfig,
-    celestial: &SolarSystemState,
+    kinematics: &mut Kinematics,
+    rigid_body: &RigidBody,
+    config: &SpacecraftConfig,
+    ctx: &SimContext,
     integrator: &mut Rk4,
     dt: Seconds<f64>,
-    day_of_year: u16,
-    seconds_utc: f64,
 ) -> IntegrationResult {
-    let mut state = StateVector::from_kinematics(&bundle.kinematics);
+    let mut state = StateVector::from_kinematics(kinematics);
 
-    let inertia = bundle.rigid_body.inertia;
+    let inertia = rigid_body.inertia;
     let inertia_inv = inertia
         .try_inverse()
         .unwrap_or_else(nalgebra::Matrix3::identity);
-    let _mass_inv = 1.0 / bundle.rigid_body.mass.into_value();
+    let _mass_inv = 1.0 / rigid_body.mass.into_value();
 
-    // Capture the immutable parts of the bundle for the derivative closure.
-    // We need a snapshot of the rigid_body and config so the closure borrows
-    // do not conflict with the mutable kinematics write-back.
-    let rigid_body = &bundle.rigid_body;
-    let config = &bundle.config;
+    // Snapshot the immutable parts so the derivative closure does not conflict
+    // with the mutable kinematics write-back.
+    let rb = rigid_body.clone();
+    let cfg = *config;
+    let sim_config = ctx.sim_config;
+    let celestial = ctx.celestial.clone();
+    let epoch = ctx.epoch;
 
     let derivative_fn = |s: &StateVector| {
         // Reconstruct a temporary kinematics from the integrator state so
@@ -57,17 +88,13 @@ pub fn step_spacecraft(
             attitude: s.attitude,
             angular_velocity: s.angular_velocity,
         };
-        let trial_bundle = SpacecraftBundle {
-            kinematics: trial_kinematics,
-            rigid_body: rigid_body.clone(),
-            config: *config,
-        };
         let forces = aggregate_forces(
-            &trial_bundle,
-            sim_config,
-            celestial,
-            day_of_year,
-            seconds_utc,
+            &trial_kinematics,
+            &rb,
+            &cfg,
+            &sim_config,
+            &celestial,
+            epoch,
         );
 
         // Translational acceleration = F / m. The unit-aware newtype collapses
@@ -94,71 +121,56 @@ pub fn step_spacecraft(
     };
 
     let result = integrator.step(&mut state, &derivative_fn, dt);
-    state.write_to_kinematics(&mut bundle.kinematics);
+    state.write_to_kinematics(kinematics);
     result
 }
 
 /// Step the entire simulation world forward by `dt` seconds.
 ///
-/// Iterates all live entities, calling `step_spacecraft` on each one
-/// in-place. The simulation config, celestial state, and clock values are
-/// read from the `World`.
+/// Iterates all live entities that have `Kinematics + RigidBody +
+/// SpacecraftConfig`, calling `step_spacecraft` on each one in-place. The
+/// simulation config, celestial state, and epoch are read from the `World`.
+/// The world epoch is advanced by `dt` after all entities have been stepped.
 pub fn step_world(world: &mut World, dt: Seconds<f64>) {
-    // Snapshot the simulation context so we can borrow world.entities mutably
+    // Snapshot the simulation context so we can borrow world.ecs mutably
     // without simultaneously borrowing world.sim_config / world.celestial.
-    let sim_config = world.sim_config;
-    let celestial = world.celestial.clone();
-    let day_of_year = world.day_of_year;
-    let seconds_utc = world.seconds_utc;
+    let ctx = SimContext::from_world(world);
 
     // Each entity gets its own integrator instance. In Phase 1.6 all
     // entities share the same fixed step size.
     let mut integrator = Rk4::new(dt);
 
-    // Collect entity handles first to avoid borrow issues during iteration.
-    let entities: Vec<_> = world.entities().collect();
-    for entity in entities {
-        if let Some(bundle) = world.get_mut(entity) {
-            step_spacecraft(
-                bundle,
-                &sim_config,
-                &celestial,
-                &mut integrator,
-                dt,
-                day_of_year,
-                seconds_utc,
-            );
-        }
+    // Query all entities with the full spacecraft component set.
+    for (_entity, (kin, rb, cfg)) in world
+        .ecs
+        .query::<(&mut Kinematics, &RigidBody, &SpacecraftConfig)>()
+        .iter()
+    {
+        step_spacecraft(kin, rb, cfg, &ctx, &mut integrator, dt);
     }
 
     // Advance the world clock.
-    let dt_value = dt.into_value();
-    world.seconds_utc += dt_value;
-    if world.seconds_utc >= 86_400.0 {
-        world.seconds_utc -= 86_400.0;
-        world.day_of_year = world.day_of_year.saturating_add(1);
-    }
+    world.epoch += dt.into_value() * Unit::Second;
 }
 
-/// Propagate `kinematics` for `duration_s` seconds with a fixed `dt` step.
+/// Propagate a single spacecraft for `duration_s` seconds with a fixed `dt` step.
 ///
-/// `seconds_utc` is advanced linearly with simulation time; `day_of_year`
-/// is kept constant for simplicity in this milestone.
+/// `epoch` is advanced linearly with simulation time.
 ///
 /// This is a convenience wrapper around `step_spacecraft` for single-entity
 /// use cases that do not need a full `World`.
 pub fn propagate(
-    bundle: &mut SpacecraftBundle,
-    sim_config: &SimulationConfig,
-    celestial: &SolarSystemState,
+    kinematics: &mut Kinematics,
+    rigid_body: &RigidBody,
+    config: &SpacecraftConfig,
+    ctx: &SimContext,
     dt: Seconds<f64>,
     duration_s: Seconds<f64>,
-    mut day_of_year: u16,
-    mut seconds_utc: f64,
 ) {
     let mut integrator = Rk4::new(dt);
     let mut elapsed = 0.0_f64;
     let total = duration_s.into_value();
+    let mut epoch = ctx.epoch;
     while elapsed < total {
         let remaining = total - elapsed;
         let dt_value = dt.into_value();
@@ -167,42 +179,40 @@ pub fn propagate(
         } else {
             dt_value
         };
+        // Temporarily advance the epoch for this sub-step.
+        let step_ctx = SimContext {
+            epoch,
+            ..ctx.clone()
+        };
         step_spacecraft(
-            bundle,
-            sim_config,
-            celestial,
+            kinematics,
+            rigid_body,
+            config,
+            &step_ctx,
             &mut integrator,
             Seconds::new(step),
-            day_of_year,
-            seconds_utc,
         );
         elapsed += step;
-        seconds_utc += step;
-        if seconds_utc >= 86_400.0 {
-            seconds_utc -= 86_400.0;
-            day_of_year += 1;
-        }
+        epoch += step * Unit::Second;
     }
 }
 
-/// Propagate a single entity in the `World` for `duration_s` seconds.
+/// Propagate a single entity in a `World` for `duration_s` seconds.
 ///
 /// Convenience wrapper for the common single-spacecraft case: creates a
-/// temporary `World` from the given bundle and context, calls `step_world`
-/// in a loop, then returns the propagated bundle.
+/// temporary `World` from the given components and context, calls
+/// `step_world` in a loop, then returns the propagated components.
 pub fn propagate_single(
-    bundle: SpacecraftBundle,
-    sim_config: SimulationConfig,
-    celestial: SolarSystemState,
+    kinematics: Kinematics,
+    rigid_body: RigidBody,
+    config: SpacecraftConfig,
+    ctx: SimContext,
     dt: Seconds<f64>,
     duration_s: Seconds<f64>,
-    day_of_year: u16,
-    seconds_utc: f64,
-) -> SpacecraftBundle {
-    let mut world = World::with_config(sim_config, celestial);
-    world.day_of_year = day_of_year;
-    world.seconds_utc = seconds_utc;
-    let _entity = world.spawn(bundle);
+) -> (Kinematics, RigidBody, SpacecraftConfig) {
+    let mut world =
+        World::with_config_and_epoch(ctx.sim_config, ctx.celestial.clone(), ctx.epoch);
+    let _entity = world.spawn((kinematics, rigid_body, config));
 
     let total = duration_s.into_value();
     let dt_value = dt.into_value();
@@ -218,9 +228,12 @@ pub fn propagate_single(
         elapsed += step;
     }
 
-    // Return the single entity's bundle.
+    // Return the single entity's components.
     let entity = world.entities().next().expect("entity should exist");
-    world.get(entity).unwrap().clone()
+    let kin = world.get_component::<Kinematics>(entity).unwrap();
+    let rb = world.get_component::<RigidBody>(entity).unwrap();
+    let cfg = world.get_component::<SpacecraftConfig>(entity).unwrap();
+    ((*kin).clone(), (*rb).clone(), *cfg)
 }
 
 #[cfg(test)]
@@ -231,30 +244,29 @@ mod tests {
 
     use super::*;
     use crate::components::kinematics::Kinematics;
-    use crate::components::spacecraft::SpacecraftBundle;
 
-    fn make_orbit_bundle() -> SpacecraftBundle {
+    fn make_orbit_components() -> (Kinematics, RigidBody, SpacecraftConfig) {
         let r = R_EARTH_EQ + 400_000.0;
         let v = (GM_EARTH / r).sqrt();
-        SpacecraftBundle {
-            kinematics: Kinematics {
+        (
+            Kinematics {
                 position: Vector3::new(r, 0.0, 0.0),
                 velocity: Vector3::new(0.0, v, 0.0),
                 attitude: nalgebra::Quaternion::identity(),
                 angular_velocity: Vector3::zeros(),
             },
-            rigid_body: crate::components::rigid_body::RigidBody {
+            RigidBody {
                 mass: Kilograms::new(1_000.0),
                 inertia: nalgebra::Matrix3::identity(),
                 cg_offset: Vector3::zeros(),
             },
-            config: crate::components::rigid_body::SpacecraftConfig {
+            SpacecraftConfig {
                 ballistic_coefficient: 0.0,
                 srp_area: Area::new(0.0),
                 reflectivity: 0.0,
                 reference_mass_kg: 1_000.0,
             },
-        }
+        )
     }
 
     fn earth_only() -> SolarSystemState {
@@ -267,38 +279,47 @@ mod tests {
         }
     }
 
+    fn test_epoch() -> Epoch {
+        Epoch::from_gregorian_utc(2026, 3, 21, 0, 0, 0, 0)
+    }
+
     #[test]
     fn test_two_body_orbit_energy_conservation() {
-        let mut bundle = make_orbit_bundle();
-        let sim_config = SimulationConfig::default();
-        let celestial = earth_only();
+        let (mut kin, rb, cfg) = make_orbit_components();
+        let ctx = SimContext {
+            sim_config: SimulationConfig::default(),
+            celestial: earth_only(),
+            epoch: test_epoch(),
+        };
 
-        let e0 = orbital_energy(&bundle.kinematics.position, &bundle.kinematics.velocity);
+        let e0 = orbital_energy(&kin.position, &kin.velocity);
         propagate(
-            &mut bundle,
-            &sim_config,
-            &celestial,
+            &mut kin,
+            &rb,
+            &cfg,
+            &ctx,
             Seconds::new(60.0),
             Seconds::new(3_600.0),
-            80,
-            0.0,
         );
-        let e1 = orbital_energy(&bundle.kinematics.position, &bundle.kinematics.velocity);
+        let e1 = orbital_energy(&kin.position, &kin.velocity);
         let rel_err = (e1 - e0).abs() / e0.abs();
         assert!(rel_err < 1e-5, "energy drift too large: {}", rel_err);
     }
 
     #[test]
     fn test_step_world_single_entity() {
-        let bundle = make_orbit_bundle();
-        let mut world = World::with_config(SimulationConfig::default(), earth_only());
-        world.day_of_year = 80;
-        world.seconds_utc = 0.0;
-        let _entity = world.spawn(bundle);
+        let (kin, rb, cfg) = make_orbit_components();
+        let mut world = World::with_config_and_epoch(
+            SimulationConfig::default(),
+            earth_only(),
+            test_epoch(),
+        );
+        let _entity = world.spawn((kin, rb, cfg));
 
         let e0 = {
-            let b = world.iter().next().unwrap().1;
-            orbital_energy(&b.kinematics.position, &b.kinematics.velocity)
+            let entity = world.entities().next().unwrap();
+            let kin = world.get_component::<Kinematics>(entity).unwrap();
+            orbital_energy(&kin.position, &kin.velocity)
         };
 
         // Step 60 seconds at a time for 1 hour.
@@ -307,8 +328,9 @@ mod tests {
         }
 
         let e1 = {
-            let b = world.iter().next().unwrap().1;
-            orbital_energy(&b.kinematics.position, &b.kinematics.velocity)
+            let entity = world.entities().next().unwrap();
+            let kin = world.get_component::<Kinematics>(entity).unwrap();
+            orbital_energy(&kin.position, &kin.velocity)
         };
         let rel_err = (e1 - e0).abs() / e0.abs();
         assert!(
@@ -320,27 +342,32 @@ mod tests {
 
     #[test]
     fn test_step_world_multi_entity() {
-        let mut world = World::with_config(SimulationConfig::default(), earth_only());
-        world.day_of_year = 80;
+        let mut world = World::with_config_and_epoch(
+            SimulationConfig::default(),
+            earth_only(),
+            test_epoch(),
+        );
 
         // Two entities with different initial positions.
-        let b0 = make_orbit_bundle();
-        let mut b1 = make_orbit_bundle();
-        b1.kinematics.position = Vector3::new(R_EARTH_EQ + 500_000.0, 0.0, 0.0);
-        b1.kinematics.velocity =
+        let (kin0, rb0, cfg0) = make_orbit_components();
+        let e0 = world.spawn((kin0, rb0, cfg0));
+
+        let mut kin1 = make_orbit_components().0;
+        kin1.position = Vector3::new(R_EARTH_EQ + 500_000.0, 0.0, 0.0);
+        kin1.velocity =
             Vector3::new(0.0, (GM_EARTH / (R_EARTH_EQ + 500_000.0)).sqrt(), 0.0);
-        let e0 = world.spawn(b0);
-        let e1 = world.spawn(b1);
+        let (_, rb1, cfg1) = make_orbit_components();
+        let e1 = world.spawn((kin1, rb1, cfg1));
 
         for _ in 0..10 {
             step_world(&mut world, Seconds::new(60.0));
         }
 
         // Both entities should have moved.
-        let b0 = world.get(e0).unwrap();
-        let b1 = world.get(e1).unwrap();
-        assert!(b0.kinematics.position.norm() > R_EARTH_EQ);
-        assert!(b1.kinematics.position.norm() > R_EARTH_EQ);
+        let kin0 = world.get_component::<Kinematics>(e0).unwrap();
+        let kin1 = world.get_component::<Kinematics>(e1).unwrap();
+        assert!(kin0.position.norm() > R_EARTH_EQ);
+        assert!(kin1.position.norm() > R_EARTH_EQ);
     }
 
     fn orbital_energy(pos: &Vector3<f64>, vel: &Vector3<f64>) -> f64 {

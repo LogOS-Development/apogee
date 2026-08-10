@@ -11,13 +11,13 @@
 
 use apogee_common::constants::R_EARTH_EQ;
 use apogee_common::units::{Area, Kilograms, Seconds};
+use hifitime::Epoch;
 use nalgebra::Vector3;
 
 use crate::components::kinematics::Kinematics;
 use crate::components::rigid_body::{RigidBody, SimulationConfig, SpacecraftConfig};
-use crate::components::spacecraft::SpacecraftBundle;
 use crate::ephemeris::kernel::{BodyState, SolarSystemState};
-use crate::systems::step::{propagate, propagate_single, step_world};
+use crate::systems::step::{propagate, propagate_single, step_world, SimContext};
 use crate::tle::Tle;
 use crate::world::World;
 
@@ -25,31 +25,35 @@ use crate::world::World;
 /// test is deterministic. Replace with a historical fixture once J2/EOP are in.
 const ISS_TLE: &str = "ISS (ZARYA)             \r\n\
 1 25544U 98067A   26212.89378683  .00008757  00000+0  16519-3 0  9996\r\n\
-2 25544  51.6315  78.8506 0007211 358.5886   1.5081 15.49290909578688";
+2 25544  51.6315  78.8506  0007211 358.5886   1.5081 15.49290909578688";
 
-fn iss_bundle() -> (Tle, SpacecraftBundle, SimulationConfig) {
+/// Epoch for the TLE epoch day 26212.89378683 (year 2026, day 213).
+fn iss_epoch() -> Epoch {
+    // Day 213 of 2026 = 2026-08-01. TLE epoch fractional .89378683 day ≈ 21:27:04.
+    Epoch::from_gregorian_utc(2026, 8, 1, 21, 27, 4, 0)
+}
+
+fn iss_components() -> (Tle, Kinematics, RigidBody, SpacecraftConfig, SimulationConfig) {
     let tle = Tle::parse(ISS_TLE).expect("embedded ISS TLE should parse");
     let (pos, vel) = tle.to_state_vector();
-    let bundle = SpacecraftBundle {
-        kinematics: Kinematics {
-            position: pos,
-            velocity: vel,
-            attitude: nalgebra::Quaternion::identity(),
-            angular_velocity: Vector3::zeros(),
-        },
-        rigid_body: RigidBody {
-            mass: Kilograms::new(420_000.0),
-            inertia: nalgebra::Matrix3::identity() * 1e7,
-            cg_offset: Vector3::zeros(),
-        },
-        config: SpacecraftConfig {
-            ballistic_coefficient: 1e-4,
-            srp_area: Area::new(2_500.0),
-            reflectivity: 1.2,
-            reference_mass_kg: 420_000.0,
-        },
+    let kinematics = Kinematics {
+        position: pos,
+        velocity: vel,
+        attitude: nalgebra::Quaternion::identity(),
+        angular_velocity: Vector3::zeros(),
     };
-    (tle, bundle, SimulationConfig::default())
+    let rigid_body = RigidBody {
+        mass: Kilograms::new(420_000.0),
+        inertia: nalgebra::Matrix3::identity() * 1e7,
+        cg_offset: Vector3::zeros(),
+    };
+    let config = SpacecraftConfig {
+        ballistic_coefficient: 1e-4,
+        srp_area: Area::new(2_500.0),
+        reflectivity: 1.2,
+        reference_mass_kg: 420_000.0,
+    };
+    (tle, kinematics, rigid_body, config, SimulationConfig::default())
 }
 
 fn earth_only_celestial() -> SolarSystemState {
@@ -64,21 +68,23 @@ fn earth_only_celestial() -> SolarSystemState {
 
 #[test]
 fn test_iss_one_orbit_energy_conservation() {
-    let (_tle, bundle, sim_config) = iss_bundle();
-    let celestial = earth_only_celestial();
+    let (_tle, mut kin, rb, cfg, sim_config) = iss_components();
+    let ctx = SimContext {
+        sim_config,
+        celestial: earth_only_celestial(),
+        epoch: iss_epoch(),
+    };
 
-    let e0 = specific_energy(&bundle.kinematics.position, &bundle.kinematics.velocity);
-    let mut bundle = bundle;
+    let e0 = specific_energy(&kin.position, &kin.velocity);
     propagate(
-        &mut bundle,
-        &sim_config,
-        &celestial,
+        &mut kin,
+        &rb,
+        &cfg,
+        &ctx,
         Seconds::new(30.0),
         Seconds::new(5_500.0),
-        212,
-        0.0,
     );
-    let e1 = specific_energy(&bundle.kinematics.position, &bundle.kinematics.velocity);
+    let e1 = specific_energy(&kin.position, &kin.velocity);
 
     let rel_err = (e1 - e0).abs() / e0.abs();
     assert!(
@@ -87,7 +93,7 @@ fn test_iss_one_orbit_energy_conservation() {
         rel_err
     );
 
-    let altitude = bundle.kinematics.position.norm() - R_EARTH_EQ;
+    let altitude = kin.position.norm() - R_EARTH_EQ;
     assert!(
         altitude > 350_000.0 && altitude < 500_000.0,
         "altitude out of ISS range: {:.0} m",
@@ -97,28 +103,30 @@ fn test_iss_one_orbit_energy_conservation() {
 
 #[test]
 fn test_iss_24h_propagation_stays_leo() {
-    let (_tle, bundle, sim_config) = iss_bundle();
-    let celestial = earth_only_celestial();
+    let (_tle, mut kin, rb, cfg, sim_config) = iss_components();
+    let ctx = SimContext {
+        sim_config,
+        celestial: earth_only_celestial(),
+        epoch: iss_epoch(),
+    };
 
-    let mut bundle = bundle;
     propagate(
-        &mut bundle,
-        &sim_config,
-        &celestial,
+        &mut kin,
+        &rb,
+        &cfg,
+        &ctx,
         Seconds::new(60.0),
         Seconds::new(86_400.0),
-        212,
-        0.0,
     );
 
-    let altitude = bundle.kinematics.position.norm() - R_EARTH_EQ;
+    let altitude = kin.position.norm() - R_EARTH_EQ;
     assert!(
         altitude > 300_000.0 && altitude < 500_000.0,
         "24h propagation produced non-LEO altitude: {:.0} m",
         altitude
     );
 
-    let speed = bundle.kinematics.velocity.norm();
+    let speed = kin.velocity.norm();
     assert!(
         speed > 7_000.0 && speed < 8_000.0,
         "24h propagation produced unrealistic speed: {:.0} m/s",
@@ -128,17 +136,16 @@ fn test_iss_24h_propagation_stays_leo() {
 
 #[test]
 fn test_iss_one_orbit_via_step_world() {
-    let (_tle, bundle, sim_config) = iss_bundle();
+    let (_tle, kin, rb, cfg, sim_config) = iss_components();
     let celestial = earth_only_celestial();
 
-    let mut world = World::with_config(sim_config, celestial);
-    world.day_of_year = 212;
-    world.seconds_utc = 0.0;
-    let _entity = world.spawn(bundle);
+    let mut world = World::with_config_and_epoch(sim_config, celestial, iss_epoch());
+    let _entity = world.spawn((kin, rb, cfg));
 
     let e0 = {
-        let b = world.iter().next().unwrap().1;
-        specific_energy(&b.kinematics.position, &b.kinematics.velocity)
+        let entity = world.entities().next().unwrap();
+        let kin = world.get_component::<Kinematics>(entity).unwrap();
+        specific_energy(&kin.position, &kin.velocity)
     };
 
     // 1 orbit ≈ 5500 s, step at 30 s.
@@ -147,8 +154,9 @@ fn test_iss_one_orbit_via_step_world() {
     }
 
     let e1 = {
-        let b = world.iter().next().unwrap().1;
-        specific_energy(&b.kinematics.position, &b.kinematics.velocity)
+        let entity = world.entities().next().unwrap();
+        let kin = world.get_component::<Kinematics>(entity).unwrap();
+        specific_energy(&kin.position, &kin.velocity)
     };
     let rel_err = (e1 - e0).abs() / e0.abs();
     assert!(
@@ -160,20 +168,23 @@ fn test_iss_one_orbit_via_step_world() {
 
 #[test]
 fn test_iss_via_propagate_single() {
-    let (_tle, bundle, sim_config) = iss_bundle();
-    let celestial = earth_only_celestial();
-
-    let e0 = specific_energy(&bundle.kinematics.position, &bundle.kinematics.velocity);
-    let result = propagate_single(
-        bundle,
+    let (_tle, kin, rb, cfg, sim_config) = iss_components();
+    let ctx = SimContext {
         sim_config,
-        celestial,
+        celestial: earth_only_celestial(),
+        epoch: iss_epoch(),
+    };
+
+    let e0 = specific_energy(&kin.position, &kin.velocity);
+    let (kin, _, _) = propagate_single(
+        kin,
+        rb,
+        cfg,
+        ctx,
         Seconds::new(30.0),
         Seconds::new(5_500.0),
-        212,
-        0.0,
     );
-    let e1 = specific_energy(&result.kinematics.position, &result.kinematics.velocity);
+    let e1 = specific_energy(&kin.position, &kin.velocity);
     let rel_err = (e1 - e0).abs() / e0.abs();
     assert!(
         rel_err < 1e-6,

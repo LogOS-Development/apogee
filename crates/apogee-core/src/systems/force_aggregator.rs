@@ -7,10 +7,11 @@ use nalgebra::Vector3;
 use crate::aero::model::AtmosphereInput;
 use crate::aero::nrlmsise00::Nrlmsise00;
 use crate::aero::{AtmosphericDrag, SolarRadiationPressure};
-use crate::components::rigid_body::SimulationConfig;
-use crate::components::spacecraft::SpacecraftBundle;
+use crate::components::kinematics::Kinematics;
+use crate::components::rigid_body::{RigidBody, SimulationConfig, SpacecraftConfig};
 use crate::ephemeris::kernel::SolarSystemState;
 use crate::gravity::PointMassGravity;
+use hifitime::Epoch;
 
 /// Aggregated forces and torques on a body.
 #[derive(Debug, Clone, Default)]
@@ -64,22 +65,21 @@ impl AggregatedForces {
 /// - NRLMSISE-00 atmospheric drag
 /// - solar radiation pressure with cylindrical eclipse detection
 ///
-/// The `day_of_year` and `seconds_utc` inputs are used to build the
-/// atmosphere-model input. For a real simulation these would come from a
-/// `ClockService` tied to the current epoch.
-///
-/// Space-weather values are taken from `sim_config` rather than hardcoded so
-/// a federation can drive them from an external simulation.
+/// The epoch supplies `day_of_year` and `seconds_utc` to the atmosphere model
+/// via hifitime's `day_of_year()` accessor (1-based, fractional). Space-weather
+/// values are taken from `sim_config` rather than hardcoded so a federation can
+/// drive them from an external simulation.
 pub fn aggregate_forces(
-    bundle: &SpacecraftBundle,
+    kinematics: &Kinematics,
+    rigid_body: &RigidBody,
+    config: &SpacecraftConfig,
     sim_config: &SimulationConfig,
     celestial: &SolarSystemState,
-    day_of_year: u16,
-    seconds_utc: f64,
+    epoch: Epoch,
 ) -> AggregatedForces {
-    let kinematics = &bundle.kinematics;
-    let rigid_body = &bundle.rigid_body;
-    let config = &bundle.config;
+    let doy_f64 = epoch.day_of_year(); // 1-based, fractional
+    let day_of_year = doy_f64 as u16;
+    let seconds_utc = (doy_f64 - doy_f64.floor()) * 86_400.0;
 
     let gravity = PointMassGravity
         .acceleration(&kinematics.position, celestial)
@@ -87,7 +87,7 @@ pub fn aggregate_forces(
 
     let drag = {
         let model = Nrlmsise00;
-        let latlon = ecef_lat_lon_from_inertial(&kinematics.position, day_of_year, seconds_utc);
+        let latlon = ecef_lat_lon_from_inertial(&kinematics.position);
         let input = AtmosphereInput {
             altitude_m: apogee_common::units::Meters::new(latlon.altitude_m),
             latitude_rad: latlon.latitude_rad,
@@ -143,11 +143,7 @@ pub(crate) struct LatLonAlt {
     pub(crate) altitude_m: f64,
 }
 
-pub(crate) fn ecef_lat_lon_from_inertial(
-    position: &Position,
-    _day_of_year: u16,
-    _seconds_utc: f64,
-) -> LatLonAlt {
+pub(crate) fn ecef_lat_lon_from_inertial(position: &Position) -> LatLonAlt {
     let r = position.norm();
     let lat = position
         .z
@@ -169,36 +165,35 @@ mod tests {
 
     use super::*;
     use crate::components::kinematics::Kinematics;
-    use crate::components::spacecraft::SpacecraftBundle;
     use approx::assert_relative_eq;
 
-    fn make_iss_bundle() -> SpacecraftBundle {
+    fn make_iss_components() -> (Kinematics, RigidBody, SpacecraftConfig) {
         let r = R_EARTH_EQ + 408_000.0;
         let v = (GM_EARTH / r).sqrt();
-        SpacecraftBundle {
-            kinematics: Kinematics {
+        (
+            Kinematics {
                 position: Vector3::new(r, 0.0, 0.0),
                 velocity: Vector3::new(0.0, v, 0.0),
                 attitude: nalgebra::Quaternion::identity(),
                 angular_velocity: Vector3::zeros(),
             },
-            rigid_body: crate::components::rigid_body::RigidBody {
+            RigidBody {
                 mass: Kilograms::new(420_000.0),
                 inertia: nalgebra::Matrix3::identity(),
                 cg_offset: Vector3::zeros(),
             },
-            config: crate::components::rigid_body::SpacecraftConfig {
+            SpacecraftConfig {
                 ballistic_coefficient: 1e-4,
                 srp_area: Area::new(2_500.0),
                 reflectivity: 1.2,
                 reference_mass_kg: 420_000.0,
             },
-        }
+        )
     }
 
     #[test]
     fn test_aggregate_forces_finite() {
-        let bundle = make_iss_bundle();
+        let (kin, rb, cfg) = make_iss_components();
         let sim_config = SimulationConfig::default();
         let celestial = SolarSystemState {
             states: vec![crate::ephemeris::kernel::BodyState {
@@ -207,7 +202,9 @@ mod tests {
                 velocity: Vector3::zeros(),
             }],
         };
-        let forces = aggregate_forces(&bundle, &sim_config, &celestial, 80, 12.0 * 3600.0);
+        // Day 80, 12:00 UTC → 2026-03-21T12:00:00
+        let epoch = Epoch::from_gregorian_utc(2026, 3, 21, 12, 0, 0, 0);
+        let forces = aggregate_forces(&kin, &rb, &cfg, &sim_config, &celestial, epoch);
         let total = forces.total();
         assert!(total.raw().iter().all(|v| v.is_finite()));
         assert!(forces.gravity.raw().norm() > 0.0);
