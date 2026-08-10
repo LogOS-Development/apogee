@@ -221,3 +221,72 @@ fn test_iss_via_propagate() {
 fn specific_energy(pos: &Vector3<f64>, vel: &Vector3<f64>) -> f64 {
     vel.norm_squared() / 2.0 - GM_EARTH / pos.norm()
 }
+
+#[test]
+fn test_drag_srp_changes_orbital_energy() {
+    // Verify that drag + SRP surfaces actually change orbital energy
+    // compared to a gravity-only propagation. Drag is dissipative, so
+    // the energy with surfaces should be lower than the energy without.
+    let (_tle, mut kin_with, rb, drag, srp, sim_config) = iss_components();
+    let mut kin_without = kin_with.clone();
+
+    let mut ctx_with = SimContext {
+        sim_config,
+        ..earth_only_ctx(iss_epoch())
+    };
+    let mut ctx_without = SimContext {
+        sim_config,
+        ..earth_only_ctx(iss_epoch())
+    };
+
+    let e0 = specific_energy(&kin_with.position, &kin_with.velocity);
+
+    // Propagate with drag + SRP for several orbits.
+    propagate(
+        &mut kin_with,
+        &rb,
+        Some(&drag),
+        Some(&srp),
+        &mut ctx_with,
+        Seconds::new(10.0),
+        Seconds::new(20_000.0), // ~3.6 orbits
+    );
+
+    // Propagate without drag + SRP for the same duration.
+    propagate(
+        &mut kin_without,
+        &rb,
+        None,
+        None,
+        &mut ctx_without,
+        Seconds::new(10.0),
+        Seconds::new(20_000.0),
+    );
+
+    let e_with = specific_energy(&kin_with.position, &kin_with.velocity);
+    let e_without = specific_energy(&kin_without.position, &kin_without.velocity);
+
+    // The gravity-only propagation should conserve energy closely.
+    let drift_without = (e_without - e0).abs() / e0.abs();
+    assert!(
+        drift_without < 1e-6,
+        "gravity-only energy drift too large: {drift_without:.6e}"
+    );
+
+    // The propagation with drag + SRP should show a measurably different
+    // energy. Drag is dissipative, so energy should decrease (become more
+    // negative), meaning |e_with| > |e0| and e_with < e0.
+    let energy_change_with = e_with - e0;
+    let energy_change_without = e_without - e0;
+    assert!(
+        energy_change_with.abs() > energy_change_without.abs() * 10.0,
+        "drag+SRP should produce a much larger energy change than numerical drift: \
+         with={energy_change_with:.6e}, without={energy_change_without:.6e}"
+    );
+
+    // Drag is dissipative: the energy should decrease (orbit decays).
+    assert!(
+        energy_change_with < 0.0,
+        "drag should decrease orbital energy (dissipative), got change={energy_change_with:.6e}"
+    );
+}
