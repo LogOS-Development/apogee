@@ -127,7 +127,11 @@ jobs:
             echo "No badge changes to commit"
           else
             git commit -m "chore: update coverage badge to ${PCT}% [skip ci]"
-            git push
+            if git push; then
+              echo "Badge pushed to main"
+            else
+              echo "::warning::Could not push badge to main (branch protection?). Badge committed locally only."
+            fi
           fi
 
       - name: Upload lcov artifact

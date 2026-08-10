@@ -42,7 +42,6 @@ hecs = "0.10"
 # Godot 4 bindings (GDExtension)
 godot = "0.5"
 # Test utilities
-ntest = "0.9"
 # Internal crates
 apogee-common = { path = "crates/apogee-common" }
 apogee-core = { path = "crates/apogee-core" }

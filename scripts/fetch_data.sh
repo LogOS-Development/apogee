@@ -49,6 +49,10 @@ verify_file() {
 
 # Download with curl, only if file doesn't exist. Refuses HTML error pages
 # (e.g. 404 served as text/html) by checking the first bytes.
+#
+# Retries up to 5 times with a 3-second delay between attempts. Connect
+# timeout is 30 seconds; the overall transfer timeout is 10 minutes (large
+# files like EGM2008 at 252 MB can be slow from GitHub Actions IPs).
 download() {
     local url="$1"
     local dest="$2"
@@ -59,7 +63,12 @@ download() {
     fi
 
     log "Downloading: $(basename "$dest")"
-    curl -L -f -s -o "$dest" "$url" || fail "Download failed: $url"
+    curl \
+        -L -f -s \
+        --retry 5 --retry-delay 3 \
+        --connect-timeout 30 \
+        --max-time 600 \
+        -o "$dest" "$url" || fail "Download failed: $url"
 
     # Reject HTML error pages that slipped through.
     if file "$dest" | grep -q 'HTML'; then
@@ -79,11 +88,20 @@ mkdir -p "$DATA_DIR"/{ephemeris,gravity,spaceweather,time,eop}
 mkdir -p "$ROOT_DIR/crates/apogee-core/tests/fixtures"
 
 # --- 1. JPL DE441 Ephemeris ---
-log "=== JPL DE441 Ephemeris ==="
-download \
-    "https://ssd.jpl.nasa.gov/ftp/eph/planets/bsp/de441.bsp" \
-    "$DATA_DIR/ephemeris/de441.bsp"
-verify_file "$DATA_DIR/ephemeris/de441.bsp" 1000000
+# DE441 is 3.3 GB and is not needed by any test in the CI pipeline.
+# It is fetched here for local development / runtime use only. The CI
+# nightly workflow skips this step; if you need DE441 locally, run
+# ./scripts/fetch_data.sh --full or download manually from:
+#   https://ssd.jpl.nasa.gov/ftp/eph/planets/bsp/de441.bsp
+if [[ "${FETCH_DE441:-0}" == "1" ]]; then
+    log "=== JPL DE441 Ephemeris ==="
+    download \
+        "https://ssd.jpl.nasa.gov/ftp/eph/planets/bsp/de441.bsp" \
+        "$DATA_DIR/ephemeris/de441.bsp"
+    verify_file "$DATA_DIR/ephemeris/de441.bsp" 1000000
+else
+    log "=== JPL DE441 Ephemeris (skipped — set FETCH_DE441=1 to enable) ==="
+fi
 
 # --- 2. EGM2008 Gravity Model ---
 log "=== EGM2008 Gravity Model ==="

@@ -934,7 +934,8 @@ pub mod tests {
         let n_coeffs = rsize_doubles as usize;
 
         for rec in 0..record_count {
-            let offset = (first_data_record as usize - 1 + rec as usize) * RECORD_SIZE;
+            let offset = (first_data_record as usize - 1) * RECORD_SIZE
+                + rec as usize * record_size_bytes as usize;
             let rec_start = start_et + rec as f64 * interval_length;
             let rec_end = rec_start + interval_length;
             let mid = (rec_start + rec_end) * 0.5;
@@ -1063,7 +1064,8 @@ pub mod tests {
         let n_coeffs = rsize_doubles as usize;
 
         for rec in 0..record_count {
-            let offset = (first_data_record as usize - 1 + rec as usize) * RECORD_SIZE;
+            let offset = (first_data_record as usize - 1) * RECORD_SIZE
+                + rec as usize * record_size_bytes as usize;
             let rec_start = start_et + rec as f64 * interval_length;
             let rec_end = rec_start + interval_length;
             let mid = (rec_start + rec_end) * 0.5;

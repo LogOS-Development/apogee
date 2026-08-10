@@ -35,4 +35,3 @@ required-features = ["hwm14"]
 
 [dev-dependencies]
 approx = "0.5"
-ntest = { workspace = true }

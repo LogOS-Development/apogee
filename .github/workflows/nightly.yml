@@ -12,9 +12,12 @@ env:
   RUSTFLAGS: "-D warnings"
 
 jobs:
-  # Fast tests: everything except the heavy kernel/golden tests.
-  full-test-fast:
-    name: Fast test suite including ignored tests
+  # Fast tests: everything including ignored tests, except the heavy
+  # kernel tests that previously required the 3.3 GB DE441 kernel.
+  # The DE441 probe tests have been replaced with synthetic Type 3
+  # fixture tests that run in milliseconds (see issue #158).
+  test:
+    name: Test & Lint (including ignored)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,6 +39,12 @@ jobs:
             target
           key: cargo-nightly-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
 
+      - name: Cache external data assets (EGM2008)
+        uses: actions/cache@v4
+        with:
+          path: data/gravity
+          key: data-gravity-${{ runner.os }}-${{ hashFiles('scripts/fetch_data.sh') }}
+
       - name: Fetch external data assets
         run: ./scripts/fetch_data.sh
 
@@ -48,8 +57,8 @@ jobs:
       - name: Clippy with hwm14 feature
         run: cargo clippy -p apogee-core --features hwm14 -- -D warnings
 
-      - name: Test workspace (including ignored tests, excluding slow kernel tests)
-        run: cargo test --workspace -- --include-ignored --skip de441_mars_barycenter_vs_horizons --skip de441_multi_body_vs_horizons
+      - name: Test workspace (including ignored tests)
+        run: cargo test --workspace -- --include-ignored
 
       - name: Test hwm14 feature (including ignored Fortran tests)
         run: cargo test -p apogee-core --features hwm14 -- --include-ignored
@@ -57,19 +66,24 @@ jobs:
       - name: Build hwm14_samples example
         run: cargo build --example hwm14_samples -p apogee-core --features hwm14
 
-  # Slow kernel tests run separately with a generous timeout so they do
-  # not cancel the fast job if they hang.
-  slow-kernel-tests:
-    name: Slow DE441 kernel tests
+  coverage:
+    name: Code Coverage
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy, rustfmt
+          components: llvm-tools-preview
+
+      - name: Install Fortran compiler
+        run: sudo apt-get update && sudo apt-get install -y gfortran
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -78,10 +92,104 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-nightly-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          key: cargo-nightly-coverage-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Cache external data assets (EGM2008)
+        uses: actions/cache@v4
+        with:
+          path: data/gravity
+          key: data-gravity-${{ runner.os }}-${{ hashFiles('scripts/fetch_data.sh') }}
 
       - name: Fetch external data assets
         run: ./scripts/fetch_data.sh
 
-      - name: Test DE441 ephemeris validation
-        run: cargo test --workspace -- --ignored de441_mars_barycenter_vs_horizons de441_multi_body_vs_horizons
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Generate coverage report
+        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+
+      - name: Extract coverage percentage
+        id: cov
+        run: |
+          # Parse lcov.info: DA:line,hit_count → covered = lines with hit>0
+          STATS=$(grep "^DA:" lcov.info | awk -F, '{total++; if ($2>0) hit++} END {printf "%d %d", total, hit}')
+          TOTAL_FOUND=$(echo $STATS | awk '{print $1}')
+          TOTAL_HIT=$(echo $STATS | awk '{print $2}')
+          if [ "$TOTAL_FOUND" -gt 0 ]; then
+            PCT=$(echo "scale=1; $TOTAL_HIT * 100 / $TOTAL_FOUND" | bc)
+          else
+            PCT="0.0"
+          fi
+          echo "percentage=$PCT" >> "$GITHUB_OUTPUT"
+          echo "Coverage: $PCT% ($TOTAL_HIT/$TOTAL_FOUND lines)"
+          echo "coverage=$PCT" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Update README badge
+        run: |
+          PCT="${{ steps.cov.outputs.percentage }}"
+          # Color: red <60, orange <80, yellow <90, green >=90
+          if (( $(echo "$PCT >= 90" | bc -l) )); then
+            COLOR="brightgreen"
+          elif (( $(echo "$PCT >= 80" | bc -l) )); then
+            COLOR="yellow"
+          elif (( $(echo "$PCT >= 60" | bc -l) )); then
+            COLOR="orange"
+          else
+            COLOR="red"
+          fi
+          # shields.io static badge: URL-encode the % as %25
+          BADGE_URL="https://img.shields.io/badge/coverage-${PCT}%25-${COLOR}"
+          # Replace only the badge image URL (first parenthesized group on the
+          # Coverage badge line), leaving the link target intact.
+          sed -i -E "s|^\[!\[Coverage\]\([^)]*\)|[![Coverage](${BADGE_URL})|" README.md
+          echo "Updated badge URL to: ${BADGE_URL}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          if git diff --cached --quiet; then
+            echo "No badge changes to commit"
+          else
+            git commit -m "chore: update coverage badge to ${PCT}% [skip ci]"
+            if git push; then
+              echo "Badge pushed to main"
+            else
+              echo "::warning::Could not push badge to main (branch protection?). Badge committed locally only."
+            fi
+          fi
+
+      - name: Upload lcov artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lcov-report-nightly
+          path: lcov.info
+          retention-days: 7
+
+  build-server:
+    name: Build Server Binary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-nightly-build-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Build server (release)
+        run: cargo build --release -p apogee-server
+
+      - name: Upload server binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: apogee-server-linux-nightly
+          path: target/release/apogee-server
+          retention-days: 7
