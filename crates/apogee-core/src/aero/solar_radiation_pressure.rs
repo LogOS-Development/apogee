@@ -88,22 +88,6 @@ fn is_eclipsed(spacecraft_position: &Position, sun_position: &Position) -> bool 
     distance < R_EARTH_EQ
 }
 
-impl crate::systems::force_model::ForceModel for SolarRadiationPressure {
-    fn name(&self) -> &str {
-        "solar radiation pressure"
-    }
-
-    fn acceleration(&self, ctx: &crate::systems::force_model::ForceContext) -> AccelerationVector {
-        self.acceleration(
-            &ctx.kinematics.position,
-            &ctx.sun_position,
-            ctx.config.srp_area,
-            apogee_common::units::Dimensionless::new(ctx.config.reflectivity),
-            ctx.rigid_body.mass,
-        )
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

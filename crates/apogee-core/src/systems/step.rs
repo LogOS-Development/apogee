@@ -15,13 +15,19 @@
 //! Dynamic celestial bodies (asteroids, debris) are integrated like spacecraft
 //! — they have `Kinematics + GravitySource + CelestialKind::Dynamic +
 //! CelestialMass` components.
+//!
+//! Issue #150: `SpacecraftConfig` has been replaced by per-component
+//! `DragSurfaces` and `SrpSurfaces`. Entities without these components get
+//! zero drag/SRP — the force aggregator skips them automatically.
 
 use apogee_common::units::Seconds;
 use nalgebra::Vector3;
 
 use crate::components::celestial::{CelestialKind, CelestialMass, GravitySource, NaifIdComponent};
+use crate::components::drag_surfaces::DragSurfaces;
 use crate::components::kinematics::Kinematics;
-use crate::components::rigid_body::{RigidBody, SimulationConfig, SpacecraftConfig};
+use crate::components::rigid_body::{RigidBody, SimulationConfig};
+use crate::components::srp_surfaces::SrpSurfaces;
 use crate::gravity::GravitySources;
 use crate::integrator::{IntegrationResult, Integrator, Rk4, StateDerivative, StateVector};
 use crate::systems::force_aggregator::aggregate_forces;
@@ -87,7 +93,7 @@ impl SimContext {
 
 /// Find the Sun's position from the ECS world (NAIF ID 10).
 ///
-/// Returns a default position (−1 AU on x-axis) if no Sun entity exists,
+/// Returns a default position (-1 AU on x-axis) if no Sun entity exists,
 /// so SRP falls back to a heliocentric approximation.
 fn find_sun_position(world: &World) -> apogee_common::Position {
     for (_, (id, kin)) in world.ecs.query::<(&NaifIdComponent, &Kinematics)>().iter() {
@@ -103,12 +109,16 @@ fn find_sun_position(world: &World) -> apogee_common::Position {
 ///
 /// Attitude and angular velocity are left unchanged in this first milestone.
 ///
+/// `drag_surfaces` and `srp_surfaces` are `Option` — `None` means the entity
+/// has no surfaces of that type and the corresponding force is zero.
+///
 /// Selectable propagators and adaptive step sizing are tracked in follow-up
 /// issues for per-object fidelity and federated simulation support.
 pub fn step_spacecraft(
     kinematics: &mut Kinematics,
     rigid_body: &RigidBody,
-    config: &SpacecraftConfig,
+    drag_surfaces: Option<&DragSurfaces>,
+    srp_surfaces: Option<&SrpSurfaces>,
     ctx: &SimContext,
     integrator: &mut Rk4,
     dt: Seconds<f64>,
@@ -119,12 +129,12 @@ pub fn step_spacecraft(
     let inertia_inv = inertia
         .try_inverse()
         .unwrap_or_else(nalgebra::Matrix3::identity);
-    let _mass_inv = 1.0 / rigid_body.mass.into_value();
 
     // Snapshot the immutable parts so the derivative closure does not conflict
     // with the mutable kinematics write-back.
     let rb = rigid_body.clone();
-    let cfg = *config;
+    let drag = drag_surfaces.cloned();
+    let srp = srp_surfaces.cloned();
     let sim_config = ctx.sim_config;
     let gravity_sources = ctx.gravity_sources.clone();
     let sun_position = ctx.sun_position;
@@ -142,7 +152,8 @@ pub fn step_spacecraft(
         let forces = aggregate_forces(
             &trial_kinematics,
             &rb,
-            &cfg,
+            drag.as_ref(),
+            srp.as_ref(),
             &sim_config,
             &gravity_sources,
             sun_position,
@@ -162,10 +173,6 @@ pub fn step_spacecraft(
 
         StateDerivative {
             velocity: s.velocity,
-            // `acceleration` is m/s², but the integrator field is the same
-            // SI base as `Position` (m); the convention is that the field
-            // carries m/s² in the integrand role, even though the alias is
-            // reused to keep the integrator allocation-free.
             acceleration: *acceleration.raw(),
             attitude_derivative: nalgebra::Quaternion::new(0.0, 0.0, 0.0, 0.0),
             angular_acceleration,
@@ -179,12 +186,13 @@ pub fn step_spacecraft(
 
 /// Step the entire simulation world forward by `dt` seconds.
 ///
-/// Iterates all live entities that have `Kinematics + RigidBody +
-/// SpacecraftConfig`, calling `step_spacecraft` on each one in-place. Then
-/// integrates dynamic celestial bodies (entities with `Kinematics +
-/// GravitySource + CelestialKind::Dynamic + CelestialMass`). Kinematic
-/// celestial bodies are left untouched (their positions are driven by the
-/// ephemeris service). The world epoch is advanced by `dt` after all
+/// Iterates all live entities that have `Kinematics + RigidBody`, calling
+/// `step_spacecraft` on each one in-place. `DragSurfaces` and `SrpSurfaces`
+/// are queried as optional components — entities without them get zero
+/// drag/SRP. Then integrates dynamic celestial bodies (entities with
+/// `Kinematics + GravitySource + CelestialKind::Dynamic + CelestialMass`).
+/// Kinematic celestial bodies are left untouched (their positions are driven
+/// by the ephemeris service). The world epoch is advanced by `dt` after all
 /// entities have been stepped.
 pub fn step_world(world: &mut World, dt: Seconds<f64>) {
     // Build the simulation context from the ECS world — this collects
@@ -195,13 +203,53 @@ pub fn step_world(world: &mut World, dt: Seconds<f64>) {
     // entities share the same fixed step size.
     let mut integrator = Rk4::new(dt);
 
-    // Step all spacecraft entities (Kinematics + RigidBody + SpacecraftConfig).
-    for (_entity, (kin, rb, cfg)) in world
+    // Step all spacecraft entities (Kinematics + RigidBody). DragSurfaces
+    // and SrpSurfaces are optional — queried separately per entity.
+    // We collect entity handles first to avoid holding a borrow while
+    // mutating.
+    let entities: Vec<hecs::Entity> = world
         .ecs
-        .query::<(&mut Kinematics, &RigidBody, &SpacecraftConfig)>()
+        .query::<(&mut Kinematics, &RigidBody)>()
         .iter()
-    {
-        step_spacecraft(kin, rb, cfg, &ctx, &mut integrator, dt);
+        .map(|(e, _)| e)
+        .collect();
+
+    for entity in entities {
+        // Check for celestial kind — skip dynamic celestial bodies here;
+        // they are handled by integrate_dynamic_celestials below.
+        let is_dynamic_celestial = world
+            .get_component::<CelestialKind>(entity)
+            .map(|k| k.is_dynamic())
+            .unwrap_or(false);
+
+        if is_dynamic_celestial {
+            continue;
+        }
+
+        // Read the drag and SRP components (optional).
+        let drag = world
+            .get_component::<DragSurfaces>(entity)
+            .map(|d| (*d).clone());
+        let srp = world
+            .get_component::<SrpSurfaces>(entity)
+            .map(|s| (*s).clone());
+        let rb = world
+            .get_component::<RigidBody>(entity)
+            .map(|r| (*r).clone());
+
+        if let Some(rb) = rb {
+            if let Some(mut kin) = world.get_component_mut::<Kinematics>(entity) {
+                step_spacecraft(
+                    &mut kin,
+                    &rb,
+                    drag.as_ref(),
+                    srp.as_ref(),
+                    &ctx,
+                    &mut integrator,
+                    dt,
+                );
+            }
+        }
     }
 
     // Integrate dynamic celestial bodies under point-mass gravity from
@@ -264,20 +312,14 @@ fn integrate_dynamic_celestials(
             epoch: ctx.epoch,
         };
 
-        // Dynamic bodies only feel gravity — zero out drag/SRP areas.
+        // Dynamic bodies only feel gravity — no drag/SRP surfaces.
         let rb = RigidBody {
             mass,
             inertia: nalgebra::Matrix3::identity(),
             cg_offset: Vector3::zeros(),
         };
-        let cfg = SpacecraftConfig {
-            ballistic_coefficient: 0.0,
-            srp_area: apogee_common::units::Area::new(0.0),
-            reflectivity: 0.0,
-            reference_mass_kg: mass.into_value(),
-        };
 
-        step_spacecraft(&mut kin, &rb, &cfg, &body_ctx, integrator, dt);
+        step_spacecraft(&mut kin, &rb, None, None, &body_ctx, integrator, dt);
     }
 }
 
@@ -291,7 +333,8 @@ fn integrate_dynamic_celestials(
 pub fn propagate(
     kinematics: &mut Kinematics,
     rigid_body: &RigidBody,
-    config: &SpacecraftConfig,
+    drag_surfaces: Option<&DragSurfaces>,
+    srp_surfaces: Option<&SrpSurfaces>,
     ctx: &mut SimContext,
     dt: Seconds<f64>,
     duration_s: Seconds<f64>,
@@ -310,7 +353,8 @@ pub fn propagate(
         step_spacecraft(
             kinematics,
             rigid_body,
-            config,
+            drag_surfaces,
+            srp_surfaces,
             ctx,
             &mut integrator,
             Seconds::new(step),
@@ -323,7 +367,7 @@ pub fn propagate(
 #[cfg(test)]
 mod tests {
     use apogee_common::constants::{GM_EARTH, R_EARTH_EQ};
-    use apogee_common::units::{Area, Kilograms, Seconds};
+    use apogee_common::units::{Kilograms, Seconds};
     use approx::assert_relative_eq;
     use nalgebra::Vector3;
 
@@ -331,7 +375,7 @@ mod tests {
     use crate::components::celestial::CelestialBodySpec;
     use crate::components::kinematics::Kinematics;
 
-    fn make_orbit_components() -> (Kinematics, RigidBody, SpacecraftConfig) {
+    fn make_orbit_components() -> (Kinematics, RigidBody) {
         let r = R_EARTH_EQ + 400_000.0;
         let v = (GM_EARTH / r).sqrt();
         (
@@ -346,12 +390,6 @@ mod tests {
                 inertia: nalgebra::Matrix3::identity(),
                 cg_offset: Vector3::zeros(),
             },
-            SpacecraftConfig {
-                ballistic_coefficient: 0.0,
-                srp_area: Area::new(0.0),
-                reflectivity: 0.0,
-                reference_mass_kg: 1_000.0,
-            },
         )
     }
 
@@ -361,14 +399,15 @@ mod tests {
 
     #[test]
     fn test_two_body_orbit_energy_conservation() {
-        let (mut kin, rb, cfg) = make_orbit_components();
+        let (mut kin, rb) = make_orbit_components();
         let mut ctx = SimContext::single_body(GM_EARTH, test_epoch());
 
         let e0 = orbital_energy(&kin.position, &kin.velocity);
         propagate(
             &mut kin,
             &rb,
-            &cfg,
+            None,
+            None,
             &mut ctx,
             Seconds::new(60.0),
             Seconds::new(3_600.0),
@@ -380,7 +419,7 @@ mod tests {
 
     #[test]
     fn test_step_world_single_entity() {
-        let (kin, rb, cfg) = make_orbit_components();
+        let (kin, rb) = make_orbit_components();
         let mut world = World::with_config_and_epoch(SimulationConfig::default(), test_epoch());
         // Spawn Earth as a kinematic celestial body at the origin.
         world.add_celestial_body(CelestialBodySpec::kinematic(
@@ -388,13 +427,14 @@ mod tests {
             Vector3::zeros(),
             Vector3::zeros(),
         ));
-        let _entity = world.spawn((kin, rb, cfg));
+        let _entity = world.spawn((kin, rb));
 
         let e0 = {
-            // Find the spacecraft entity (not the celestial body).
+            // Find the spacecraft entity (the one with Kinematics + RigidBody
+            // but no CelestialKind).
             let sc_entity = world
                 .ecs
-                .query::<(&Kinematics, &SpacecraftConfig)>()
+                .query::<(&Kinematics, &RigidBody)>()
                 .iter()
                 .next()
                 .unwrap()
@@ -411,7 +451,7 @@ mod tests {
         let e1 = {
             let sc_entity = world
                 .ecs
-                .query::<(&Kinematics, &SpacecraftConfig)>()
+                .query::<(&Kinematics, &RigidBody)>()
                 .iter()
                 .next()
                 .unwrap()
@@ -437,14 +477,14 @@ mod tests {
         ));
 
         // Two entities with different initial positions.
-        let (kin0, rb0, cfg0) = make_orbit_components();
-        let e0 = world.spawn((kin0, rb0, cfg0));
+        let (kin0, rb0) = make_orbit_components();
+        let e0 = world.spawn((kin0, rb0));
 
         let mut kin1 = make_orbit_components().0;
         kin1.position = Vector3::new(R_EARTH_EQ + 500_000.0, 0.0, 0.0);
         kin1.velocity = Vector3::new(0.0, (GM_EARTH / (R_EARTH_EQ + 500_000.0)).sqrt(), 0.0);
-        let (_, rb1, cfg1) = make_orbit_components();
-        let e1 = world.spawn((kin1, rb1, cfg1));
+        let (_, rb1) = make_orbit_components();
+        let e1 = world.spawn((kin1, rb1));
 
         for _ in 0..10 {
             step_world(&mut world, Seconds::new(60.0));
@@ -565,13 +605,7 @@ mod tests {
             inertia: nalgebra::Matrix3::identity(),
             cg_offset: Vector3::zeros(),
         };
-        let cfg = crate::components::rigid_body::SpacecraftConfig {
-            ballistic_coefficient: 0.0,
-            srp_area: Area::new(0.0),
-            reflectivity: 0.0,
-            reference_mass_kg: 1_000.0,
-        };
-        let sc_entity = world.spawn((kin, rb, cfg));
+        let sc_entity = world.spawn((kin, rb));
 
         let sc_e0 = {
             let kin = world.get_component::<Kinematics>(sc_entity).unwrap();

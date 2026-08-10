@@ -13,8 +13,10 @@
 
 use apogee_common::units::{Area, Kilograms, Seconds};
 use apogee_core::components::celestial::CelestialBodySpec;
+use apogee_core::components::drag_surfaces::{DragSurface, DragSurfaces};
 use apogee_core::components::kinematics::Kinematics;
-use apogee_core::components::rigid_body::{RigidBody, SimulationConfig, SpacecraftConfig};
+use apogee_core::components::rigid_body::{RigidBody, SimulationConfig};
+use apogee_core::components::srp_surfaces::{SrpSurface, SrpSurfaces};
 use apogee_core::systems::step::step_world;
 use apogee_core::world::Entity;
 use apogee_core::world::World as CoreWorld;
@@ -43,13 +45,36 @@ pub struct RigidBodyInput {
     pub cg_offset: [f64; 3],
 }
 
-/// Raw field values for a `SpacecraftConfig` component.
+/// Raw field values for a single drag surface.
 #[derive(Debug, Clone, Default)]
-pub struct SpacecraftConfigInput {
-    pub ballistic_coefficient: Option<f64>,
-    pub srp_area: Option<f64>,
+pub struct DragSurfaceInput {
+    pub area: Option<f64>,
+    pub cd: Option<f64>,
+    pub normal_dir: [f64; 3],
+    pub reference_point: [f64; 3],
+}
+
+/// Raw field values for a `DragSurfaces` component (a collection of
+/// drag surfaces).
+#[derive(Debug, Clone, Default)]
+pub struct DragSurfacesInput {
+    pub surfaces: Vec<DragSurfaceInput>,
+}
+
+/// Raw field values for a single SRP surface.
+#[derive(Debug, Clone, Default)]
+pub struct SrpSurfaceInput {
+    pub area: Option<f64>,
     pub reflectivity: Option<f64>,
-    pub reference_mass_kg: Option<f64>,
+    pub normal_dir: [f64; 3],
+    pub reference_point: [f64; 3],
+}
+
+/// Raw field values for an `SrpSurfaces` component (a collection of
+/// SRP surfaces).
+#[derive(Debug, Clone, Default)]
+pub struct SrpSurfacesInput {
+    pub surfaces: Vec<SrpSurfaceInput>,
 }
 
 /// A parsed component set ready for spawning into the ECS World.
@@ -60,7 +85,8 @@ pub struct SpacecraftConfigInput {
 pub struct ComponentSet {
     pub kinematics: Option<KinematicsInput>,
     pub rigid_body: Option<RigidBodyInput>,
-    pub spacecraft_config: Option<SpacecraftConfigInput>,
+    pub drag_surfaces: Option<DragSurfacesInput>,
+    pub srp_surfaces: Option<SrpSurfacesInput>,
 }
 
 impl ComponentSet {
@@ -87,17 +113,61 @@ impl ComponentSet {
         })
     }
 
-    /// Build a `SpacecraftConfig` from the input, defaulting unset fields.
-    /// `reference_mass_kg` defaults to the rigid_body mass if not specified.
-    fn build_spacecraft_config(
-        input: &SpacecraftConfigInput,
-        fallback_mass: f64,
-    ) -> SpacecraftConfig {
-        SpacecraftConfig {
-            ballistic_coefficient: input.ballistic_coefficient.unwrap_or(0.01),
-            srp_area: Area::new(input.srp_area.unwrap_or(10.0)),
-            reflectivity: input.reflectivity.unwrap_or(1.2),
-            reference_mass_kg: input.reference_mass_kg.unwrap_or(fallback_mass),
+    /// Build `DragSurfaces` from the input. Returns `None` if no surfaces
+    /// have both `area` and `cd` specified.
+    fn build_drag_surfaces(input: &DragSurfacesInput) -> Option<DragSurfaces> {
+        let surfaces: Vec<DragSurface> = input
+            .surfaces
+            .iter()
+            .filter_map(|s| {
+                let area = Area::new(s.area?);
+                let cd = s.cd?;
+                let normal = NaVector3::new(s.normal_dir[0], s.normal_dir[1], s.normal_dir[2]);
+                let ref_pt = NaVector3::new(
+                    s.reference_point[0],
+                    s.reference_point[1],
+                    s.reference_point[2],
+                );
+                if normal == NaVector3::zeros() {
+                    Some(DragSurface::new(area, cd))
+                } else {
+                    Some(DragSurface::flat_plate(area, cd, normal, ref_pt))
+                }
+            })
+            .collect();
+        if surfaces.is_empty() {
+            None
+        } else {
+            Some(DragSurfaces::from_surfaces(surfaces))
+        }
+    }
+
+    /// Build `SrpSurfaces` from the input. Returns `None` if no surfaces
+    /// have both `area` and `reflectivity` specified.
+    fn build_srp_surfaces(input: &SrpSurfacesInput) -> Option<SrpSurfaces> {
+        let surfaces: Vec<SrpSurface> = input
+            .surfaces
+            .iter()
+            .filter_map(|s| {
+                let area = Area::new(s.area?);
+                let reflectivity = s.reflectivity?;
+                let normal = NaVector3::new(s.normal_dir[0], s.normal_dir[1], s.normal_dir[2]);
+                let ref_pt = NaVector3::new(
+                    s.reference_point[0],
+                    s.reference_point[1],
+                    s.reference_point[2],
+                );
+                if normal == NaVector3::zeros() {
+                    Some(SrpSurface::new(area, reflectivity))
+                } else {
+                    Some(SrpSurface::flat_plate(area, reflectivity, normal, ref_pt))
+                }
+            })
+            .collect();
+        if surfaces.is_empty() {
+            None
+        } else {
+            Some(SrpSurfaces::from_surfaces(surfaces))
         }
     }
 
@@ -111,24 +181,34 @@ impl ComponentSet {
         let kin_input = self.kinematics.as_ref()?;
         let kin = Self::build_kinematics(kin_input);
 
-        match (&self.rigid_body, &self.spacecraft_config) {
-            (Some(rb_input), Some(sc_input)) => {
-                let rb = Self::build_rigid_body(rb_input)?;
-                let fallback_mass = rb.mass.into_value();
-                let cfg = Self::build_spacecraft_config(sc_input, fallback_mass);
-                Some(world.spawn((kin, rb, cfg)))
-            }
-            (Some(rb_input), None) => {
-                let rb = Self::build_rigid_body(rb_input)?;
-                Some(world.spawn((kin, rb)))
-            }
-            (None, _) => Some(world.spawn((kin,))),
+        let rb = self.rigid_body.as_ref().and_then(Self::build_rigid_body);
+        let drag = self
+            .drag_surfaces
+            .as_ref()
+            .and_then(Self::build_drag_surfaces);
+        let srp = self
+            .srp_surfaces
+            .as_ref()
+            .and_then(Self::build_srp_surfaces);
+
+        // Spawn with the appropriate tuple shape. hecs requires us to
+        // enumerate the combinations because DynamicBundle tuples are
+        // fixed at compile time.
+        match (rb, drag, srp) {
+            (Some(rb), Some(drag), Some(srp)) => Some(world.spawn((kin, rb, drag, srp))),
+            (Some(rb), Some(drag), None) => Some(world.spawn((kin, rb, drag))),
+            (Some(rb), None, Some(srp)) => Some(world.spawn((kin, rb, srp))),
+            (Some(rb), None, None) => Some(world.spawn((kin, rb))),
+            (None, Some(drag), Some(srp)) => Some(world.spawn((kin, drag, srp))),
+            (None, Some(drag), None) => Some(world.spawn((kin, drag))),
+            (None, None, Some(srp)) => Some(world.spawn((kin, srp))),
+            (None, None, None) => Some(world.spawn((kin,))),
         }
     }
 }
 
 // -----------------------------------------------------------------------
-// Godot Dictionary ↔ Rust type adapters (thin, untestable in isolation)
+// Godot Dictionary <-> Rust type adapters (thin, untestable in isolation)
 // -----------------------------------------------------------------------
 
 /// Extract a Godot `Vector3` from a `VarDictionary` key, or `None`.
@@ -151,7 +231,29 @@ fn vec3_to_array(v: Vector3) -> [f64; 3] {
     [v.x as f64, v.y as f64, v.z as f64]
 }
 
-/// Parse a Godot `VarDictionary` of component type names → field dicts
+type SurfaceParseResult = (Option<f64>, Option<f64>, [f64; 3], [f64; 3]);
+
+/// Parse a surface array from a Godot VarDictionary field. Each element
+/// of the array is a dictionary with surface fields.
+fn parse_surface_array(arr: &VarArray) -> Vec<SurfaceParseResult> {
+    let mut surfaces = Vec::new();
+    for entry in arr.iter_shared() {
+        let d = entry.to::<VarDictionary>();
+        let area = dict_get_f64(&d, "area");
+        let cd_or_reflectivity =
+            dict_get_f64(&d, "cd").or_else(|| dict_get_f64(&d, "reflectivity"));
+        let normal_dir = dict_get_vec3(&d, "normal_dir")
+            .map(vec3_to_array)
+            .unwrap_or([0.0; 3]);
+        let reference_point = dict_get_vec3(&d, "reference_point")
+            .map(vec3_to_array)
+            .unwrap_or([0.0; 3]);
+        surfaces.push((area, cd_or_reflectivity, normal_dir, reference_point));
+    }
+    surfaces
+}
+
+/// Parse a Godot `VarDictionary` of component type names -> field dicts
 /// into a `ComponentSet`. Unknown component types are silently skipped
 /// (future versions could register custom parsers).
 fn parse_component_dict(components: &VarDictionary) -> ComponentSet {
@@ -175,15 +277,45 @@ fn parse_component_dict(components: &VarDictionary) -> ComponentSet {
                         .unwrap_or([0.0; 3]),
                 });
             }
-            "spacecraft_config" => {
-                set.spacecraft_config = Some(SpacecraftConfigInput {
-                    ballistic_coefficient: dict_get_f64(&fields, "ballistic_coefficient"),
-                    srp_area: dict_get_f64(&fields, "srp_area"),
-                    reflectivity: dict_get_f64(&fields, "reflectivity"),
-                    reference_mass_kg: dict_get_f64(&fields, "reference_mass_kg"),
+            "drag_surfaces" => {
+                let Some(entries) = fields.get("surfaces") else {
+                    continue;
+                };
+                let arr = entries.to::<VarArray>();
+                let parsed = parse_surface_array(&arr);
+                set.drag_surfaces = Some(DragSurfacesInput {
+                    surfaces: parsed
+                        .into_iter()
+                        .map(|(area, cd, normal_dir, reference_point)| DragSurfaceInput {
+                            area,
+                            cd,
+                            normal_dir,
+                            reference_point,
+                        })
+                        .collect(),
                 });
             }
-            _ => { /* unknown component — skip */ }
+            "srp_surfaces" => {
+                let Some(entries) = fields.get("surfaces") else {
+                    continue;
+                };
+                let arr = entries.to::<VarArray>();
+                let parsed = parse_surface_array(&arr);
+                set.srp_surfaces = Some(SrpSurfacesInput {
+                    surfaces: parsed
+                        .into_iter()
+                        .map(
+                            |(area, reflectivity, normal_dir, reference_point)| SrpSurfaceInput {
+                                area,
+                                reflectivity,
+                                normal_dir,
+                                reference_point,
+                            },
+                        )
+                        .collect(),
+                });
+            }
+            _ => { /* unknown component -- skip */ }
         }
     }
     set
@@ -196,7 +328,7 @@ fn parse_component_dict(components: &VarDictionary) -> ComponentSet {
 /// Godot node wrapping the Apogee ECS `World`.
 ///
 /// Create one of these in your scene to manage the simulation. Call
-/// `spawn_entity` to add entities (spacecraft, asteroids, debris — anything
+/// `spawn_entity` to add entities (spacecraft, asteroids, debris -- anything
 /// with a kinematic state), `step` to advance the simulation, and
 /// `get_position`/`get_velocity`/`get_attitude` to read state.
 #[derive(GodotClass)]
@@ -249,25 +381,34 @@ impl ApogeeWorld {
     /// Component types (keys) and their required/optional fields:
     ///
     /// `kinematics` (required for any propagated body):
-    /// - `position`: Vector3 (inertial, meters) — required
-    /// - `velocity`: Vector3 (inertial, m/s) — required
-    /// - `angular_velocity`: Vector3 (rad/s) — optional, default zero
+    /// - `position`: Vector3 (inertial, meters) -- required
+    /// - `velocity`: Vector3 (inertial, m/s) -- required
     ///
     /// `rigid_body` (optional, for bodies with mass):
-    /// - `mass`: float (kg) — required
-    /// - `cg_offset`: Vector3 (m) — optional, default zero
+    /// - `mass`: float (kg) -- required
+    /// - `cg_offset`: Vector3 (m) -- optional, default zero
     ///
-    /// `spacecraft_config` (optional, for spacecraft with drag/SRP):
-    /// - `ballistic_coefficient`: float — optional, default 0.01
-    /// - `srp_area`: float (m²) — optional, default 10.0
-    /// - `reflectivity`: float — optional, default 1.2
+    /// `drag_surfaces` (optional, for spacecraft with drag):
+    /// - `surfaces`: Array of Dictionaries, each with:
+    ///   - `area`: float (m^2) -- required
+    ///   - `cd`: float -- required
+    ///   - `normal_dir`: Vector3 -- optional, default Vector3.ZERO (cannonball)
+    ///   - `reference_point`: Vector3 (m) -- optional, default zero
+    ///
+    /// `srp_surfaces` (optional, for spacecraft with SRP):
+    /// - `surfaces`: Array of Dictionaries, each with:
+    ///   - `area`: float (m^2) -- required
+    ///   - `reflectivity`: float -- required
+    ///   - `normal_dir`: Vector3 -- optional, default Vector3.ZERO (cannonball)
+    ///   - `reference_point`: Vector3 (m) -- optional, default zero
     ///
     /// Example (GDScript):
     /// ```
     /// var entity = world.spawn_entity({
     ///     "kinematics": { "position": Vector3(6.7e6, 0, 0), "velocity": Vector3(0, 7700, 0) },
     ///     "rigid_body": { "mass": 1000.0 },
-    ///     "spacecraft_config": { "ballistic_coefficient": 0.01 }
+    ///     "drag_surfaces": { "surfaces": [{"area": 19.0, "cd": 2.2}] },
+    ///     "srp_surfaces": { "surfaces": [{"area": 10.0, "reflectivity": 1.2}] }
     /// })
     /// ```
     ///
@@ -411,10 +552,10 @@ mod tests {
     //! Tests for the ApogeeWorld FFI surface.
     //!
     //! Two categories:
-    //! 1. **ComponentSet::spawn_into** — exercises the pure-Rust parsing and
+    //! 1. **ComponentSet::spawn_into** -- exercises the pure-Rust parsing and
     //!    spawning logic (component composition, default filling, error
     //!    handling) without the Godot engine.
-    //! 2. **CoreWorld integration** — end-to-end spawn → step → verify cycles
+    //! 2. **CoreWorld integration** -- end-to-end spawn -> step -> verify cycles
     //!    that exercise the underlying ECS API directly.
 
     use super::*;
@@ -454,7 +595,7 @@ mod tests {
         let entity = set.spawn_into(&mut world).unwrap();
         assert!(world.get_component::<Kinematics>(entity).is_some());
         assert!(world.get_component::<RigidBody>(entity).is_some());
-        assert!(world.get_component::<SpacecraftConfig>(entity).is_none());
+        assert!(world.get_component::<DragSurfaces>(entity).is_none());
     }
 
     #[test]
@@ -469,18 +610,26 @@ mod tests {
                 mass: Some(1000.0),
                 ..Default::default()
             }),
-            spacecraft_config: Some(SpacecraftConfigInput {
-                ballistic_coefficient: Some(0.02),
-                srp_area: Some(5.0),
-                reflectivity: Some(1.0),
-                reference_mass_kg: None, // should default to rigid_body mass
+            drag_surfaces: Some(DragSurfacesInput {
+                surfaces: vec![DragSurfaceInput {
+                    area: Some(19.0),
+                    cd: Some(2.2),
+                    ..Default::default()
+                }],
+            }),
+            srp_surfaces: Some(SrpSurfacesInput {
+                surfaces: vec![SrpSurfaceInput {
+                    area: Some(10.0),
+                    reflectivity: Some(1.2),
+                    ..Default::default()
+                }],
             }),
         };
         let entity = set.spawn_into(&mut world).unwrap();
         assert!(world.get_component::<Kinematics>(entity).is_some());
         assert!(world.get_component::<RigidBody>(entity).is_some());
-        let cfg = world.get_component::<SpacecraftConfig>(entity).unwrap();
-        assert_eq!(cfg.reference_mass_kg, 1000.0);
+        assert!(world.get_component::<DragSurfaces>(entity).is_some());
+        assert!(world.get_component::<SrpSurfaces>(entity).is_some());
     }
 
     #[test]
@@ -510,11 +659,16 @@ mod tests {
             }),
             ..Default::default()
         };
-        assert!(set.spawn_into(&mut world).is_none());
+        // Without mass, the rigid_body is dropped, but the entity still
+        // spawns with just kinematics. The RigidBody component should NOT
+        // be present.
+        let entity = set.spawn_into(&mut world).unwrap();
+        assert!(world.get_component::<Kinematics>(entity).is_some());
+        assert!(world.get_component::<RigidBody>(entity).is_none());
     }
 
     #[test]
-    fn test_spacecraft_config_defaults() {
+    fn test_drag_surfaces_without_area_or_cd_skipped() {
         let mut world = CoreWorld::new();
         let set = ComponentSet {
             kinematics: Some(KinematicsInput {
@@ -525,14 +679,19 @@ mod tests {
                 mass: Some(250.0),
                 ..Default::default()
             }),
-            spacecraft_config: Some(SpacecraftConfigInput::default()),
+            drag_surfaces: Some(DragSurfacesInput {
+                surfaces: vec![DragSurfaceInput {
+                    area: None, // missing -> surface skipped
+                    cd: Some(2.0),
+                    ..Default::default()
+                }],
+            }),
+            ..Default::default()
         };
         let entity = set.spawn_into(&mut world).unwrap();
-        let cfg = world.get_component::<SpacecraftConfig>(entity).unwrap();
-        assert_eq!(cfg.ballistic_coefficient, 0.01);
-        assert_eq!(cfg.srp_area.value, 10.0);
-        assert_eq!(cfg.reflectivity, 1.2);
-        assert_eq!(cfg.reference_mass_kg, 250.0);
+        // DragSurfaces should NOT be present because the only surface was
+        // missing its area.
+        assert!(world.get_component::<DragSurfaces>(entity).is_none());
     }
 
     #[test]
@@ -577,14 +736,8 @@ mod tests {
             inertia: Matrix3::identity(),
             cg_offset: NaVector3::zeros(),
         };
-        let config = SpacecraftConfig {
-            ballistic_coefficient: 0.0,
-            srp_area: Area::new(0.0),
-            reflectivity: 0.0,
-            reference_mass_kg: 1_000.0,
-        };
 
-        let entity = world.spawn((kinematics, rigid_body, config));
+        let entity = world.spawn((kinematics, rigid_body));
         let pos0 = world.get_component::<Kinematics>(entity).unwrap().position;
 
         for _ in 0..100 {
@@ -610,11 +763,7 @@ mod tests {
     #[test]
     fn test_despawn_removes_entity() {
         let mut world = CoreWorld::new();
-        let entity = world.spawn((
-            Kinematics::default(),
-            RigidBody::default(),
-            SpacecraftConfig::default(),
-        ));
+        let entity = world.spawn((Kinematics::default(), RigidBody::default()));
         assert_eq!(world.len(), 1);
         assert!(world.despawn(entity));
         assert_eq!(world.len(), 0);

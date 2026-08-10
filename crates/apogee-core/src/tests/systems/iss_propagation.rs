@@ -14,8 +14,10 @@ use apogee_common::units::{Area, Kilograms, Seconds};
 use hifitime::Epoch;
 use nalgebra::Vector3;
 
+use crate::components::drag_surfaces::{DragSurface, DragSurfaces};
 use crate::components::kinematics::Kinematics;
-use crate::components::rigid_body::{RigidBody, SimulationConfig, SpacecraftConfig};
+use crate::components::rigid_body::{RigidBody, SimulationConfig};
+use crate::components::srp_surfaces::{SrpSurface, SrpSurfaces};
 use crate::systems::step::{propagate, step_world, SimContext};
 use crate::tle::Tle;
 use crate::world::World;
@@ -28,7 +30,7 @@ const ISS_TLE: &str = "ISS (ZARYA)             \r\n\
 
 /// Epoch for the TLE epoch day 26212.89378683 (year 2026, day 213).
 fn iss_epoch() -> Epoch {
-    // Day 213 of 2026 = 2026-08-01. TLE epoch fractional .89378683 day ≈ 21:27:04.
+    // Day 213 of 2026 = 2026-08-01. TLE epoch fractional .89378683 day ~ 21:27:04.
     Epoch::from_gregorian_utc(2026, 8, 1, 21, 27, 4, 0)
 }
 
@@ -36,7 +38,8 @@ fn iss_components() -> (
     Tle,
     Kinematics,
     RigidBody,
-    SpacecraftConfig,
+    DragSurfaces,
+    SrpSurfaces,
     SimulationConfig,
 ) {
     let tle = Tle::parse(ISS_TLE).expect("embedded ISS TLE should parse");
@@ -52,17 +55,16 @@ fn iss_components() -> (
         inertia: nalgebra::Matrix3::identity() * 1e7,
         cg_offset: Vector3::zeros(),
     };
-    let config = SpacecraftConfig {
-        ballistic_coefficient: 1e-4,
-        srp_area: Area::new(2_500.0),
-        reflectivity: 1.2,
-        reference_mass_kg: 420_000.0,
-    };
+    // ISS ballistic coefficient ~1e-4 m^2/kg, mass 420000 kg
+    // -> Cd*A = 42 m^2. Use Cd=2.2, A~19 m^2.
+    let drag_surfaces = DragSurfaces::from_surfaces(vec![DragSurface::new(Area::new(19.0), 2.2)]);
+    let srp_surfaces = SrpSurfaces::from_surfaces(vec![SrpSurface::new(Area::new(2_500.0), 1.2)]);
     (
         tle,
         kinematics,
         rigid_body,
-        config,
+        drag_surfaces,
+        srp_surfaces,
         SimulationConfig::default(),
     )
 }
@@ -74,7 +76,7 @@ fn earth_only_ctx(epoch: Epoch) -> SimContext {
 
 #[test]
 fn test_iss_one_orbit_energy_conservation() {
-    let (_tle, mut kin, rb, cfg, sim_config) = iss_components();
+    let (_tle, mut kin, rb, drag, srp, sim_config) = iss_components();
     let mut ctx = SimContext {
         sim_config,
         ..earth_only_ctx(iss_epoch())
@@ -84,7 +86,8 @@ fn test_iss_one_orbit_energy_conservation() {
     propagate(
         &mut kin,
         &rb,
-        &cfg,
+        Some(&drag),
+        Some(&srp),
         &mut ctx,
         Seconds::new(30.0),
         Seconds::new(5_500.0),
@@ -108,7 +111,7 @@ fn test_iss_one_orbit_energy_conservation() {
 
 #[test]
 fn test_iss_24h_propagation_stays_leo() {
-    let (_tle, mut kin, rb, cfg, sim_config) = iss_components();
+    let (_tle, mut kin, rb, drag, srp, sim_config) = iss_components();
     let mut ctx = SimContext {
         sim_config,
         ..earth_only_ctx(iss_epoch())
@@ -117,7 +120,8 @@ fn test_iss_24h_propagation_stays_leo() {
     propagate(
         &mut kin,
         &rb,
-        &cfg,
+        Some(&drag),
+        Some(&srp),
         &mut ctx,
         Seconds::new(60.0),
         Seconds::new(86_400.0),
@@ -140,7 +144,7 @@ fn test_iss_24h_propagation_stays_leo() {
 
 #[test]
 fn test_iss_one_orbit_via_step_world() {
-    let (_tle, kin, rb, cfg, _sim_config) = iss_components();
+    let (_tle, kin, rb, drag, srp, _sim_config) = iss_components();
 
     let mut world = World::with_config_and_epoch(SimulationConfig::default(), iss_epoch());
     // Spawn Earth as a kinematic celestial body at the origin.
@@ -149,12 +153,12 @@ fn test_iss_one_orbit_via_step_world() {
         Vector3::zeros(),
         Vector3::zeros(),
     ));
-    let _entity = world.spawn((kin, rb, cfg));
+    let _entity = world.spawn((kin, rb, drag, srp));
 
     let e0 = {
         let entity = world
             .ecs
-            .query::<(&Kinematics, &SpacecraftConfig)>()
+            .query::<(&Kinematics, &DragSurfaces)>()
             .iter()
             .next()
             .unwrap()
@@ -163,7 +167,7 @@ fn test_iss_one_orbit_via_step_world() {
         specific_energy(&kin.position, &kin.velocity)
     };
 
-    // 1 orbit ≈ 5500 s, step at 30 s.
+    // 1 orbit ~ 5500 s, step at 30 s.
     for _ in 0..184 {
         step_world(&mut world, Seconds::new(30.0));
     }
@@ -171,7 +175,7 @@ fn test_iss_one_orbit_via_step_world() {
     let e1 = {
         let entity = world
             .ecs
-            .query::<(&Kinematics, &SpacecraftConfig)>()
+            .query::<(&Kinematics, &DragSurfaces)>()
             .iter()
             .next()
             .unwrap()
@@ -189,7 +193,7 @@ fn test_iss_one_orbit_via_step_world() {
 
 #[test]
 fn test_iss_via_propagate() {
-    let (_tle, mut kin, rb, cfg, sim_config) = iss_components();
+    let (_tle, mut kin, rb, drag, srp, sim_config) = iss_components();
     let mut ctx = SimContext {
         sim_config,
         ..earth_only_ctx(iss_epoch())
@@ -199,7 +203,8 @@ fn test_iss_via_propagate() {
     propagate(
         &mut kin,
         &rb,
-        &cfg,
+        Some(&drag),
+        Some(&srp),
         &mut ctx,
         Seconds::new(30.0),
         Seconds::new(5_500.0),
@@ -215,4 +220,73 @@ fn test_iss_via_propagate() {
 
 fn specific_energy(pos: &Vector3<f64>, vel: &Vector3<f64>) -> f64 {
     vel.norm_squared() / 2.0 - GM_EARTH / pos.norm()
+}
+
+#[test]
+fn test_drag_srp_changes_orbital_energy() {
+    // Verify that drag + SRP surfaces actually change orbital energy
+    // compared to a gravity-only propagation. Drag is dissipative, so
+    // the energy with surfaces should be lower than the energy without.
+    let (_tle, mut kin_with, rb, drag, srp, sim_config) = iss_components();
+    let mut kin_without = kin_with.clone();
+
+    let mut ctx_with = SimContext {
+        sim_config,
+        ..earth_only_ctx(iss_epoch())
+    };
+    let mut ctx_without = SimContext {
+        sim_config,
+        ..earth_only_ctx(iss_epoch())
+    };
+
+    let e0 = specific_energy(&kin_with.position, &kin_with.velocity);
+
+    // Propagate with drag + SRP for several orbits.
+    propagate(
+        &mut kin_with,
+        &rb,
+        Some(&drag),
+        Some(&srp),
+        &mut ctx_with,
+        Seconds::new(10.0),
+        Seconds::new(20_000.0), // ~3.6 orbits
+    );
+
+    // Propagate without drag + SRP for the same duration.
+    propagate(
+        &mut kin_without,
+        &rb,
+        None,
+        None,
+        &mut ctx_without,
+        Seconds::new(10.0),
+        Seconds::new(20_000.0),
+    );
+
+    let e_with = specific_energy(&kin_with.position, &kin_with.velocity);
+    let e_without = specific_energy(&kin_without.position, &kin_without.velocity);
+
+    // The gravity-only propagation should conserve energy closely.
+    let drift_without = (e_without - e0).abs() / e0.abs();
+    assert!(
+        drift_without < 1e-6,
+        "gravity-only energy drift too large: {drift_without:.6e}"
+    );
+
+    // The propagation with drag + SRP should show a measurably different
+    // energy. Drag is dissipative, so energy should decrease (become more
+    // negative), meaning |e_with| > |e0| and e_with < e0.
+    let energy_change_with = e_with - e0;
+    let energy_change_without = e_without - e0;
+    assert!(
+        energy_change_with.abs() > energy_change_without.abs() * 10.0,
+        "drag+SRP should produce a much larger energy change than numerical drift: \
+         with={energy_change_with:.6e}, without={energy_change_without:.6e}"
+    );
+
+    // Drag is dissipative: the energy should decrease (orbit decays).
+    assert!(
+        energy_change_with < 0.0,
+        "drag should decrease orbital energy (dissipative), got change={energy_change_with:.6e}"
+    );
 }

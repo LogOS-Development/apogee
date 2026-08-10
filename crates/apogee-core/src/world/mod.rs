@@ -3,7 +3,7 @@
 //! The [`World`] wraps a [`hecs::World`] for entity and component storage and
 //! holds shared simulation context ([`SimulationConfig`], the current
 //! simulation epoch). Entities are composed of individual components —
-//! [`Kinematics`], [`RigidBody`], [`SpacecraftConfig`],
+//! [`Kinematics`], [`RigidBody`], [`DragSurfaces`], [`SrpSurfaces`],
 //! [`GravitySource`], [`NaifIdComponent`], [`CelestialKind`] — rather than a
 //! monolithic bundle. This lets systems query only the components they need
 //! and allows heterogeneous entity types (spacecraft, planets, asteroids,
@@ -235,12 +235,12 @@ mod tests {
     use crate::components::celestial::{
         CelestialBodySpec, CelestialKind, GravitySource, NaifIdComponent,
     };
-    use crate::components::rigid_body::{RigidBody, SpacecraftConfig};
-    use apogee_common::units::{Area, Kilograms};
+    use crate::components::rigid_body::RigidBody;
+    use apogee_common::units::Kilograms;
     use approx::assert_relative_eq;
     use nalgebra::{Matrix3, Quaternion, Vector3};
 
-    fn make_spacecraft(id: f64) -> (Kinematics, RigidBody, SpacecraftConfig) {
+    fn make_spacecraft(id: f64) -> (Kinematics, RigidBody) {
         (
             Kinematics {
                 position: Vector3::new(id, 0.0, 0.0),
@@ -253,20 +253,14 @@ mod tests {
                 inertia: Matrix3::identity(),
                 cg_offset: Vector3::zeros(),
             },
-            SpacecraftConfig {
-                ballistic_coefficient: 0.01,
-                srp_area: Area::new(10.0),
-                reflectivity: 1.2,
-                reference_mass_kg: 1000.0,
-            },
         )
     }
 
     #[test]
     fn spawn_and_get_component() {
         let mut world = World::new();
-        let (kin, rb, cfg) = make_spacecraft(1.0);
-        let e = world.spawn((kin, rb, cfg));
+        let (kin, rb) = make_spacecraft(1.0);
+        let e = world.spawn((kin, rb));
         assert_eq!(world.len(), 1);
         let kin = world.get_component::<Kinematics>(e).unwrap();
         assert_relative_eq!(kin.position.x, 1.0);
@@ -276,8 +270,8 @@ mod tests {
     fn spawn_heterogeneous_entities() {
         // A spacecraft with full component set and a bare-body with just kinematics.
         let mut world = World::new();
-        let (kin, rb, cfg) = make_spacecraft(1.0);
-        let _sc = world.spawn((kin, rb, cfg));
+        let (kin, rb) = make_spacecraft(1.0);
+        let _sc = world.spawn((kin, rb));
         let bare = world.spawn((Kinematics::default(),));
         assert_eq!(world.len(), 2);
         // The bare entity has Kinematics but no RigidBody.
@@ -288,8 +282,8 @@ mod tests {
     #[test]
     fn despawn() {
         let mut world = World::new();
-        let (kin, rb, cfg) = make_spacecraft(1.0);
-        let e = world.spawn((kin, rb, cfg));
+        let (kin, rb) = make_spacecraft(1.0);
+        let e = world.spawn((kin, rb));
         assert!(world.despawn(e));
         assert_eq!(world.len(), 0);
         assert!(world.get_component::<Kinematics>(e).is_none());
@@ -298,11 +292,11 @@ mod tests {
     #[test]
     fn despawn_stale_handle() {
         let mut world = World::new();
-        let (kin, rb, cfg) = make_spacecraft(1.0);
-        let e0 = world.spawn((kin, rb, cfg));
+        let (kin, rb) = make_spacecraft(1.0);
+        let e0 = world.spawn((kin, rb));
         world.despawn(e0);
-        let (kin, rb, cfg) = make_spacecraft(2.0);
-        let e1 = world.spawn((kin, rb, cfg));
+        let (kin, rb) = make_spacecraft(2.0);
+        let e1 = world.spawn((kin, rb));
         assert!(world.get_component::<Kinematics>(e0).is_none());
         assert!(world.get_component::<Kinematics>(e1).is_some());
     }
@@ -310,8 +304,8 @@ mod tests {
     #[test]
     fn get_component_mut_modifies() {
         let mut world = World::new();
-        let (kin, rb, cfg) = make_spacecraft(1.0);
-        let e = world.spawn((kin, rb, cfg));
+        let (kin, rb) = make_spacecraft(1.0);
+        let e = world.spawn((kin, rb));
         {
             let mut kin = world.get_component_mut::<Kinematics>(e).unwrap();
             kin.position = Vector3::new(99.0, 0.0, 0.0);
@@ -325,10 +319,10 @@ mod tests {
     #[test]
     fn query_multi_entity() {
         let mut world = World::new();
-        let (kin, rb, cfg) = make_spacecraft(1.0);
-        let e0 = world.spawn((kin, rb.clone(), cfg));
-        let (kin, rb, cfg) = make_spacecraft(2.0);
-        let e1 = world.spawn((kin, rb, cfg));
+        let (kin, rb) = make_spacecraft(1.0);
+        let e0 = world.spawn((kin, rb.clone()));
+        let (kin, rb) = make_spacecraft(2.0);
+        let e1 = world.spawn((kin, rb));
 
         let positions: Vec<_> = world
             .query::<(&Kinematics,)>()
@@ -344,10 +338,10 @@ mod tests {
     #[test]
     fn query_mut_updates_all() {
         let mut world = World::new();
-        let (kin, rb, cfg) = make_spacecraft(1.0);
-        let _e0 = world.spawn((kin, rb.clone(), cfg));
-        let (kin, rb, cfg) = make_spacecraft(2.0);
-        let _e1 = world.spawn((kin, rb, cfg));
+        let (kin, rb) = make_spacecraft(1.0);
+        let _e0 = world.spawn((kin, rb.clone()));
+        let (kin, rb) = make_spacecraft(2.0);
+        let _e1 = world.spawn((kin, rb));
 
         for (_, (kin,)) in world.query_mut::<(&mut Kinematics,)>() {
             kin.position = Vector3::new(42.0, 0.0, 0.0);
@@ -380,10 +374,10 @@ mod tests {
     #[test]
     fn clear_removes_all() {
         let mut world = World::new();
-        let (kin, rb, cfg) = make_spacecraft(1.0);
-        let e0 = world.spawn((kin, rb.clone(), cfg));
-        let (kin, rb, cfg) = make_spacecraft(2.0);
-        let e1 = world.spawn((kin, rb, cfg));
+        let (kin, rb) = make_spacecraft(1.0);
+        let e0 = world.spawn((kin, rb.clone()));
+        let (kin, rb) = make_spacecraft(2.0);
+        let e1 = world.spawn((kin, rb));
         world.clear();
         assert_eq!(world.len(), 0);
         assert!(world.get_component::<Kinematics>(e0).is_none());
@@ -393,8 +387,8 @@ mod tests {
     #[test]
     fn despawn_returns_false_for_invalid() {
         let mut world = World::new();
-        let (kin, rb, cfg) = make_spacecraft(1.0);
-        let _ = world.spawn((kin, rb, cfg));
+        let (kin, rb) = make_spacecraft(1.0);
+        let _ = world.spawn((kin, rb));
         let bad = Entity::from_bits(u64::MAX).expect("non-zero bits should produce an Entity");
         assert!(!world.despawn(bad));
     }
