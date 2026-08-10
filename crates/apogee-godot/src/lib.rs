@@ -2,6 +2,7 @@
 
 use godot::prelude::*;
 
+mod apogee_world;
 mod atmosphere_visualizer;
 
 struct ApogeeGodot;

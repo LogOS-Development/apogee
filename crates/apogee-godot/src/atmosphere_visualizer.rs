@@ -292,3 +292,128 @@ fn sample_point(
         up_mps: wind.up_mps,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_atmosphere_model_kind_from_u32() {
+        assert_eq!(
+            AtmosphereModelKind::from(0u32),
+            AtmosphereModelKind::Nrlmsise00
+        );
+        assert_eq!(
+            AtmosphereModelKind::from(1u32),
+            AtmosphereModelKind::JacchiaBowman
+        );
+        assert_eq!(
+            AtmosphereModelKind::from(99u32),
+            AtmosphereModelKind::Nrlmsise00
+        );
+    }
+
+    #[test]
+    fn test_atmosphere_model_kind_to_u32() {
+        assert_eq!(u32::from(AtmosphereModelKind::Nrlmsise00), 0);
+        assert_eq!(u32::from(AtmosphereModelKind::JacchiaBowman), 1);
+    }
+
+    #[test]
+    fn test_sample_point_nrlmsise00() {
+        let sample = sample_point(
+            400.0,
+            0.0,
+            0.0,
+            80,
+            43_200.0,
+            150.0,
+            150.0,
+            4.0,
+            AtmosphereModelKind::Nrlmsise00,
+        );
+        assert_eq!(sample.altitude_km, 400.0);
+        assert_eq!(sample.latitude_rad, 0.0);
+        assert_eq!(sample.longitude_rad, 0.0);
+        assert!(sample.density_kg_m3 > 0.0);
+        assert!(sample.temperature_k > 0.0);
+        // Without hwm14 feature, wind is zero.
+        assert_eq!(sample.east_mps, 0.0);
+        assert_eq!(sample.north_mps, 0.0);
+        assert_eq!(sample.up_mps, 0.0);
+    }
+
+    #[test]
+    fn test_sample_point_jacchia_bowman() {
+        let sample = sample_point(
+            400.0,
+            0.0,
+            0.0,
+            80,
+            43_200.0,
+            150.0,
+            150.0,
+            4.0,
+            AtmosphereModelKind::JacchiaBowman,
+        );
+        assert_eq!(sample.altitude_km, 400.0);
+        assert!(sample.density_kg_m3 > 0.0);
+        assert!(sample.temperature_k > 0.0);
+    }
+
+    #[test]
+    fn test_sample_point_density_decreases_with_altitude() {
+        let low = sample_point(
+            200.0,
+            0.0,
+            0.0,
+            80,
+            43_200.0,
+            150.0,
+            150.0,
+            4.0,
+            AtmosphereModelKind::Nrlmsise00,
+        );
+        let high = sample_point(
+            500.0,
+            0.0,
+            0.0,
+            80,
+            43_200.0,
+            150.0,
+            150.0,
+            4.0,
+            AtmosphereModelKind::Nrlmsise00,
+        );
+        assert!(
+            low.density_kg_m3 > high.density_kg_m3,
+            "density should decrease with altitude: {} vs {}",
+            low.density_kg_m3,
+            high.density_kg_m3
+        );
+    }
+
+    #[test]
+    fn test_sample_point_day_of_year_clamped() {
+        // day_of_year=0 should be clamped to 1 without panicking
+        let sample = sample_point(
+            400.0,
+            0.0,
+            0.0,
+            0,
+            0.0,
+            150.0,
+            150.0,
+            4.0,
+            AtmosphereModelKind::Nrlmsise00,
+        );
+        assert!(sample.density_kg_m3 > 0.0);
+    }
+
+    #[test]
+    fn test_atmosphere_sample_default() {
+        let s = AtmosphereSample::default();
+        assert_eq!(s.altitude_km, 0.0);
+        assert_eq!(s.density_kg_m3, 0.0);
+    }
+}
