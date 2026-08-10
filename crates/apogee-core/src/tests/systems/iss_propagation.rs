@@ -17,7 +17,7 @@ use nalgebra::Vector3;
 use crate::components::kinematics::Kinematics;
 use crate::components::rigid_body::{RigidBody, SimulationConfig, SpacecraftConfig};
 use crate::ephemeris::kernel::{BodyState, SolarSystemState};
-use crate::systems::step::{propagate, propagate_single, step_world, SimContext};
+use crate::systems::step::{propagate, step_world, SimContext};
 use crate::tle::Tle;
 use crate::world::World;
 
@@ -81,7 +81,7 @@ fn earth_only_celestial() -> SolarSystemState {
 #[test]
 fn test_iss_one_orbit_energy_conservation() {
     let (_tle, mut kin, rb, cfg, sim_config) = iss_components();
-    let ctx = SimContext {
+    let mut ctx = SimContext {
         sim_config,
         celestial: earth_only_celestial(),
         epoch: iss_epoch(),
@@ -92,7 +92,7 @@ fn test_iss_one_orbit_energy_conservation() {
         &mut kin,
         &rb,
         &cfg,
-        &ctx,
+        &mut ctx,
         Seconds::new(30.0),
         Seconds::new(5_500.0),
     );
@@ -116,7 +116,7 @@ fn test_iss_one_orbit_energy_conservation() {
 #[test]
 fn test_iss_24h_propagation_stays_leo() {
     let (_tle, mut kin, rb, cfg, sim_config) = iss_components();
-    let ctx = SimContext {
+    let mut ctx = SimContext {
         sim_config,
         celestial: earth_only_celestial(),
         epoch: iss_epoch(),
@@ -126,7 +126,7 @@ fn test_iss_24h_propagation_stays_leo() {
         &mut kin,
         &rb,
         &cfg,
-        &ctx,
+        &mut ctx,
         Seconds::new(60.0),
         Seconds::new(86_400.0),
     );
@@ -179,22 +179,28 @@ fn test_iss_one_orbit_via_step_world() {
 }
 
 #[test]
-fn test_iss_via_propagate_single() {
-    let (_tle, kin, rb, cfg, sim_config) = iss_components();
-    let ctx = SimContext {
+fn test_iss_via_propagate() {
+    let (_tle, mut kin, rb, cfg, sim_config) = iss_components();
+    let mut ctx = SimContext {
         sim_config,
         celestial: earth_only_celestial(),
         epoch: iss_epoch(),
     };
 
     let e0 = specific_energy(&kin.position, &kin.velocity);
-    let (kin, _, _) =
-        propagate_single(kin, rb, cfg, ctx, Seconds::new(30.0), Seconds::new(5_500.0));
+    propagate(
+        &mut kin,
+        &rb,
+        &cfg,
+        &mut ctx,
+        Seconds::new(30.0),
+        Seconds::new(5_500.0),
+    );
     let e1 = specific_energy(&kin.position, &kin.velocity);
     let rel_err = (e1 - e0).abs() / e0.abs();
     assert!(
         rel_err < 1e-6,
-        "propagate_single one-orbit energy drift too large: {:.6e}",
+        "propagate one-orbit energy drift too large: {:.6e}",
         rel_err
     );
 }

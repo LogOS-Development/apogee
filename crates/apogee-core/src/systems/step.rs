@@ -148,7 +148,8 @@ pub fn step_world(world: &mut World, dt: Seconds<f64>) {
 
 /// Propagate a single spacecraft for `duration_s` seconds with a fixed `dt` step.
 ///
-/// `epoch` is advanced linearly with simulation time.
+/// The epoch is advanced in place on `ctx` as simulation time progresses, so
+/// callers that reuse the context across calls will see the updated epoch.
 ///
 /// This is a convenience wrapper around `step_spacecraft` for single-entity
 /// use cases that do not need a full `World`.
@@ -156,14 +157,13 @@ pub fn propagate(
     kinematics: &mut Kinematics,
     rigid_body: &RigidBody,
     config: &SpacecraftConfig,
-    ctx: &SimContext,
+    ctx: &mut SimContext,
     dt: Seconds<f64>,
     duration_s: Seconds<f64>,
 ) {
     let mut integrator = Rk4::new(dt);
     let mut elapsed = 0.0_f64;
     let total = duration_s.into_value();
-    let mut epoch = ctx.epoch;
     while elapsed < total {
         let remaining = total - elapsed;
         let dt_value = dt.into_value();
@@ -172,60 +172,17 @@ pub fn propagate(
         } else {
             dt_value
         };
-        // Temporarily advance the epoch for this sub-step.
-        let step_ctx = SimContext {
-            epoch,
-            ..ctx.clone()
-        };
         step_spacecraft(
             kinematics,
             rigid_body,
             config,
-            &step_ctx,
+            ctx,
             &mut integrator,
             Seconds::new(step),
         );
         elapsed += step;
-        epoch += step * Unit::Second;
+        ctx.epoch += step * Unit::Second;
     }
-}
-
-/// Propagate a single entity in a `World` for `duration_s` seconds.
-///
-/// Convenience wrapper for the common single-spacecraft case: creates a
-/// temporary `World` from the given components and context, calls
-/// `step_world` in a loop, then returns the propagated components.
-pub fn propagate_single(
-    kinematics: Kinematics,
-    rigid_body: RigidBody,
-    config: SpacecraftConfig,
-    ctx: SimContext,
-    dt: Seconds<f64>,
-    duration_s: Seconds<f64>,
-) -> (Kinematics, RigidBody, SpacecraftConfig) {
-    let mut world = World::with_config_and_epoch(ctx.sim_config, ctx.celestial.clone(), ctx.epoch);
-    let _entity = world.spawn((kinematics, rigid_body, config));
-
-    let total = duration_s.into_value();
-    let dt_value = dt.into_value();
-    let mut elapsed = 0.0_f64;
-    while elapsed < total {
-        let remaining = total - elapsed;
-        let step = if remaining < dt_value {
-            remaining
-        } else {
-            dt_value
-        };
-        step_world(&mut world, Seconds::new(step));
-        elapsed += step;
-    }
-
-    // Return the single entity's components.
-    let entity = world.entities().next().expect("entity should exist");
-    let kin = world.get_component::<Kinematics>(entity).unwrap();
-    let rb = world.get_component::<RigidBody>(entity).unwrap();
-    let cfg = world.get_component::<SpacecraftConfig>(entity).unwrap();
-    ((*kin).clone(), (*rb).clone(), *cfg)
 }
 
 #[cfg(test)]
@@ -278,7 +235,7 @@ mod tests {
     #[test]
     fn test_two_body_orbit_energy_conservation() {
         let (mut kin, rb, cfg) = make_orbit_components();
-        let ctx = SimContext {
+        let mut ctx = SimContext {
             sim_config: SimulationConfig::default(),
             celestial: earth_only(),
             epoch: test_epoch(),
@@ -289,7 +246,7 @@ mod tests {
             &mut kin,
             &rb,
             &cfg,
-            &ctx,
+            &mut ctx,
             Seconds::new(60.0),
             Seconds::new(3_600.0),
         );
