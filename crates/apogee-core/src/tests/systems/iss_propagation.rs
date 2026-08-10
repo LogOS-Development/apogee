@@ -79,18 +79,6 @@ fn earth_only_celestial() -> SolarSystemState {
     }
 }
 
-/// Build a world with a kinematic Earth at the origin, ready for stepping.
-fn world_with_earth() -> World {
-    let mut world = World::new();
-    world.add_celestial_body(CelestialBody::kinematic(
-        399,
-        Vector3::zeros(),
-        Vector3::zeros(),
-    ));
-    world.build_celestial_state();
-    world
-}
-
 #[test]
 fn test_iss_one_orbit_energy_conservation() {
     let (_tle, mut kin, rb, cfg, sim_config) = iss_components();
