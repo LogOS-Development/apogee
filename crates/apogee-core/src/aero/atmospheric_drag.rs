@@ -87,9 +87,8 @@ impl crate::systems::force_model::ForceModel for AtmosphericDrag {
         let seconds_utc = (doy_f64 - doy_f64.floor()) * 86_400.0;
 
         let model = Nrlmsise00;
-        let latlon = crate::systems::force_aggregator::ecef_lat_lon_from_inertial(
-            &ctx.kinematics.position,
-        );
+        let latlon =
+            crate::systems::force_aggregator::ecef_lat_lon_from_inertial(&ctx.kinematics.position);
         let input = AtmosphereInput {
             altitude_m: apogee_common::units::Meters::new(latlon.altitude_m),
             latitude_rad: latlon.latitude_rad,

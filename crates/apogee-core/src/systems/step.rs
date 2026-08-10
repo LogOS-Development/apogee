@@ -88,14 +88,7 @@ pub fn step_spacecraft(
             attitude: s.attitude,
             angular_velocity: s.angular_velocity,
         };
-        let forces = aggregate_forces(
-            &trial_kinematics,
-            &rb,
-            &cfg,
-            &sim_config,
-            &celestial,
-            epoch,
-        );
+        let forces = aggregate_forces(&trial_kinematics, &rb, &cfg, &sim_config, &celestial, epoch);
 
         // Translational acceleration = F / m. The unit-aware newtype collapses
         // to a raw vector for the integrator's hot path; the type tag is
@@ -210,8 +203,7 @@ pub fn propagate_single(
     dt: Seconds<f64>,
     duration_s: Seconds<f64>,
 ) -> (Kinematics, RigidBody, SpacecraftConfig) {
-    let mut world =
-        World::with_config_and_epoch(ctx.sim_config, ctx.celestial.clone(), ctx.epoch);
+    let mut world = World::with_config_and_epoch(ctx.sim_config, ctx.celestial.clone(), ctx.epoch);
     let _entity = world.spawn((kinematics, rigid_body, config));
 
     let total = duration_s.into_value();
@@ -309,11 +301,8 @@ mod tests {
     #[test]
     fn test_step_world_single_entity() {
         let (kin, rb, cfg) = make_orbit_components();
-        let mut world = World::with_config_and_epoch(
-            SimulationConfig::default(),
-            earth_only(),
-            test_epoch(),
-        );
+        let mut world =
+            World::with_config_and_epoch(SimulationConfig::default(), earth_only(), test_epoch());
         let _entity = world.spawn((kin, rb, cfg));
 
         let e0 = {
@@ -342,11 +331,8 @@ mod tests {
 
     #[test]
     fn test_step_world_multi_entity() {
-        let mut world = World::with_config_and_epoch(
-            SimulationConfig::default(),
-            earth_only(),
-            test_epoch(),
-        );
+        let mut world =
+            World::with_config_and_epoch(SimulationConfig::default(), earth_only(), test_epoch());
 
         // Two entities with different initial positions.
         let (kin0, rb0, cfg0) = make_orbit_components();
@@ -354,8 +340,7 @@ mod tests {
 
         let mut kin1 = make_orbit_components().0;
         kin1.position = Vector3::new(R_EARTH_EQ + 500_000.0, 0.0, 0.0);
-        kin1.velocity =
-            Vector3::new(0.0, (GM_EARTH / (R_EARTH_EQ + 500_000.0)).sqrt(), 0.0);
+        kin1.velocity = Vector3::new(0.0, (GM_EARTH / (R_EARTH_EQ + 500_000.0)).sqrt(), 0.0);
         let (_, rb1, cfg1) = make_orbit_components();
         let e1 = world.spawn((kin1, rb1, cfg1));
 

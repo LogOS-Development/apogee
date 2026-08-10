@@ -33,7 +33,13 @@ fn iss_epoch() -> Epoch {
     Epoch::from_gregorian_utc(2026, 8, 1, 21, 27, 4, 0)
 }
 
-fn iss_components() -> (Tle, Kinematics, RigidBody, SpacecraftConfig, SimulationConfig) {
+fn iss_components() -> (
+    Tle,
+    Kinematics,
+    RigidBody,
+    SpacecraftConfig,
+    SimulationConfig,
+) {
     let tle = Tle::parse(ISS_TLE).expect("embedded ISS TLE should parse");
     let (pos, vel) = tle.to_state_vector();
     let kinematics = Kinematics {
@@ -53,7 +59,13 @@ fn iss_components() -> (Tle, Kinematics, RigidBody, SpacecraftConfig, Simulation
         reflectivity: 1.2,
         reference_mass_kg: 420_000.0,
     };
-    (tle, kinematics, rigid_body, config, SimulationConfig::default())
+    (
+        tle,
+        kinematics,
+        rigid_body,
+        config,
+        SimulationConfig::default(),
+    )
 }
 
 fn earth_only_celestial() -> SolarSystemState {
@@ -176,14 +188,8 @@ fn test_iss_via_propagate_single() {
     };
 
     let e0 = specific_energy(&kin.position, &kin.velocity);
-    let (kin, _, _) = propagate_single(
-        kin,
-        rb,
-        cfg,
-        ctx,
-        Seconds::new(30.0),
-        Seconds::new(5_500.0),
-    );
+    let (kin, _, _) =
+        propagate_single(kin, rb, cfg, ctx, Seconds::new(30.0), Seconds::new(5_500.0));
     let e1 = specific_energy(&kin.position, &kin.velocity);
     let rel_err = (e1 - e0).abs() / e0.abs();
     assert!(
