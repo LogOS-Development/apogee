@@ -32,8 +32,6 @@ impl std::error::Error for SystemError {}
 /// Stable identifier for a registered system.
 ///
 /// Assigned by the [`Scheduler`] when a system is added or inserted.
-/// Remains valid even if other systems are inserted around it, because
-/// the ID is independent of position in the execution order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SystemId(pub usize);
 
@@ -59,11 +57,6 @@ pub trait System: Send {
     }
 }
 
-/// Default minimum sub-step dt (1 ms). Prevents unbounded sub-stepping when
-/// the scheduler dt is very large relative to a system's preferred dt.
-/// Override per-instance with [`Scheduler::set_min_sub_dt`].
-const DEFAULT_MIN_SUB_DT: f64 = 0.001;
-
 struct SystemEntry {
     id: SystemId,
     system: Box<dyn System>,
@@ -71,16 +64,15 @@ struct SystemEntry {
 
 /// Runs registered systems in order and collects errors.
 ///
-/// Systems can be appended with [`Scheduler::add`] or inserted at an
-/// arbitrary position with [`Scheduler::insert_at`],
-/// [`Scheduler::insert_before`], or [`Scheduler::insert_after`].
+/// Systems can be appended with [`Scheduler::add`], inserted at the front
+/// with [`Scheduler::insert_front`], or inserted relative to an existing
+/// system with [`Scheduler::insert_before`] and [`Scheduler::insert_after`].
 pub struct Scheduler {
     systems: Vec<SystemEntry>,
     errors: Vec<(SystemId, SystemError)>,
     /// Accumulated time remainder per system, keyed by stable [`SystemId`].
     accumulated: HashMap<SystemId, f64>,
     next_id: usize,
-    min_sub_dt: f64,
 }
 
 impl Scheduler {
@@ -91,26 +83,7 @@ impl Scheduler {
             errors: Vec::new(),
             accumulated: HashMap::new(),
             next_id: 0,
-            min_sub_dt: DEFAULT_MIN_SUB_DT,
         }
-    }
-
-    /// Current minimum sub-step dt.
-    ///
-    /// Systems whose preferred dt is smaller than this value are clamped
-    /// to it, preventing unbounded sub-stepping.
-    pub fn min_sub_dt(&self) -> f64 {
-        self.min_sub_dt
-    }
-
-    /// Set the minimum sub-step dt.
-    ///
-    /// Must be greater than zero. A smaller floor allows finer-resolution
-    /// sub-stepping (e.g. milliseconds for attitude dynamics) at the cost
-    /// of more sub-steps per tick.
-    pub fn set_min_sub_dt(&mut self, min: f64) {
-        assert!(min > 0.0, "min_sub_dt must be positive");
-        self.min_sub_dt = min;
     }
 
     /// Register a system at the end of the execution order.
@@ -129,15 +102,12 @@ impl Scheduler {
         id
     }
 
-    /// Insert a system at a specific position in the execution order.
-    ///
-    /// `index = 0` inserts at the front; `index = len` is equivalent to
-    /// [`Scheduler::add`]. Panics if `index > len`.
-    pub fn insert_at(&mut self, index: usize, system: impl System + 'static) -> SystemId {
+    /// Insert a system at the front of the execution order.
+    pub fn insert_front(&mut self, system: impl System + 'static) -> SystemId {
         let id = SystemId(self.next_id);
         self.next_id += 1;
         self.systems.insert(
-            index,
+            0,
             SystemEntry {
                 id,
                 system: Box::new(system),
@@ -160,7 +130,17 @@ impl Scheduler {
             .iter()
             .position(|e| e.id == target_id)
             .expect("target system not found");
-        self.insert_at(index, system)
+        let id = SystemId(self.next_id);
+        self.next_id += 1;
+        self.systems.insert(
+            index,
+            SystemEntry {
+                id,
+                system: Box::new(system),
+            },
+        );
+        self.accumulated.insert(id, 0.0);
+        id
     }
 
     /// Insert a system immediately after the system with the given ID.
@@ -172,7 +152,17 @@ impl Scheduler {
             .iter()
             .position(|e| e.id == target_id)
             .expect("target system not found");
-        self.insert_at(index + 1, system)
+        let id = SystemId(self.next_id);
+        self.next_id += 1;
+        self.systems.insert(
+            index + 1,
+            SystemEntry {
+                id,
+                system: Box::new(system),
+            },
+        );
+        self.accumulated.insert(id, 0.0);
+        id
     }
 
     /// Run all registered systems in order, then advance `world.epoch` by
@@ -180,12 +170,9 @@ impl Scheduler {
     ///
     /// Systems with a [`System::preferred_dt`] of `Some(system_dt)` are
     /// sub-stepped: the scheduler runs them `N` times per call, where
-    /// `N = floor((dt + accumulated) / effective_sub_dt)`. The remainder
+    /// `N = floor((dt + accumulated) / system_dt)`. The remainder
     /// is carried forward to the next tick, ensuring zero long-term drift
     /// even when `dt / system_dt` is not an integer.
-    ///
-    /// The effective sub-step dt is clamped to [`Scheduler::min_sub_dt`]
-    /// to prevent unbounded sub-stepping when `system_dt` is very small.
     ///
     /// If a system returns [`Err`], the scheduler records the error and
     /// continues running remaining systems.
@@ -195,14 +182,7 @@ impl Scheduler {
 
         for entry in self.systems.iter_mut() {
             let sub_dt = match entry.system.preferred_dt() {
-                Some(pref) => {
-                    let sdt = pref.into_value();
-                    if sdt < self.min_sub_dt {
-                        self.min_sub_dt
-                    } else {
-                        sdt
-                    }
-                }
+                Some(pref) => pref.into_value(),
                 None => {
                     // No preferred dt — run once at full scheduler dt.
                     if let Err(e) = entry.system.run(world, dt) {
@@ -1000,54 +980,10 @@ mod tests {
     }
 
     #[test]
-    fn test_min_dt_floor_prevents_unbounded_sub_stepping() {
-        // When system_dt is very small relative to the scheduler dt,
-        // the minimum dt floor prevents unbounded sub-stepping.
-        // With a floor of 1.0s and scheduler dt=600.0, a system declaring
-        // preferred_dt=0.01 would run at most 600/1=600 times (not 60000).
-
-        let call_log = Arc::new(Mutex::new(Vec::new()));
-        let mut scheduler = Scheduler::new();
-        scheduler.set_min_sub_dt(1.0);
-        scheduler.add(SubStepLogSystem {
-            preferred_dt: 0.01,
-            call_log: Arc::clone(&call_log),
-        });
-
-        let mut world = World::new();
-        let epoch_before = world.epoch;
-
-        // This should not hang or take excessive time.
-        scheduler.run(&mut world, Seconds::new(600.0));
-
-        let elapsed = (world.epoch - epoch_before).to_seconds();
-        assert!(
-            (elapsed - 600.0).abs() < 1e-9,
-            "epoch should advance exactly 600s, got {elapsed}s"
-        );
-
-        // With floor=1.0, max sub-steps = 600/1 = 600.
-        let recorded = call_log.lock().unwrap();
-        assert!(
-            recorded.len() <= 600,
-            "should not exceed 600 sub-steps (floor), got {}",
-            recorded.len()
-        );
-    }
-
-    #[test]
-    fn test_default_min_sub_dt_allows_millisecond_resolution() {
-        // The default min_sub_dt should be low enough to support
-        // millisecond-resolution sub-stepping.
-        let scheduler = Scheduler::new();
-        assert!(
-            scheduler.min_sub_dt() <= 0.001,
-            "default min_sub_dt should be <= 1ms, got {}",
-            scheduler.min_sub_dt()
-        );
-
-        // A system declaring preferred_dt = 0.001 (1ms) with scheduler
-        // dt = 1.0 should run 1000 sub-steps.
+    fn test_sub_stepping_microsecond_resolution() {
+        // Without a min_sub_dt floor, a system can declare arbitrarily
+        // small preferred_dt values. With preferred_dt = 0.001 (1ms) and
+        // scheduler dt = 1.0, the system runs 1000 sub-steps.
         let call_log = Arc::new(Mutex::new(Vec::new()));
         let mut scheduler = Scheduler::new();
         scheduler.add(SubStepLogSystem {
@@ -1137,7 +1073,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // insert_at / insert_before / insert_after
+    // insert_front / insert_before / insert_after
     // ------------------------------------------------------------------
 
     #[test]
@@ -1155,20 +1091,17 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_at_front() {
+    fn test_insert_front() {
         let log = Arc::new(Mutex::new(Vec::new()));
         let mut scheduler = Scheduler::new();
         scheduler.add(CounterSystem {
             label: "second",
             log: Arc::clone(&log),
         });
-        scheduler.insert_at(
-            0,
-            CounterSystem {
-                label: "first",
-                log: Arc::clone(&log),
-            },
-        );
+        scheduler.insert_front(CounterSystem {
+            label: "first",
+            log: Arc::clone(&log),
+        });
 
         let mut world = World::new();
         scheduler.run(&mut world, Seconds::new(1.0));
@@ -1178,10 +1111,10 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_at_middle() {
+    fn test_insert_middle_by_id() {
         let log = Arc::new(Mutex::new(Vec::new()));
         let mut scheduler = Scheduler::new();
-        scheduler.add(CounterSystem {
+        let id_a = scheduler.add(CounterSystem {
             label: "a",
             log: Arc::clone(&log),
         });
@@ -1189,8 +1122,8 @@ mod tests {
             label: "c",
             log: Arc::clone(&log),
         });
-        scheduler.insert_at(
-            1,
+        scheduler.insert_after(
+            id_a,
             CounterSystem {
                 label: "b",
                 log: Arc::clone(&log),
