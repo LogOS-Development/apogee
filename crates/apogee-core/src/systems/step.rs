@@ -256,7 +256,20 @@ pub fn step_world(world: &mut World, dt: Seconds<f64>) {
     // all gravity sources. Kinematic bodies are left untouched.
     integrate_dynamic_celestials(world, &ctx, &mut integrator, dt);
 
-    // Advance the world clock.
+    // Epoch advancement is the scheduler's responsibility, not step_world's.
+    // Direct callers should use `step_and_advance` or advance the epoch
+    // manually. This prevents double-advancement when multiple systems run
+    // through a scheduler.
+}
+
+/// Step the world and advance the epoch by `dt`.
+///
+/// Convenience for callers that invoke step_world directly (not through a
+/// [`Scheduler`](crate::systems::scheduler::Scheduler)). The scheduler owns
+/// epoch advancement when systems are registered — use `step_world` (without
+/// epoch advance) inside system implementations.
+pub fn step_and_advance(world: &mut World, dt: Seconds<f64>) {
+    step_world(world, dt);
     world.epoch += dt.into_value() * Unit::Second;
 }
 
@@ -445,7 +458,7 @@ mod tests {
 
         // Step 60 seconds at a time for 1 hour.
         for _ in 0..60 {
-            step_world(&mut world, Seconds::new(60.0));
+            step_and_advance(&mut world, Seconds::new(60.0));
         }
 
         let e1 = {
@@ -487,7 +500,7 @@ mod tests {
         let e1 = world.spawn((kin1, rb1));
 
         for _ in 0..10 {
-            step_world(&mut world, Seconds::new(60.0));
+            step_and_advance(&mut world, Seconds::new(60.0));
         }
 
         // Both entities should have moved.
@@ -518,7 +531,7 @@ mod tests {
         ));
 
         for _ in 0..10 {
-            step_world(&mut world, Seconds::new(60.0));
+            step_and_advance(&mut world, Seconds::new(60.0));
         }
 
         let earth = world.find_celestial(399).unwrap();
@@ -555,7 +568,7 @@ mod tests {
 
         // Step for ~1 orbit (92 min).
         for _ in 0..92 {
-            step_world(&mut world, Seconds::new(60.0));
+            step_and_advance(&mut world, Seconds::new(60.0));
         }
 
         let e1 = {
@@ -614,7 +627,7 @@ mod tests {
 
         // Step 10 minutes.
         for _ in 0..10 {
-            step_world(&mut world, Seconds::new(60.0));
+            step_and_advance(&mut world, Seconds::new(60.0));
         }
 
         let sc_e1 = {

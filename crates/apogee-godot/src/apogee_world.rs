@@ -17,7 +17,7 @@ use apogee_core::components::drag_surfaces::{DragSurface, DragSurfaces};
 use apogee_core::components::kinematics::Kinematics;
 use apogee_core::components::rigid_body::{RigidBody, SimulationConfig};
 use apogee_core::components::srp_surfaces::{SrpSurface, SrpSurfaces};
-use apogee_core::systems::step::step_world;
+use apogee_core::systems::scheduler::{Scheduler, StepWorldSystem};
 use apogee_core::world::Entity;
 use apogee_core::world::World as CoreWorld;
 use godot::classes::Node;
@@ -354,6 +354,10 @@ pub struct ApogeeWorld {
 
     /// Underlying ECS world.
     world: CoreWorld,
+
+    /// System scheduler: owns system registration, execution order, and
+    /// epoch advancement.
+    scheduler: Scheduler,
 }
 
 #[godot_api]
@@ -361,6 +365,8 @@ impl INode for ApogeeWorld {
     fn init(base: Base<Node>) -> Self {
         let sim_config = SimulationConfig::default();
         let world = CoreWorld::with_config(sim_config);
+        let mut scheduler = Scheduler::new();
+        scheduler.add(StepWorldSystem);
         Self {
             base,
             f107: sim_config.f107,
@@ -369,6 +375,7 @@ impl INode for ApogeeWorld {
             day_of_year: 1,
             seconds_utc: 0.0,
             world,
+            scheduler,
         }
     }
 }
@@ -440,7 +447,11 @@ impl ApogeeWorld {
         );
         self.world.epoch = year_start + doy_offset;
 
-        step_world(&mut self.world, Seconds::new(delta_time));
+        // The scheduler runs all registered systems and advances the epoch
+        // exactly once after they complete. This replaces direct calls to
+        // step_world/step_and_advance.
+        self.scheduler
+            .run(&mut self.world, Seconds::new(delta_time));
 
         // Read back the advanced clock.
         let doy_f64 = self.world.epoch.day_of_year();
@@ -560,6 +571,7 @@ mod tests {
 
     use super::*;
     use apogee_common::constants::{GM_EARTH, R_EARTH_EQ};
+    use apogee_core::systems::step::step_and_advance;
 
     // -- ComponentSet::spawn_into tests (no Godot runtime needed) --
 
@@ -741,7 +753,7 @@ mod tests {
         let pos0 = world.get_component::<Kinematics>(entity).unwrap().position;
 
         for _ in 0..100 {
-            step_world(&mut world, Seconds::new(60.0));
+            step_and_advance(&mut world, Seconds::new(60.0));
         }
 
         let kin = world.get_component::<Kinematics>(entity).unwrap();

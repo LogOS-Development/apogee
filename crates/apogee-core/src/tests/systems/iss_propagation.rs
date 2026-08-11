@@ -18,7 +18,7 @@ use crate::components::drag_surfaces::{DragSurface, DragSurfaces};
 use crate::components::kinematics::Kinematics;
 use crate::components::rigid_body::{RigidBody, SimulationConfig};
 use crate::components::srp_surfaces::{SrpSurface, SrpSurfaces};
-use crate::systems::step::{propagate, step_world, SimContext};
+use crate::systems::step::{propagate, step_and_advance, SimContext};
 use crate::tle::Tle;
 use crate::world::World;
 
@@ -169,7 +169,7 @@ fn test_iss_one_orbit_via_step_world() {
 
     // 1 orbit ~ 5500 s, step at 30 s.
     for _ in 0..184 {
-        step_world(&mut world, Seconds::new(30.0));
+        step_and_advance(&mut world, Seconds::new(30.0));
     }
 
     let e1 = {
