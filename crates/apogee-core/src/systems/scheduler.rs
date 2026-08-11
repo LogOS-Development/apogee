@@ -9,6 +9,25 @@ use apogee_common::units::Seconds;
 use crate::systems::step;
 use crate::world::World;
 
+/// Error returned by a [`System`] during execution.
+#[derive(Debug, Clone)]
+pub enum SystemError {
+    /// A system encountered a runtime failure (e.g. numerical issue,
+    /// resource limit). The scheduler logs the error and continues
+    /// running remaining systems.
+    Runtime(String),
+}
+
+impl std::fmt::Display for SystemError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SystemError::Runtime(msg) => write!(f, "runtime error: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for SystemError {}
+
 /// A system: a unit of simulation work that operates on the ECS [`World`].
 ///
 /// Implementations write their own hecs query loops inside `run`, identical
@@ -17,11 +36,19 @@ use crate::world::World;
 /// register systems with a [`Scheduler`] and call `scheduler.run(&mut world, dt)`
 /// instead of invoking each system by name.
 ///
+/// The `dt` parameter is per-call: the caller controls the step size and can
+/// vary it between ticks for adaptive timestepping. Per-system sub-stepping
+/// within a single tick (multi-rate scheduling) is not supported yet.
+///
+/// Systems return [`Result`] so the scheduler can handle failures gracefully
+/// rather than propagating panics. The scheduler collects errors and continues
+/// running remaining systems.
+///
 /// Single-threaded. Multithreaded dispatch and dependency graphs are tracked
 /// separately.
 pub trait System: Send {
     /// Advance the simulation world by `dt` seconds.
-    fn run(&mut self, world: &mut World, dt: Seconds<f64>);
+    fn run(&mut self, world: &mut World, dt: Seconds<f64>) -> Result<(), SystemError>;
 }
 
 /// A single-threaded system scheduler.
@@ -29,8 +56,13 @@ pub trait System: Send {
 /// Systems are registered with [`Scheduler::add`] and run in registration
 /// order when [`Scheduler::run`] is called. Registration order = execution
 /// order; explicit dependency declarations can come later.
+///
+/// The scheduler owns error handling: if a system returns [`Err`], the
+/// scheduler records it and continues running remaining systems. Collected
+/// errors are accessible via [`Scheduler::errors`] after `run` returns.
 pub struct Scheduler {
     systems: Vec<Box<dyn System>>,
+    errors: Vec<(usize, SystemError)>,
 }
 
 impl Scheduler {
@@ -38,6 +70,7 @@ impl Scheduler {
     pub fn new() -> Self {
         Self {
             systems: Vec::new(),
+            errors: Vec::new(),
         }
     }
 
@@ -47,10 +80,31 @@ impl Scheduler {
     }
 
     /// Run all registered systems in order, each advancing the world by `dt`.
+    ///
+    /// If a system returns [`Err`], the scheduler records the error and
+    /// continues running remaining systems. This is graceful degradation:
+    /// a failure in one system (e.g. a force model) does not prevent
+    /// others (e.g. the integrator) from running.
     pub fn run(&mut self, world: &mut World, dt: Seconds<f64>) {
-        for system in &mut self.systems {
-            system.run(world, dt);
+        self.errors.clear();
+        for (i, system) in self.systems.iter_mut().enumerate() {
+            if let Err(e) = system.run(world, dt) {
+                self.errors.push((i, e));
+            }
         }
+    }
+
+    /// Errors collected during the most recent [`Scheduler::run`] call.
+    ///
+    /// Each entry is `(system_index, error)` — the index is the position
+    /// in registration order (0-based).
+    pub fn errors(&self) -> &[(usize, SystemError)] {
+        &self.errors
+    }
+
+    /// Whether the most recent [`Scheduler::run`] produced any errors.
+    pub fn has_errors(&self) -> bool {
+        !self.errors.is_empty()
     }
 
     /// Number of registered systems.
@@ -84,8 +138,9 @@ impl Default for Scheduler {
 pub struct StepWorldSystem;
 
 impl System for StepWorldSystem {
-    fn run(&mut self, world: &mut World, dt: Seconds<f64>) {
+    fn run(&mut self, world: &mut World, dt: Seconds<f64>) -> Result<(), SystemError> {
         step::step_world(world, dt);
+        Ok(())
     }
 }
 
@@ -120,9 +175,10 @@ impl LoggingSystem {
 }
 
 impl System for LoggingSystem {
-    fn run(&mut self, world: &mut World, _dt: Seconds<f64>) {
+    fn run(&mut self, world: &mut World, _dt: Seconds<f64>) -> Result<(), SystemError> {
         self.ticks += 1;
         self.last_epoch = Some(world.epoch);
+        Ok(())
     }
 }
 
@@ -155,8 +211,9 @@ mod tests {
     }
 
     impl System for CounterSystem {
-        fn run(&mut self, _world: &mut World, _dt: Seconds<f64>) {
+        fn run(&mut self, _world: &mut World, _dt: Seconds<f64>) -> Result<(), SystemError> {
             self.log.lock().unwrap().push(self.label);
+            Ok(())
         }
     }
 
@@ -358,10 +415,89 @@ mod tests {
         let mut world = World::new();
 
         for _ in 0..5 {
-            logging.run(&mut world, Seconds::new(1.0));
+            logging.run(&mut world, Seconds::new(1.0)).unwrap();
         }
 
         assert_eq!(logging.tick_count(), 5);
         assert!(logging.last_epoch().is_some());
+    }
+
+    // ------------------------------------------------------------------
+    // Error handling — scheduler continues on system failure.
+    // ------------------------------------------------------------------
+
+    /// A system that always returns an error.
+    struct FailingSystem;
+
+    impl System for FailingSystem {
+        fn run(&mut self, _world: &mut World, _dt: Seconds<f64>) -> Result<(), SystemError> {
+            Err(SystemError::Runtime("intentional failure".to_string()))
+        }
+    }
+
+    #[test]
+    fn test_scheduler_collects_errors_and_continues() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+
+        let mut scheduler = Scheduler::new();
+        scheduler.add(CounterSystem {
+            label: "before",
+            log: Arc::clone(&log),
+        });
+        scheduler.add(FailingSystem);
+        scheduler.add(CounterSystem {
+            label: "after",
+            log: Arc::clone(&log),
+        });
+
+        let mut world = World::new();
+        scheduler.run(&mut world, Seconds::new(1.0));
+
+        // Both CounterSystems should have run despite FailingSystem's error.
+        let recorded = log.lock().unwrap();
+        assert_eq!(*recorded, vec!["before", "after"]);
+
+        // One error should be recorded, for system index 1 (FailingSystem).
+        assert!(scheduler.has_errors());
+        assert_eq!(scheduler.errors().len(), 1);
+        assert_eq!(scheduler.errors()[0].0, 1);
+        assert!(scheduler.errors()[0]
+            .1
+            .to_string()
+            .contains("intentional failure"));
+    }
+
+    #[test]
+    fn test_scheduler_no_errors_when_all_succeed() {
+        let mut scheduler = Scheduler::new();
+        scheduler.add(CounterSystem {
+            label: "a",
+            log: Arc::new(Mutex::new(Vec::new())),
+        });
+
+        let mut world = World::new();
+        scheduler.run(&mut world, Seconds::new(1.0));
+
+        assert!(!scheduler.has_errors());
+        assert!(scheduler.errors().is_empty());
+    }
+
+    #[test]
+    fn test_scheduler_errors_cleared_between_runs() {
+        let mut scheduler = Scheduler::new();
+        scheduler.add(FailingSystem);
+
+        let mut world = World::new();
+        scheduler.run(&mut world, Seconds::new(1.0));
+        assert!(scheduler.has_errors());
+
+        // Replace with a succeeding system and run again — errors should clear.
+        let mut scheduler2 = Scheduler::new();
+        scheduler2.add(CounterSystem {
+            label: "ok",
+            log: Arc::new(Mutex::new(Vec::new())),
+        });
+        scheduler2.run(&mut world, Seconds::new(1.0));
+        assert!(!scheduler2.has_errors());
     }
 }
