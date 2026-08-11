@@ -1,14 +1,8 @@
-//! System trait and single-threaded scheduler.
+//! System trait and single-threaded scheduler for the ECS world.
 //!
-//! Issue #156: decouple system definition from query iteration. hecs is
-//! deliberately minimal — no `System` trait, no scheduler. This module adds
-//! a thin scheduling layer on top of hecs so systems can be registered and
-//! run in order without the caller knowing each system's signature.
-//!
-//! Design: Option B from the issue — `Fn(&mut World)` style. The query is
-//! written inside `run`, same as the existing free functions, but the system
-//! is a registered object rather than a free function the caller must remember
-//! to call.
+//! Provides a [`System`] trait and [`Scheduler`] so simulation steps can be
+//! registered and run in order without the caller knowing each system's
+//! signature. Systems write their own hecs query loops inside `run`.
 
 use apogee_common::units::Seconds;
 
@@ -23,8 +17,8 @@ use crate::world::World;
 /// register systems with a [`Scheduler`] and call `scheduler.run(&mut world, dt)`
 /// instead of invoking each system by name.
 ///
-/// Single-threaded. Multithreaded dispatch and dependency graphs are non-goals
-/// (tracked separately).
+/// Single-threaded. Multithreaded dispatch and dependency graphs are tracked
+/// separately.
 pub trait System: Send {
     /// Advance the simulation world by `dt` seconds.
     fn run(&mut self, world: &mut World, dt: Seconds<f64>);
@@ -95,36 +89,40 @@ impl System for StepWorldSystem {
     }
 }
 
-/// A no-op system that counts how many times it has been run.
+/// A diagnostic system that records simulation tick metadata.
 ///
-/// Demonstrates a third system registering and running alongside
-/// `StepWorldSystem` via the scheduler. Useful as a diagnostic stub and
-/// for verifying execution order in tests.
+/// Captures the tick count and the world epoch after each step, providing
+/// a lightweight audit trail when registered alongside physics systems.
 pub struct LoggingSystem {
     ticks: u64,
+    last_epoch: Option<hifitime::Epoch>,
 }
 
 impl LoggingSystem {
     /// Create a new logging system with zero ticks.
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
-        Self { ticks: 0 }
+        Self {
+            ticks: 0,
+            last_epoch: None,
+        }
     }
 
     /// Number of times `run` has been called.
     pub fn tick_count(&self) -> u64 {
         self.ticks
     }
-}
 
-impl Default for LoggingSystem {
-    fn default() -> Self {
-        Self::new()
+    /// The epoch recorded on the most recent `run`, if any.
+    pub fn last_epoch(&self) -> Option<hifitime::Epoch> {
+        self.last_epoch
     }
 }
 
 impl System for LoggingSystem {
-    fn run(&mut self, _world: &mut World, _dt: Seconds<f64>) {
+    fn run(&mut self, world: &mut World, _dt: Seconds<f64>) {
         self.ticks += 1;
+        self.last_epoch = Some(world.epoch);
     }
 }
 
@@ -364,5 +362,6 @@ mod tests {
         }
 
         assert_eq!(logging.tick_count(), 5);
+        assert!(logging.last_epoch().is_some());
     }
 }
