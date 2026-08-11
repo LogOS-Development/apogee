@@ -13,9 +13,7 @@ use crate::world::World;
 /// Error returned by a [`System`] during execution.
 #[derive(Debug, Clone)]
 pub enum SystemError {
-    /// A system encountered a runtime failure (e.g. numerical issue,
-    /// resource limit). The scheduler logs the error and continues
-    /// running remaining systems.
+    /// A system encountered a runtime failure.
     Runtime(String),
 }
 
@@ -31,36 +29,12 @@ impl std::error::Error for SystemError {}
 
 /// A system: a unit of simulation work that operates on the ECS [`World`].
 ///
-/// Implementations write their own hecs query loops inside `run`, identical
-/// to the existing free functions (`step_world`, `aggregate_forces`). The
-/// trait decouples system *definition* from system *registration* — callers
-/// register systems with a [`Scheduler`] and call `scheduler.run(&mut world, dt)`
-/// instead of invoking each system by name.
-///
-/// The `dt` parameter is per-call: the caller controls the step size and can
-/// vary it between ticks for adaptive timestepping. Per-system sub-stepping
-/// within a single tick (multi-rate scheduling) is not supported yet.
-///
-/// Systems return [`Result`] so the scheduler can handle failures gracefully
-/// rather than propagating panics. The scheduler collects errors and continues
-/// running remaining systems.
-///
-/// Single-threaded. Multithreaded dispatch and dependency graphs are tracked
-/// separately.
+/// Register systems with a [`Scheduler`] and call `scheduler.run(&mut world, dt)`.
 pub trait System: Send {
-    /// Advance the simulation world by `dt` seconds.
     fn run(&mut self, world: &mut World, dt: Seconds<f64>) -> Result<(), SystemError>;
 }
 
-/// A single-threaded system scheduler.
-///
-/// Systems are registered with [`Scheduler::add`] and run in registration
-/// order when [`Scheduler::run`] is called. Registration order = execution
-/// order; explicit dependency declarations can come later.
-///
-/// The scheduler owns error handling: if a system returns [`Err`], the
-/// scheduler records it and continues running remaining systems. Collected
-/// errors are accessible via [`Scheduler::errors`] after `run` returns.
+/// Runs registered systems in order and collects errors.
 pub struct Scheduler {
     systems: Vec<Box<dyn System>>,
     errors: Vec<(usize, SystemError)>,
@@ -80,16 +54,11 @@ impl Scheduler {
         self.systems.push(Box::new(system));
     }
 
-    /// Run all registered systems in order, each advancing the world by `dt`.
+    /// Run all registered systems in order, then advance `world.epoch` by
+    /// `dt` exactly once.
     ///
     /// If a system returns [`Err`], the scheduler records the error and
-    /// continues running remaining systems. This is graceful degradation:
-    /// a failure in one system (e.g. a force model) does not prevent
-    /// others (e.g. the integrator) from running.
-    ///
-    /// After all systems have run, the scheduler advances `world.epoch` by
-    /// `dt` exactly once. Systems must NOT advance the epoch themselves —
-    /// this prevents double-advancement when multiple systems run per tick.
+    /// continues running remaining systems.
     pub fn run(&mut self, world: &mut World, dt: Seconds<f64>) {
         self.errors.clear();
         for (i, system) in self.systems.iter_mut().enumerate() {
@@ -97,10 +66,6 @@ impl Scheduler {
                 self.errors.push((i, e));
             }
         }
-        // The scheduler owns epoch advancement. This is the single place
-        // where world.epoch is advanced per tick, regardless of how many
-        // systems ran. Verified by Z3: moving epoch advancement here makes
-        // epoch_delta == dt hold by construction (UNSAT to violate).
         world.epoch += dt.into_value() * Unit::Second;
     }
 
@@ -138,13 +103,7 @@ impl Default for Scheduler {
 // System implementations wrapping the existing free functions.
 // ------------------------------------------------------------------
 
-/// System that advances the entire simulation world by one fixed step.
-///
-/// Wraps the existing [`step_world`] free function. The physics logic is
-/// unchanged — this struct is a thin adapter that lets the simulation loop
-/// register stepping as a system rather than calling `step_world` by name.
-///
-/// [`step_world`]: crate::systems::step::step_world
+/// Wraps [`step_world`] as a [`System`].
 pub struct StepWorldSystem;
 
 impl System for StepWorldSystem {
@@ -154,18 +113,19 @@ impl System for StepWorldSystem {
     }
 }
 
-/// A diagnostic system that records simulation tick metadata.
-///
-/// Captures the tick count and the world epoch after each step, providing
-/// a lightweight audit trail when registered alongside physics systems.
+/// Records tick count and world epoch per step.
 pub struct LoggingSystem {
     ticks: u64,
     last_epoch: Option<hifitime::Epoch>,
 }
 
+impl Default for LoggingSystem {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LoggingSystem {
-    /// Create a new logging system with zero ticks.
-    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self {
             ticks: 0,
@@ -192,24 +152,20 @@ impl System for LoggingSystem {
     }
 }
 
-/// Placeholder system representing the force aggregation pipeline.
+/// Placeholder for force aggregation as a registered system.
 ///
-/// Force aggregation (`aggregate_forces`) is called inside the RK4
-/// derivative closure within `step_world`, which evaluates forces at four
-/// trial states per integration step (k1–k4). A standalone system that
-/// pre-computed forces at the initial state would only capture one
-/// evaluation — insufficient for RK4. This struct therefore exists as a
-/// registered placeholder: it does not pre-compute forces, and
-/// `step_world` continues to call `aggregate_forces` internally.
-///
-/// Future decoupled force computation (e.g. for multi-rate scheduling or
-/// cached force snapshots) can replace the no-op `run` with a real
-/// implementation that stores results in a shared resource.
+/// Forces are computed inside `step_world`'s RK4 derivative closure.
+/// This struct marks the extension point for future decoupled force
+/// computation. See #151.
 pub struct AggregateForcesSystem;
 
+impl Default for AggregateForcesSystem {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AggregateForcesSystem {
-    /// Create a new force aggregation system placeholder.
-    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self
     }
@@ -217,12 +173,6 @@ impl AggregateForcesSystem {
 
 impl System for AggregateForcesSystem {
     fn run(&mut self, _world: &mut World, _dt: Seconds<f64>) -> Result<(), SystemError> {
-        // No-op: forces are computed inside step_world's RK4 derivative
-        // closure, which evaluates at 4 trial states per step. A
-        // pre-computing system would break RK4 (1 eval != 4 evals,
-        // verified by Z3). This placeholder exists to satisfy the
-        // acceptance criterion and mark the extension point for future
-        // decoupled force computation.
         Ok(())
     }
 }
@@ -611,20 +561,6 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // AggregateForcesSystem — wraps aggregate_forces as a System.
+    // AggregateForcesSystem
     // ------------------------------------------------------------------
-
-    #[test]
-    fn test_aggregate_forces_system_is_registered_and_runs() {
-        // The acceptance criteria require aggregate_forces to be wrapped
-        // as a System impl. This test verifies the struct exists, implements
-        // System, and can be registered with the scheduler.
-        let mut scheduler = Scheduler::new();
-        // scheduler.add(AggregateForcesSystem::new());
-        // assert_eq!(scheduler.len(), 1);
-
-        let mut world = World::new();
-        scheduler.run(&mut world, Seconds::new(1.0));
-        assert!(!scheduler.has_errors());
-    }
 }

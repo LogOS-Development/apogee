@@ -255,19 +255,10 @@ pub fn step_world(world: &mut World, dt: Seconds<f64>) {
     // Integrate dynamic celestial bodies under point-mass gravity from
     // all gravity sources. Kinematic bodies are left untouched.
     integrate_dynamic_celestials(world, &ctx, &mut integrator, dt);
-
-    // Epoch advancement is the scheduler's responsibility, not step_world's.
-    // Direct callers should use `step_and_advance` or advance the epoch
-    // manually. This prevents double-advancement when multiple systems run
-    // through a scheduler.
 }
 
-/// Step the world and advance the epoch by `dt`.
-///
-/// Convenience for callers that invoke step_world directly (not through a
-/// [`Scheduler`](crate::systems::scheduler::Scheduler)). The scheduler owns
-/// epoch advancement when systems are registered — use `step_world` (without
-/// epoch advance) inside system implementations.
+/// Step the world and advance the epoch by `dt`. Use this when calling
+/// directly instead of through a [`Scheduler`].
 pub fn step_and_advance(world: &mut World, dt: Seconds<f64>) {
     step_world(world, dt);
     world.epoch += dt.into_value() * Unit::Second;
