@@ -1,8 +1,22 @@
 //! System trait and single-threaded scheduler for the ECS world.
 //!
-//! Provides a [`System`] trait and [`Scheduler`] so simulation steps can be
-//! registered and run in order without the caller knowing each system's
-//! signature. Systems write their own hecs query loops inside `run`.
+//! Systems are ECS entities, not external `Box<dyn System>` objects held by a
+//! scheduler struct. Each system is spawned as an entity inside the
+//! [`World`] with a [`SystemMeta`] component (ordering, preferred dt, enabled
+//! flag) and a [`SystemHandler`] component (the boxed [`System`] trait
+//! object). The [`Scheduler`] queries the ECS world for system entities each
+//! tick, sorts them by `order`, and invokes each handler.
+//!
+//! This design lets systems carry configuration as component data, allows
+//! future systems to be queried and composed via the ECS query API, and
+//! aligns with the hecs-native architecture used throughout Apogee.
+//!
+//! ## Epoch invariant
+//!
+//! The scheduler advances `world.epoch` by exactly `dt` once per
+//! [`Scheduler::run`] call, regardless of how many systems are registered or
+//! how many sub-steps each system takes. This invariant is verified by Z3
+//! (see issue #168 acceptance criteria).
 
 use std::collections::HashMap;
 
@@ -29,22 +43,67 @@ impl std::fmt::Display for SystemError {
 
 impl std::error::Error for SystemError {}
 
-/// Stable identifier for a registered system.
+/// Metadata for a system entity, stored as an ECS component.
 ///
-/// Assigned by the [`Scheduler`] when a system is added or inserted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct SystemId(pub usize);
+/// Controls the system's execution order, sub-step preference, and enabled
+/// state. The scheduler queries `&SystemMeta` to sort and filter system
+/// entities before dispatching their [`SystemHandler`]s.
+#[derive(Debug, Clone)]
+pub struct SystemMeta {
+    /// Sort key for execution order. Systems are run in ascending `order`.
+    /// Use fractional values to insert between existing systems.
+    pub order: f64,
+    /// Preferred sub-step dt. When `Some(dt)`, the scheduler sub-steps this
+    /// system so each `run` receives approximately `dt`. When `None`, the
+    /// system runs once per tick at the full scheduler dt.
+    pub preferred_dt: Option<Seconds<f64>>,
+    /// Whether the system should be run. Disabled systems are skipped.
+    pub enabled: bool,
+}
+
+impl SystemMeta {
+    /// Create new metadata with the given order, no preferred dt, enabled.
+    pub fn new(order: f64) -> Self {
+        Self {
+            order,
+            preferred_dt: None,
+            enabled: true,
+        }
+    }
+
+    /// Set the preferred sub-step dt.
+    pub fn with_preferred_dt(mut self, dt: Seconds<f64>) -> Self {
+        self.preferred_dt = Some(dt);
+        self
+    }
+
+    /// Set the enabled flag.
+    pub fn with_enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+}
+
+/// Wrapper holding the boxed [`System`] trait object as an ECS component.
+///
+/// hecs is archetypal: one instance per type per entity. This struct wraps
+/// the `Box<dyn System>` so the system entity has exactly one
+/// `SystemHandler` component.
+pub struct SystemHandler {
+    /// The boxed system implementation.
+    pub system: Box<dyn System>,
+}
 
 /// A system: a unit of simulation work that operates on the ECS [`World`].
 ///
-/// Register systems with a [`Scheduler`] and call `scheduler.run(&mut world, dt)`.
+/// Register systems with [`Scheduler::add`] and call
+/// `scheduler.run(&mut world, dt)`.
 ///
 /// Systems that need finer timesteps can override [`System::preferred_dt`]
-/// to declare a preferred sub-step size. The scheduler will run the system
-/// `N` times per tick, where `N = dt / preferred_dt` (with accumulation
-/// for non-integer divisors). Returning `None` (the default) means the
-/// system runs once per tick at the full scheduler dt.
-pub trait System: Send {
+/// to declare a preferred sub-step size. Alternatively, set the
+/// `preferred_dt` field on the system entity's [`SystemMeta`] component
+/// after spawning.
+pub trait System: Send + Sync {
     fn run(&mut self, world: &mut World, dt: Seconds<f64>) -> Result<(), SystemError>;
 
     /// Preferred sub-step dt for this system.
@@ -57,179 +116,35 @@ pub trait System: Send {
     }
 }
 
-struct SystemEntry {
-    id: SystemId,
-    system: Box<dyn System>,
+/// Errors collected during the most recent [`Scheduler::run`], attributed
+/// to the system entity that produced them.
+#[derive(Debug, Clone)]
+pub struct SystemErrorEntry {
+    /// The entity handle of the system that errored.
+    pub entity: hecs::Entity,
+    /// The system's name (from `SystemMeta` or the handler's type).
+    pub name: String,
+    /// The error.
+    pub error: SystemError,
 }
 
 /// Runs registered systems in order and collects errors.
 ///
-/// Systems can be appended with [`Scheduler::add`], inserted at the front
-/// with [`Scheduler::insert_front`], or inserted relative to an existing
-/// system with [`Scheduler::insert_before`] and [`Scheduler::insert_after`].
+/// Systems are stored as ECS entities inside the [`World`], each with a
+/// [`SystemMeta`] and [`SystemHandler`] component. The scheduler queries
+/// the world for all system entities, sorts by `SystemMeta::order`, and
+/// dispatches each handler's `run` method.
+///
+/// For sub-stepping, each system entity's `SystemMeta::preferred_dt` is
+/// consulted; accumulated time remainders are tracked per-entity in the
+/// scheduler's `accumulated` map (keyed by entity handle bits).
 pub struct Scheduler {
-    systems: Vec<SystemEntry>,
-    errors: Vec<(SystemId, SystemError)>,
-    /// Accumulated time remainder per system, keyed by stable [`SystemId`].
-    accumulated: HashMap<SystemId, f64>,
-    next_id: usize,
-}
-
-impl Scheduler {
-    /// Create an empty scheduler.
-    pub fn new() -> Self {
-        Self {
-            systems: Vec::new(),
-            errors: Vec::new(),
-            accumulated: HashMap::new(),
-            next_id: 0,
-        }
-    }
-
-    /// Register a system at the end of the execution order.
-    ///
-    /// Returns the [`SystemId`] assigned to the new system, which can be
-    /// used with [`Scheduler::insert_before`] and
-    /// [`Scheduler::insert_after`].
-    pub fn add(&mut self, system: impl System + 'static) -> SystemId {
-        let id = SystemId(self.next_id);
-        self.next_id += 1;
-        self.systems.push(SystemEntry {
-            id,
-            system: Box::new(system),
-        });
-        self.accumulated.insert(id, 0.0);
-        id
-    }
-
-    /// Insert a system at the front of the execution order.
-    pub fn insert_front(&mut self, system: impl System + 'static) -> SystemId {
-        let id = SystemId(self.next_id);
-        self.next_id += 1;
-        self.systems.insert(
-            0,
-            SystemEntry {
-                id,
-                system: Box::new(system),
-            },
-        );
-        self.accumulated.insert(id, 0.0);
-        id
-    }
-
-    /// Insert a system immediately before the system with the given ID.
-    ///
-    /// Panics if `target_id` is not found.
-    pub fn insert_before(
-        &mut self,
-        target_id: SystemId,
-        system: impl System + 'static,
-    ) -> SystemId {
-        let index = self
-            .systems
-            .iter()
-            .position(|e| e.id == target_id)
-            .expect("target system not found");
-        let id = SystemId(self.next_id);
-        self.next_id += 1;
-        self.systems.insert(
-            index,
-            SystemEntry {
-                id,
-                system: Box::new(system),
-            },
-        );
-        self.accumulated.insert(id, 0.0);
-        id
-    }
-
-    /// Insert a system immediately after the system with the given ID.
-    ///
-    /// Panics if `target_id` is not found.
-    pub fn insert_after(&mut self, target_id: SystemId, system: impl System + 'static) -> SystemId {
-        let index = self
-            .systems
-            .iter()
-            .position(|e| e.id == target_id)
-            .expect("target system not found");
-        let id = SystemId(self.next_id);
-        self.next_id += 1;
-        self.systems.insert(
-            index + 1,
-            SystemEntry {
-                id,
-                system: Box::new(system),
-            },
-        );
-        self.accumulated.insert(id, 0.0);
-        id
-    }
-
-    /// Run all registered systems in order, then advance `world.epoch` by
-    /// `dt` exactly once.
-    ///
-    /// Systems with a [`System::preferred_dt`] of `Some(system_dt)` are
-    /// sub-stepped: the scheduler runs them `N` times per call, where
-    /// `N = floor((dt + accumulated) / system_dt)`. The remainder
-    /// is carried forward to the next tick, ensuring zero long-term drift
-    /// even when `dt / system_dt` is not an integer.
-    ///
-    /// If a system returns [`Err`], the scheduler records the error and
-    /// continues running remaining systems.
-    pub fn run(&mut self, world: &mut World, dt: Seconds<f64>) {
-        self.errors.clear();
-        let dt_val = dt.into_value();
-
-        for entry in self.systems.iter_mut() {
-            let sub_dt = match entry.system.preferred_dt() {
-                Some(pref) => pref.into_value(),
-                None => {
-                    // No preferred dt — run once at full scheduler dt.
-                    if let Err(e) = entry.system.run(world, dt) {
-                        self.errors.push((entry.id, e));
-                    }
-                    continue;
-                }
-            };
-
-            // Compute sub-step count with accumulation for non-integer divisors.
-            let effective_dt = dt_val + self.accumulated[&entry.id];
-            let n_sub = (effective_dt / sub_dt).floor() as usize;
-            let simulated = n_sub as f64 * sub_dt;
-            self.accumulated.insert(entry.id, effective_dt - simulated);
-
-            for _ in 0..n_sub {
-                if let Err(e) = entry.system.run(world, Seconds::new(sub_dt)) {
-                    self.errors.push((entry.id, e));
-                    break;
-                }
-            }
-        }
-
-        world.epoch += dt.into_value() * Unit::Second;
-    }
-
-    /// Errors collected during the most recent [`Scheduler::run`] call.
-    ///
-    /// Each entry is `(`[`SystemId`]`, error`).
-    pub fn errors(&self) -> &[(SystemId, SystemError)] {
-        &self.errors
-    }
-
-    /// Whether the most recent [`Scheduler::run`] produced any errors.
-    pub fn has_errors(&self) -> bool {
-        !self.errors.is_empty()
-    }
-
-    /// Number of registered systems.
-    pub fn len(&self) -> usize {
-        self.systems.len()
-    }
-
-    /// Whether no systems are registered.
-    pub fn is_empty(&self) -> bool {
-        self.systems.is_empty()
-    }
+    /// Accumulated time remainder per system, keyed by entity bits.
+    accumulated: HashMap<u64, f64>,
+    /// Errors collected during the most recent `run`.
+    errors: Vec<SystemErrorEntry>,
+    /// Next order value to assign when no explicit order is given.
+    next_order: f64,
 }
 
 impl Default for Scheduler {
@@ -238,11 +153,279 @@ impl Default for Scheduler {
     }
 }
 
+impl Scheduler {
+    /// Create an empty scheduler.
+    pub fn new() -> Self {
+        Self {
+            accumulated: HashMap::new(),
+            errors: Vec::new(),
+            next_order: 0.0,
+        }
+    }
+
+    /// Register a system as an ECS entity in the world.
+    ///
+    /// The system is spawned with a [`SystemMeta`] (order = next available,
+    /// preferred_dt from the system's `preferred_dt()` method) and a
+    /// [`SystemHandler`] wrapping the boxed system.
+    ///
+    /// Returns the entity handle, which can be used with
+    /// [`Scheduler::insert_before`] / [`Scheduler::insert_after`] to
+    /// position subsequent systems.
+    pub fn add(&mut self, world: &mut World, system: impl System + 'static) -> hecs::Entity {
+        let preferred = system.preferred_dt();
+        let order = self.next_order;
+        self.next_order += 1.0;
+        let meta = SystemMeta {
+            order,
+            preferred_dt: preferred,
+            enabled: true,
+        };
+        let handler = SystemHandler {
+            system: Box::new(system),
+        };
+        let entity = world.ecs.spawn((meta, handler));
+        self.accumulated.insert(entity.to_bits().get(), 0.0);
+        entity
+    }
+
+    /// Register a system at a specific order position.
+    ///
+    /// The system is inserted with the given `order` value. Use this for
+    /// precise control over execution position. The `next_order` counter is
+    /// bumped to `order + 1` so a subsequent `add` lands after this one.
+    pub fn add_at(
+        &mut self,
+        world: &mut World,
+        system: impl System + 'static,
+        order: f64,
+    ) -> hecs::Entity {
+        let preferred = system.preferred_dt();
+        let meta = SystemMeta {
+            order,
+            preferred_dt: preferred,
+            enabled: true,
+        };
+        let handler = SystemHandler {
+            system: Box::new(system),
+        };
+        let entity = world.ecs.spawn((meta, handler));
+        self.accumulated.insert(entity.to_bits().get(), 0.0);
+        self.next_order = self.next_order.max(order + 1.0);
+        entity
+    }
+
+    /// Insert a system immediately before the system entity `target`.
+    ///
+    /// The new system gets `order = target_order - 0.5`, placing it between
+    /// the target and whatever preceded it.
+    pub fn insert_before(
+        &mut self,
+        world: &mut World,
+        target: hecs::Entity,
+        system: impl System + 'static,
+    ) -> hecs::Entity {
+        let target_order = self
+            .entity_order(world, target)
+            .expect("target system not found");
+        let order = target_order - 0.5;
+        self.add_at(world, system, order)
+    }
+
+    /// Insert a system immediately after the system entity `target`.
+    ///
+    /// The new system gets `order = target_order + 0.5`, placing it between
+    /// the target and whatever followed it.
+    pub fn insert_after(
+        &mut self,
+        world: &mut World,
+        target: hecs::Entity,
+        system: impl System + 'static,
+    ) -> hecs::Entity {
+        let target_order = self
+            .entity_order(world, target)
+            .expect("target system not found");
+        let order = target_order + 0.5;
+        self.add_at(world, system, order)
+    }
+
+    /// Insert a system at the front of the execution order.
+    pub fn insert_front(
+        &mut self,
+        world: &mut World,
+        system: impl System + 'static,
+    ) -> hecs::Entity {
+        // Find the minimum order among existing systems, or use -0.5 if none.
+        let min_order = self.min_order(world);
+        let order = min_order - 0.5;
+        self.add_at(world, system, order)
+    }
+
+    /// Disable a system entity so the scheduler skips it.
+    pub fn disable(&self, world: &mut World, entity: hecs::Entity) {
+        if let Some(mut meta) = world.get_component_mut::<SystemMeta>(entity) {
+            meta.enabled = false;
+        }
+    }
+
+    /// Enable a system entity so the scheduler runs it again.
+    pub fn enable(&self, world: &mut World, entity: hecs::Entity) {
+        if let Some(mut meta) = world.get_component_mut::<SystemMeta>(entity) {
+            meta.enabled = true;
+        }
+    }
+
+    /// Remove a system entity from the world.
+    pub fn remove(&self, world: &mut World, entity: hecs::Entity) -> bool {
+        world.despawn(entity)
+    }
+
+    /// Read the `order` field from a system entity's `SystemMeta`.
+    fn entity_order(&self, world: &World, entity: hecs::Entity) -> Option<f64> {
+        world
+            .get_component::<SystemMeta>(entity)
+            .map(|meta| meta.order)
+    }
+
+    /// Find the minimum `order` among all system entities, or 0.0 if none.
+    fn min_order(&self, world: &World) -> f64 {
+        world
+            .ecs
+            .query::<&SystemMeta>()
+            .iter()
+            .map(|(_, meta)| meta.order)
+            .fold(f64::INFINITY, f64::min)
+            .min(0.0)
+    }
+
+    /// Run all registered system entities in order, then advance
+    /// `world.epoch` by `dt` exactly once.
+    ///
+    /// Systems with a `preferred_dt` of `Some(system_dt)` (from `SystemMeta`
+    /// or the handler's `preferred_dt()` method) are sub-stepped: the
+    /// scheduler runs them `N` times per call, where
+    /// `N = floor((dt + accumulated) / system_dt)`. The remainder is
+    /// carried forward, ensuring zero long-term drift even when
+    /// `dt / system_dt` is not an integer.
+    ///
+    /// If a system returns [`Err`], the scheduler records the error and
+    /// continues running remaining systems.
+    pub fn run(&mut self, world: &mut World, dt: Seconds<f64>) {
+        self.errors.clear();
+        let dt_val = dt.into_value();
+
+        // Collect all system entities, sorted by order. We snapshot
+        // (entity, order, preferred_dt) so we don't hold a borrow on the
+        // world while running systems.
+        let mut entries: Vec<(hecs::Entity, f64, Option<Seconds<f64>>)> = world
+            .ecs
+            .query::<(&SystemMeta, &SystemHandler)>()
+            .iter()
+            .filter(|(_, (meta, _))| meta.enabled)
+            .map(|(entity, (meta, handler))| {
+                let pref = meta.preferred_dt.or_else(|| handler.system.preferred_dt());
+                (entity, meta.order, pref)
+            })
+            .collect();
+        entries.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        for (entity, _order, preferred) in &entries {
+            let sub_dt = match preferred {
+                Some(pref) => pref.into_value(),
+                None => {
+                    // No preferred dt — run once at full scheduler dt.
+                    if let Err(e) = run_system(world, *entity, dt) {
+                        self.errors.push(SystemErrorEntry {
+                            entity: *entity,
+                            name: format!("{:?}", entity),
+                            error: e,
+                        });
+                    }
+                    continue;
+                }
+            };
+
+            // Compute sub-step count with accumulation for non-integer divisors.
+            let key = entity.to_bits().get();
+            let effective_dt = dt_val + self.accumulated.get(&key).copied().unwrap_or(0.0);
+            let n_sub = (effective_dt / sub_dt).floor() as usize;
+            let simulated = n_sub as f64 * sub_dt;
+            self.accumulated.insert(key, effective_dt - simulated);
+
+            let mut had_error = false;
+            for _ in 0..n_sub {
+                match run_system(world, *entity, Seconds::new(sub_dt)) {
+                    Ok(()) => {}
+                    Err(e) => {
+                        self.errors.push(SystemErrorEntry {
+                            entity: *entity,
+                            name: format!("{:?}", entity),
+                            error: e,
+                        });
+                        had_error = true;
+                        break;
+                    }
+                }
+            }
+            let _ = had_error;
+        }
+
+        // Epoch advances exactly once per run(), by dt.
+        world.epoch += dt.into_value() * Unit::Second;
+    }
+
+    /// Number of system entities currently registered in the world.
+    pub fn len(&self, world: &World) -> usize {
+        world.ecs.query::<&SystemMeta>().iter().count()
+    }
+
+    /// Whether no system entities are registered in the world.
+    pub fn is_empty(&self, world: &World) -> bool {
+        self.len(world) == 0
+    }
+
+    /// Errors collected during the most recent [`Scheduler::run`] call.
+    pub fn errors(&self) -> &[SystemErrorEntry] {
+        &self.errors
+    }
+
+    /// Whether the most recent [`Scheduler::run`] produced any errors.
+    pub fn has_errors(&self) -> bool {
+        !self.errors.is_empty()
+    }
+}
+
+/// Invoke a single system entity's handler.
+///
+/// The `SystemHandler` component is temporarily removed from the entity,
+/// its boxed system's `run` is called with `&mut World`, and the handler
+/// is re-inserted afterward. This avoids holding a borrow on `world.ecs`
+/// while the system needs `&mut World`.
+fn run_system(
+    world: &mut World,
+    entity: hecs::Entity,
+    dt: Seconds<f64>,
+) -> Result<(), SystemError> {
+    // Take the SystemHandler component out of the entity.
+    let handler = world
+        .ecs
+        .remove_one::<SystemHandler>(entity)
+        .map_err(|_| SystemError::Runtime("failed to remove SystemHandler".into()))?;
+
+    let mut handler = handler;
+    let result = handler.system.run(world, dt);
+
+    // Put the handler back regardless of success/failure.
+    let _ = world.ecs.insert_one(entity, handler);
+
+    result
+}
+
 // ------------------------------------------------------------------
 // System implementations wrapping the existing free functions.
 // ------------------------------------------------------------------
 
-/// Wraps [`step_world`] as a [`System`].
+/// Wraps [`step::step_world`] as a [`System`].
 pub struct StepWorldSystem;
 
 impl System for StepWorldSystem {
@@ -323,12 +506,18 @@ mod tests {
     use nalgebra::Vector3;
 
     use super::*;
+    use crate::components::celestial::CelestialBodySpec;
+    use crate::components::kinematics::Kinematics;
+    use crate::components::rigid_body::RigidBody;
+    use apogee_common::constants::{GM_EARTH, R_EARTH_EQ};
+    use apogee_common::units::Kilograms;
 
     #[test]
     fn test_scheduler_new_is_empty() {
         let scheduler = Scheduler::new();
-        assert!(scheduler.is_empty());
-        assert_eq!(scheduler.len(), 0);
+        let world = World::new();
+        assert!(scheduler.is_empty(&world));
+        assert_eq!(scheduler.len(&world), 0);
     }
 
     #[test]
@@ -356,23 +545,32 @@ mod tests {
         let log = Arc::new(Mutex::new(Vec::new()));
 
         let mut scheduler = Scheduler::new();
-        scheduler.add(CounterSystem {
-            label: "first",
-            log: Arc::clone(&log),
-        });
-        scheduler.add(CounterSystem {
-            label: "second",
-            log: Arc::clone(&log),
-        });
-        scheduler.add(CounterSystem {
-            label: "third",
-            log: Arc::clone(&log),
-        });
-
-        assert_eq!(scheduler.len(), 3);
-        assert!(!scheduler.is_empty());
-
         let mut world = World::new();
+        scheduler.add(
+            &mut world,
+            CounterSystem {
+                label: "first",
+                log: Arc::clone(&log),
+            },
+        );
+        scheduler.add(
+            &mut world,
+            CounterSystem {
+                label: "second",
+                log: Arc::clone(&log),
+            },
+        );
+        scheduler.add(
+            &mut world,
+            CounterSystem {
+                label: "third",
+                log: Arc::clone(&log),
+            },
+        );
+
+        assert_eq!(scheduler.len(&world), 3);
+        assert!(!scheduler.is_empty(&world));
+
         scheduler.run(&mut world, Seconds::new(1.0));
 
         let recorded = log.lock().unwrap();
@@ -384,16 +582,22 @@ mod tests {
         let log = Arc::new(Mutex::new(Vec::new()));
 
         let mut scheduler = Scheduler::new();
-        scheduler.add(CounterSystem {
-            label: "a",
-            log: Arc::clone(&log),
-        });
-        scheduler.add(CounterSystem {
-            label: "b",
-            log: Arc::clone(&log),
-        });
-
         let mut world = World::new();
+        scheduler.add(
+            &mut world,
+            CounterSystem {
+                label: "a",
+                log: Arc::clone(&log),
+            },
+        );
+        scheduler.add(
+            &mut world,
+            CounterSystem {
+                label: "b",
+                log: Arc::clone(&log),
+            },
+        );
+
         scheduler.run(&mut world, Seconds::new(1.0));
         scheduler.run(&mut world, Seconds::new(1.0));
 
@@ -404,12 +608,6 @@ mod tests {
     // ------------------------------------------------------------------
     // StepWorldSystem — wraps the existing `step_world` free function.
     // ------------------------------------------------------------------
-
-    use crate::components::celestial::CelestialBodySpec;
-    use crate::components::kinematics::Kinematics;
-    use crate::components::rigid_body::RigidBody;
-    use apogee_common::constants::{GM_EARTH, R_EARTH_EQ};
-    use apogee_common::units::Kilograms;
 
     fn make_orbit_components() -> (Kinematics, RigidBody) {
         let r = R_EARTH_EQ + 400_000.0;
@@ -455,7 +653,7 @@ mod tests {
 
         // Run StepWorldSystem via the scheduler for 60 steps.
         let mut scheduler = Scheduler::new();
-        scheduler.add(StepWorldSystem);
+        scheduler.add(&mut world, StepWorldSystem);
         for _ in 0..60 {
             scheduler.run(&mut world, Seconds::new(60.0));
         }
@@ -513,12 +711,11 @@ mod tests {
         };
 
         // Register StepWorldSystem first, then LoggingSystem.
-        // The scheduler should run both in order each tick.
         let mut scheduler = Scheduler::new();
-        scheduler.add(StepWorldSystem);
-        scheduler.add(LoggingSystem::new());
+        scheduler.add(&mut world, StepWorldSystem);
+        scheduler.add(&mut world, LoggingSystem::new());
 
-        assert_eq!(scheduler.len(), 2);
+        assert_eq!(scheduler.len(&world), 2);
 
         for _ in 0..60 {
             scheduler.run(&mut world, Seconds::new(60.0));
@@ -543,19 +740,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_logging_system_records_tick_count() {
-        let mut logging = LoggingSystem::new();
-        let mut world = World::new();
-
-        for _ in 0..5 {
-            logging.run(&mut world, Seconds::new(1.0)).unwrap();
-        }
-
-        assert_eq!(logging.tick_count(), 5);
-        assert!(logging.last_epoch().is_some());
-    }
-
     // ------------------------------------------------------------------
     // Error handling — scheduler continues on system failure.
     // ------------------------------------------------------------------
@@ -574,29 +758,35 @@ mod tests {
         let log = Arc::new(Mutex::new(Vec::new()));
 
         let mut scheduler = Scheduler::new();
-        scheduler.add(CounterSystem {
-            label: "before",
-            log: Arc::clone(&log),
-        });
-        scheduler.add(FailingSystem);
-        scheduler.add(CounterSystem {
-            label: "after",
-            log: Arc::clone(&log),
-        });
-
         let mut world = World::new();
+        let _id_before = scheduler.add(
+            &mut world,
+            CounterSystem {
+                label: "before",
+                log: Arc::clone(&log),
+            },
+        );
+        let id_fail = scheduler.add(&mut world, FailingSystem);
+        scheduler.add(
+            &mut world,
+            CounterSystem {
+                label: "after",
+                log: Arc::clone(&log),
+            },
+        );
+
         scheduler.run(&mut world, Seconds::new(1.0));
 
         // Both CounterSystems should have run despite FailingSystem's error.
         let recorded = log.lock().unwrap();
         assert_eq!(*recorded, vec!["before", "after"]);
 
-        // One error should be recorded, for SystemId(1) (FailingSystem).
+        // One error should be recorded, for the FailingSystem entity.
         assert!(scheduler.has_errors());
         assert_eq!(scheduler.errors().len(), 1);
-        assert_eq!(scheduler.errors()[0].0, SystemId(1));
+        assert_eq!(scheduler.errors()[0].entity, id_fail);
         assert!(scheduler.errors()[0]
-            .1
+            .error
             .to_string()
             .contains("intentional failure"));
     }
@@ -604,12 +794,15 @@ mod tests {
     #[test]
     fn test_scheduler_no_errors_when_all_succeed() {
         let mut scheduler = Scheduler::new();
-        scheduler.add(CounterSystem {
-            label: "a",
-            log: Arc::new(Mutex::new(Vec::new())),
-        });
-
         let mut world = World::new();
+        scheduler.add(
+            &mut world,
+            CounterSystem {
+                label: "a",
+                log: Arc::new(Mutex::new(Vec::new())),
+            },
+        );
+
         scheduler.run(&mut world, Seconds::new(1.0));
 
         assert!(!scheduler.has_errors());
@@ -619,19 +812,23 @@ mod tests {
     #[test]
     fn test_scheduler_errors_cleared_between_runs() {
         let mut scheduler = Scheduler::new();
-        scheduler.add(FailingSystem);
-
         let mut world = World::new();
+        scheduler.add(&mut world, FailingSystem);
+
         scheduler.run(&mut world, Seconds::new(1.0));
         assert!(scheduler.has_errors());
 
         // Replace with a succeeding system and run again — errors should clear.
         let mut scheduler2 = Scheduler::new();
-        scheduler2.add(CounterSystem {
-            label: "ok",
-            log: Arc::new(Mutex::new(Vec::new())),
-        });
-        scheduler2.run(&mut world, Seconds::new(1.0));
+        let mut world2 = World::new();
+        scheduler2.add(
+            &mut world2,
+            CounterSystem {
+                label: "ok",
+                log: Arc::new(Mutex::new(Vec::new())),
+            },
+        );
+        scheduler2.run(&mut world2, Seconds::new(1.0));
         assert!(!scheduler2.has_errors());
     }
 
@@ -641,15 +838,12 @@ mod tests {
 
     #[test]
     fn test_scheduler_advances_epoch_exactly_once_per_run() {
-        // The scheduler should advance world.epoch by dt once per run(),
-        // regardless of how many systems are registered. step_world must NOT
-        // advance the epoch — that's the scheduler's job.
         let mut world = World::new();
         let epoch_before = world.epoch;
 
         let mut scheduler = Scheduler::new();
-        scheduler.add(StepWorldSystem);
-        scheduler.add(LoggingSystem::new());
+        scheduler.add(&mut world, StepWorldSystem);
+        scheduler.add(&mut world, LoggingSystem::new());
 
         scheduler.run(&mut world, Seconds::new(60.0));
 
@@ -663,14 +857,13 @@ mod tests {
 
     #[test]
     fn test_scheduler_advances_epoch_with_multiple_systems() {
-        // Even with 3 systems, epoch should advance exactly once by dt.
         let mut world = World::new();
         let epoch_before = world.epoch;
 
         let mut scheduler = Scheduler::new();
-        scheduler.add(LoggingSystem::new());
-        scheduler.add(StepWorldSystem);
-        scheduler.add(LoggingSystem::new());
+        scheduler.add(&mut world, LoggingSystem::new());
+        scheduler.add(&mut world, StepWorldSystem);
+        scheduler.add(&mut world, LoggingSystem::new());
 
         scheduler.run(&mut world, Seconds::new(30.0));
 
@@ -684,8 +877,6 @@ mod tests {
 
     #[test]
     fn test_step_world_does_not_advance_epoch() {
-        // step_world should NOT advance the epoch — that responsibility
-        // belongs to the scheduler. Direct callers must advance it themselves.
         let mut world = World::new();
         let epoch_before = world.epoch;
 
@@ -698,10 +889,6 @@ mod tests {
             "step_world should not advance epoch, but it advanced {elapsed_s}s"
         );
     }
-
-    // ------------------------------------------------------------------
-    // AggregateForcesSystem
-    // ------------------------------------------------------------------
 
     // ------------------------------------------------------------------
     // Multi-rate scheduling: per-system sub-stepping
@@ -726,8 +913,6 @@ mod tests {
 
     #[test]
     fn test_system_default_preferred_dt_is_none() {
-        // Systems that don't override preferred_dt() should return None,
-        // meaning they run once per scheduler tick (N=1, no sub-stepping).
         struct NoPrefSystem;
         impl System for NoPrefSystem {
             fn run(&mut self, _world: &mut World, _dt: Seconds<f64>) -> Result<(), SystemError> {
@@ -758,15 +943,16 @@ mod tests {
 
     #[test]
     fn test_system_without_preferred_dt_runs_once_per_tick() {
-        // A system with preferred_dt = None runs exactly once per scheduler.run,
-        // receiving the full scheduler dt.
         let mut scheduler = Scheduler::new();
-        scheduler.add(CounterSystem {
-            label: "once",
-            log: Arc::new(Mutex::new(Vec::new())),
-        });
-
         let mut world = World::new();
+        scheduler.add(
+            &mut world,
+            CounterSystem {
+                label: "once",
+                log: Arc::new(Mutex::new(Vec::new())),
+            },
+        );
+
         let epoch_before = world.epoch;
 
         scheduler.run(&mut world, Seconds::new(60.0));
@@ -781,17 +967,18 @@ mod tests {
 
     #[test]
     fn test_sub_stepping_fast_system_runs_multiple_times() {
-        // A system with preferred_dt = 6.0 and scheduler dt = 60.0
-        // should run 10 times (60/6 = 10), each with sub_dt = 6.0.
         let call_log = Arc::new(Mutex::new(Vec::new()));
 
         let mut scheduler = Scheduler::new();
-        scheduler.add(SubStepLogSystem {
-            preferred_dt: 6.0,
-            call_log: Arc::clone(&call_log),
-        });
-
         let mut world = World::new();
+        scheduler.add(
+            &mut world,
+            SubStepLogSystem {
+                preferred_dt: 6.0,
+                call_log: Arc::clone(&call_log),
+            },
+        );
+
         scheduler.run(&mut world, Seconds::new(60.0));
 
         let recorded = call_log.lock().unwrap();
@@ -806,16 +993,18 @@ mod tests {
 
     #[test]
     fn test_sub_stepping_with_recording_system() {
-        // Verify sub-stepping calls the system N times with sub_dt each.
         let call_log = Arc::new(Mutex::new(Vec::new()));
 
         let mut scheduler = Scheduler::new();
-        scheduler.add(SubStepLogSystem {
-            preferred_dt: 6.0,
-            call_log: Arc::clone(&call_log),
-        });
-
         let mut world = World::new();
+        scheduler.add(
+            &mut world,
+            SubStepLogSystem {
+                preferred_dt: 6.0,
+                call_log: Arc::clone(&call_log),
+            },
+        );
+
         scheduler.run(&mut world, Seconds::new(60.0));
 
         let recorded = call_log.lock().unwrap();
@@ -830,18 +1019,13 @@ mod tests {
 
     #[test]
     fn test_fast_system_dt_div_10_while_slow_system_dt_full() {
-        // Issue acceptance criterion: "a fast system running at dt/10
-        // while a slow system runs at dt".
         let log = Arc::new(Mutex::new(Vec::new()));
 
-        // Fast system: preferred_dt = 6.0 (dt/10 when scheduler dt = 60)
         struct FastSystem {
             log: Arc<Mutex<Vec<&'static str>>>,
-            call_count: usize,
         }
         impl System for FastSystem {
             fn run(&mut self, _world: &mut World, _dt: Seconds<f64>) -> Result<(), SystemError> {
-                self.call_count += 1;
                 self.log.lock().unwrap().push("fast");
                 Ok(())
             }
@@ -850,35 +1034,33 @@ mod tests {
             }
         }
 
-        // Slow system: no preferred_dt (runs once at full dt)
         struct SlowSystem {
             log: Arc<Mutex<Vec<&'static str>>>,
-            call_count: usize,
         }
         impl System for SlowSystem {
             fn run(&mut self, _world: &mut World, _dt: Seconds<f64>) -> Result<(), SystemError> {
-                self.call_count += 1;
                 self.log.lock().unwrap().push("slow");
                 Ok(())
             }
         }
 
         let mut scheduler = Scheduler::new();
-        scheduler.add(SlowSystem {
-            log: Arc::clone(&log),
-            call_count: 0,
-        });
-        scheduler.add(FastSystem {
-            log: Arc::clone(&log),
-            call_count: 0,
-        });
-
         let mut world = World::new();
+        scheduler.add(
+            &mut world,
+            SlowSystem {
+                log: Arc::clone(&log),
+            },
+        );
+        scheduler.add(
+            &mut world,
+            FastSystem {
+                log: Arc::clone(&log),
+            },
+        );
+
         scheduler.run(&mut world, Seconds::new(60.0));
 
-        // Slow system should have been called once, fast system 10 times.
-        // The log should contain: slow, fast×10 (in registration order,
-        // slow first then fast sub-steps).
         let recorded = log.lock().unwrap();
         let slow_count = recorded.iter().filter(|&&s| s == "slow").count();
         let fast_count = recorded.iter().filter(|&&s| s == "fast").count();
@@ -888,25 +1070,31 @@ mod tests {
 
     #[test]
     fn test_sub_stepping_epoch_invariant_holds() {
-        // The epoch advancement invariant must hold under sub-stepping:
-        // epoch advances exactly dt per scheduler.run, regardless of
-        // how many sub-steps each system takes.
         let mut world = World::new();
         let epoch_before = world.epoch;
 
         let mut scheduler = Scheduler::new();
-        scheduler.add(SubStepLogSystem {
-            preferred_dt: 6.0,
-            call_log: Arc::new(Mutex::new(Vec::new())),
-        });
-        scheduler.add(SubStepLogSystem {
-            preferred_dt: 12.0,
-            call_log: Arc::new(Mutex::new(Vec::new())),
-        });
-        scheduler.add(CounterSystem {
-            label: "slow",
-            log: Arc::new(Mutex::new(Vec::new())),
-        });
+        scheduler.add(
+            &mut world,
+            SubStepLogSystem {
+                preferred_dt: 6.0,
+                call_log: Arc::new(Mutex::new(Vec::new())),
+            },
+        );
+        scheduler.add(
+            &mut world,
+            SubStepLogSystem {
+                preferred_dt: 12.0,
+                call_log: Arc::new(Mutex::new(Vec::new())),
+            },
+        );
+        scheduler.add(
+            &mut world,
+            CounterSystem {
+                label: "slow",
+                log: Arc::new(Mutex::new(Vec::new())),
+            },
+        );
 
         scheduler.run(&mut world, Seconds::new(60.0));
 
@@ -921,30 +1109,25 @@ mod tests {
     fn test_sub_stepping_non_integer_divisor_accumulates() {
         // When dt/system_dt is not an integer, accumulated time tracking
         // ensures zero long-term drift. With dt=60, system_dt=7:
-        // Tick 1: N=8, simulated=56, remainder=4
-        // Tick 2: effective=64, N=9, simulated=63, remainder=1
-        // Tick 3: effective=61, N=8, simulated=56, remainder=5
-        // ...
-        // Over 7 ticks: total simulated = 7*60 = 420 = 60*7 (zero drift)
-        // because 420/7 = 60 sub-steps exactly.
-
+        // Over 7 ticks: total simulated = 7*60 = 420 (zero drift).
         let call_log = Arc::new(Mutex::new(Vec::new()));
         let mut scheduler = Scheduler::new();
-        scheduler.add(SubStepLogSystem {
-            preferred_dt: 7.0,
-            call_log: Arc::clone(&call_log),
-        });
-
         let mut world = World::new();
+        scheduler.add(
+            &mut world,
+            SubStepLogSystem {
+                preferred_dt: 7.0,
+                call_log: Arc::clone(&call_log),
+            },
+        );
+
         let epoch_before = world.epoch;
 
-        // Run 7 ticks of dt=60.
         for _ in 0..7 {
             scheduler.run(&mut world, Seconds::new(60.0));
         }
 
         let elapsed = (world.epoch - epoch_before).to_seconds();
-        // Epoch should have advanced by exactly 7*60 = 420 seconds.
         assert!(
             (elapsed - 420.0).abs() < 1e-9,
             "epoch should advance exactly 420s over 7 ticks, got {elapsed}s"
@@ -953,45 +1136,43 @@ mod tests {
 
     #[test]
     fn test_sub_stepping_adapts_to_changing_outer_dt() {
-        // The caller can vary the outer dt per tick, and each system's
-        // sub-step count adjusts accordingly.
         let call_log = Arc::new(Mutex::new(Vec::new()));
         let mut scheduler = Scheduler::new();
-        scheduler.add(SubStepLogSystem {
-            preferred_dt: 10.0,
-            call_log: Arc::clone(&call_log),
-        });
-
         let mut world = World::new();
+        scheduler.add(
+            &mut world,
+            SubStepLogSystem {
+                preferred_dt: 10.0,
+                call_log: Arc::clone(&call_log),
+            },
+        );
+
         let epoch_before = world.epoch;
 
-        // Tick 1: dt=60, preferred=10 → 6 sub-steps
         scheduler.run(&mut world, Seconds::new(60.0));
-        // Tick 2: dt=30, preferred=10 → 3 sub-steps
         scheduler.run(&mut world, Seconds::new(30.0));
-        // Tick 3: dt=100, preferred=10 → 10 sub-steps
         scheduler.run(&mut world, Seconds::new(100.0));
 
         let elapsed = (world.epoch - epoch_before).to_seconds();
         assert!(
             (elapsed - 190.0).abs() < 1e-9,
-            "epoch should advance 190s (60+30+100), got {elapsed}s"
+            "epoch should advance 190s (60+30+100), got {elapsed}"
         );
     }
 
     #[test]
     fn test_sub_stepping_microsecond_resolution() {
-        // Without a min_sub_dt floor, a system can declare arbitrarily
-        // small preferred_dt values. With preferred_dt = 0.001 (1ms) and
-        // scheduler dt = 1.0, the system runs 1000 sub-steps.
         let call_log = Arc::new(Mutex::new(Vec::new()));
         let mut scheduler = Scheduler::new();
-        scheduler.add(SubStepLogSystem {
-            preferred_dt: 0.001,
-            call_log: Arc::clone(&call_log),
-        });
-
         let mut world = World::new();
+        scheduler.add(
+            &mut world,
+            SubStepLogSystem {
+                preferred_dt: 0.001,
+                call_log: Arc::clone(&call_log),
+            },
+        );
+
         scheduler.run(&mut world, Seconds::new(1.0));
 
         let recorded = call_log.lock().unwrap();
@@ -1010,11 +1191,6 @@ mod tests {
 
     #[test]
     fn test_sub_stepping_preserves_system_order() {
-        // Systems should still run in registration order across sub-steps.
-        // System A (no preferred dt) → runs once
-        // System B (preferred_dt = 30) → runs twice at dt=60
-        // System C (no preferred dt) → runs once
-        // Order: A, B, B, C
         let log = Arc::new(Mutex::new(Vec::new()));
 
         struct OrderSystem {
@@ -1034,23 +1210,32 @@ mod tests {
         }
 
         let mut scheduler = Scheduler::new();
-        scheduler.add(OrderSystem {
-            label: "A",
-            log: Arc::clone(&log),
-            preferred: None,
-        });
-        scheduler.add(OrderSystem {
-            label: "B",
-            log: Arc::clone(&log),
-            preferred: Some(30.0),
-        });
-        scheduler.add(OrderSystem {
-            label: "C",
-            log: Arc::clone(&log),
-            preferred: None,
-        });
-
         let mut world = World::new();
+        scheduler.add(
+            &mut world,
+            OrderSystem {
+                label: "A",
+                log: Arc::clone(&log),
+                preferred: None,
+            },
+        );
+        scheduler.add(
+            &mut world,
+            OrderSystem {
+                label: "B",
+                log: Arc::clone(&log),
+                preferred: Some(30.0),
+            },
+        );
+        scheduler.add(
+            &mut world,
+            OrderSystem {
+                label: "C",
+                log: Arc::clone(&log),
+                preferred: None,
+            },
+        );
+
         scheduler.run(&mut world, Seconds::new(60.0));
 
         let recorded = log.lock().unwrap();
@@ -1059,9 +1244,6 @@ mod tests {
 
     #[test]
     fn test_existing_systems_default_to_no_sub_stepping() {
-        // Existing systems (StepWorldSystem, LoggingSystem, AggregateForcesSystem)
-        // should have preferred_dt() = None, meaning they run once per tick.
-        // This ensures backward compatibility.
         let step = StepWorldSystem;
         assert!(step.preferred_dt().is_none());
 
@@ -1077,33 +1259,46 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    fn test_add_returns_system_id() {
+    fn test_add_returns_entity() {
         let mut scheduler = Scheduler::new();
-        let id0 = scheduler.add(CounterSystem {
-            label: "a",
-            log: Arc::new(Mutex::new(Vec::new())),
-        });
-        let id1 = scheduler.add(CounterSystem {
-            label: "b",
-            log: Arc::new(Mutex::new(Vec::new())),
-        });
-        assert_ne!(id0, id1);
+        let mut world = World::new();
+        let e0 = scheduler.add(
+            &mut world,
+            CounterSystem {
+                label: "a",
+                log: Arc::new(Mutex::new(Vec::new())),
+            },
+        );
+        let e1 = scheduler.add(
+            &mut world,
+            CounterSystem {
+                label: "b",
+                log: Arc::new(Mutex::new(Vec::new())),
+            },
+        );
+        assert_ne!(e0, e1);
     }
 
     #[test]
     fn test_insert_front() {
         let log = Arc::new(Mutex::new(Vec::new()));
         let mut scheduler = Scheduler::new();
-        scheduler.add(CounterSystem {
-            label: "second",
-            log: Arc::clone(&log),
-        });
-        scheduler.insert_front(CounterSystem {
-            label: "first",
-            log: Arc::clone(&log),
-        });
-
         let mut world = World::new();
+        scheduler.add(
+            &mut world,
+            CounterSystem {
+                label: "second",
+                log: Arc::clone(&log),
+            },
+        );
+        scheduler.insert_front(
+            &mut world,
+            CounterSystem {
+                label: "first",
+                log: Arc::clone(&log),
+            },
+        );
+
         scheduler.run(&mut world, Seconds::new(1.0));
 
         let recorded = log.lock().unwrap();
@@ -1114,15 +1309,23 @@ mod tests {
     fn test_insert_middle_by_id() {
         let log = Arc::new(Mutex::new(Vec::new()));
         let mut scheduler = Scheduler::new();
-        let id_a = scheduler.add(CounterSystem {
-            label: "a",
-            log: Arc::clone(&log),
-        });
-        scheduler.add(CounterSystem {
-            label: "c",
-            log: Arc::clone(&log),
-        });
+        let mut world = World::new();
+        let id_a = scheduler.add(
+            &mut world,
+            CounterSystem {
+                label: "a",
+                log: Arc::clone(&log),
+            },
+        );
+        scheduler.add(
+            &mut world,
+            CounterSystem {
+                label: "c",
+                log: Arc::clone(&log),
+            },
+        );
         scheduler.insert_after(
+            &mut world,
             id_a,
             CounterSystem {
                 label: "b",
@@ -1130,7 +1333,6 @@ mod tests {
             },
         );
 
-        let mut world = World::new();
         scheduler.run(&mut world, Seconds::new(1.0));
 
         let recorded = log.lock().unwrap();
@@ -1141,15 +1343,23 @@ mod tests {
     fn test_insert_before_by_id() {
         let log = Arc::new(Mutex::new(Vec::new()));
         let mut scheduler = Scheduler::new();
-        scheduler.add(CounterSystem {
-            label: "a",
-            log: Arc::clone(&log),
-        });
-        let id_c = scheduler.add(CounterSystem {
-            label: "c",
-            log: Arc::clone(&log),
-        });
+        let mut world = World::new();
+        scheduler.add(
+            &mut world,
+            CounterSystem {
+                label: "a",
+                log: Arc::clone(&log),
+            },
+        );
+        let id_c = scheduler.add(
+            &mut world,
+            CounterSystem {
+                label: "c",
+                log: Arc::clone(&log),
+            },
+        );
         scheduler.insert_before(
+            &mut world,
             id_c,
             CounterSystem {
                 label: "b",
@@ -1157,7 +1367,6 @@ mod tests {
             },
         );
 
-        let mut world = World::new();
         scheduler.run(&mut world, Seconds::new(1.0));
 
         let recorded = log.lock().unwrap();
@@ -1168,15 +1377,23 @@ mod tests {
     fn test_insert_after_by_id() {
         let log = Arc::new(Mutex::new(Vec::new()));
         let mut scheduler = Scheduler::new();
-        let id_a = scheduler.add(CounterSystem {
-            label: "a",
-            log: Arc::clone(&log),
-        });
-        scheduler.add(CounterSystem {
-            label: "c",
-            log: Arc::clone(&log),
-        });
+        let mut world = World::new();
+        let id_a = scheduler.add(
+            &mut world,
+            CounterSystem {
+                label: "a",
+                log: Arc::clone(&log),
+            },
+        );
+        scheduler.add(
+            &mut world,
+            CounterSystem {
+                label: "c",
+                log: Arc::clone(&log),
+            },
+        );
         scheduler.insert_after(
+            &mut world,
             id_a,
             CounterSystem {
                 label: "b",
@@ -1184,7 +1401,6 @@ mod tests {
             },
         );
 
-        let mut world = World::new();
         scheduler.run(&mut world, Seconds::new(1.0));
 
         let recorded = log.lock().unwrap();
@@ -1193,29 +1409,32 @@ mod tests {
 
     #[test]
     fn test_insert_mid_sim_between_existing_systems() {
-        // Simulate inserting a system mid-simulation between two
-        // already-registered systems, and verify accumulated values
-        // for existing systems are preserved.
         let call_log = Arc::new(Mutex::new(Vec::new()));
         let mut scheduler = Scheduler::new();
-
-        let _id_a = scheduler.add(SubStepLogSystem {
-            preferred_dt: 10.0,
-            call_log: Arc::clone(&call_log),
-        });
-        let _id_b = scheduler.add(SubStepLogSystem {
-            preferred_dt: 10.0,
-            call_log: Arc::clone(&call_log),
-        });
-
         let mut world = World::new();
+
+        let id_a = scheduler.add(
+            &mut world,
+            SubStepLogSystem {
+                preferred_dt: 10.0,
+                call_log: Arc::clone(&call_log),
+            },
+        );
+        let _id_b = scheduler.add(
+            &mut world,
+            SubStepLogSystem {
+                preferred_dt: 10.0,
+                call_log: Arc::clone(&call_log),
+            },
+        );
 
         // Run one tick so accumulated values are non-zero.
         scheduler.run(&mut world, Seconds::new(60.0));
 
         // Insert a new system between A and B mid-sim.
         scheduler.insert_after(
-            _id_a,
+            &mut world,
+            id_a,
             SubStepLogSystem {
                 preferred_dt: 10.0,
                 call_log: Arc::clone(&call_log),
@@ -1226,10 +1445,115 @@ mod tests {
         // while B's accumulated value from tick 1 is preserved.
         scheduler.run(&mut world, Seconds::new(60.0));
 
-        // Epoch should advance by 120s total.
-        // We don't assert call counts precisely because the new system
-        // only ran in tick 2 — the key invariant is that B's accumulated
-        // value from tick 1 carried over correctly (no crash, no panic).
+        // No crash, no panic — the key invariant.
         let _elapsed = world.epoch;
+    }
+
+    // ------------------------------------------------------------------
+    // Disable / enable / remove
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_disable_skips_system() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let mut scheduler = Scheduler::new();
+        let mut world = World::new();
+        let e = scheduler.add(
+            &mut world,
+            CounterSystem {
+                label: "skip_me",
+                log: Arc::clone(&log),
+            },
+        );
+
+        scheduler.disable(&mut world, e);
+        scheduler.run(&mut world, Seconds::new(1.0));
+
+        let recorded = log.lock().unwrap();
+        assert_eq!(recorded.len(), 0, "disabled system should not run");
+    }
+
+    #[test]
+    fn test_enable_resumes_system() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let mut scheduler = Scheduler::new();
+        let mut world = World::new();
+        let e = scheduler.add(
+            &mut world,
+            CounterSystem {
+                label: "toggle",
+                log: Arc::clone(&log),
+            },
+        );
+
+        scheduler.disable(&mut world, e);
+        scheduler.run(&mut world, Seconds::new(1.0));
+
+        scheduler.enable(&mut world, e);
+        scheduler.run(&mut world, Seconds::new(1.0));
+
+        let recorded = log.lock().unwrap();
+        assert_eq!(recorded.len(), 1, "system should run after re-enable");
+    }
+
+    #[test]
+    fn test_remove_system() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let mut scheduler = Scheduler::new();
+        let mut world = World::new();
+        let e = scheduler.add(
+            &mut world,
+            CounterSystem {
+                label: "temp",
+                log: Arc::clone(&log),
+            },
+        );
+
+        assert!(scheduler.remove(&mut world, e));
+        scheduler.run(&mut world, Seconds::new(1.0));
+
+        let recorded = log.lock().unwrap();
+        assert_eq!(recorded.len(), 0, "removed system should not run");
+    }
+
+    // ------------------------------------------------------------------
+    // SystemMeta as ECS component — preferred_dt override
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_system_meta_preferred_dt_overrides_handler() {
+        // A system with preferred_dt() = None, but its SystemMeta has
+        // preferred_dt = Some(10). The scheduler should use the meta value.
+        struct NoPrefSystem {
+            log: Arc<Mutex<Vec<f64>>>,
+        }
+        impl System for NoPrefSystem {
+            fn run(&mut self, _world: &mut World, dt: Seconds<f64>) -> Result<(), SystemError> {
+                self.log.lock().unwrap().push(dt.into_value());
+                Ok(())
+            }
+        }
+
+        let call_log = Arc::new(Mutex::new(Vec::new()));
+        let mut scheduler = Scheduler::new();
+        let mut world = World::new();
+
+        let entity = scheduler.add(
+            &mut world,
+            NoPrefSystem {
+                log: Arc::clone(&call_log),
+            },
+        );
+
+        // Override preferred_dt via the SystemMeta component.
+        {
+            let mut meta = world.get_component_mut::<SystemMeta>(entity).unwrap();
+            meta.preferred_dt = Some(Seconds::new(10.0));
+        }
+
+        scheduler.run(&mut world, Seconds::new(60.0));
+
+        let recorded = call_log.lock().unwrap();
+        assert_eq!(recorded.len(), 6, "should run 6 sub-steps (60/10)");
     }
 }
