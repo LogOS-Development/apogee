@@ -30,3 +30,7 @@ __pycache__/
 # uv.lock is regenerable from pyproject.toml; ignore the lockfile so
 # contributors don't accidentally diverge on resolved versions.
 uv.lock
+
+# Symbolic verification scripts (Z3, SymPy, Lean 4)
+# These are development-time design checks, not part of the codebase.
+verification/
