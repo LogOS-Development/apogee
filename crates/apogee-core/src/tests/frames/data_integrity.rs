@@ -101,3 +101,34 @@ fn test_fixture_space_weather_parses() {
     let entry = sw.at_date(2024, 1, 2).unwrap();
     assert!((entry.f107 - 152.0).abs() < 1e-9);
 }
+
+#[test]
+fn test_fixture_egm2008_truncated_loads() {
+    let path = fixtures_dir().join("egm2008_to70.gfc");
+    if !path.exists() {
+        return;
+    }
+    let model =
+        crate::gravity::SphericalHarmonics::load_egm2008(path.to_str().unwrap(), 70, 70).unwrap();
+    assert_eq!(model.degree, 70);
+    assert_eq!(model.order, 70);
+
+    // Known EGM2008 tide-free C_2,0.
+    assert!((model.c[2][0] - (-0.484165143790815e-03)).abs() < 1e-15);
+    // GM and radius from header.
+    assert!((model.gm - 0.3986004415e15).abs() < 1.0);
+    assert!((model.reference_radius - 0.63781363e7).abs() < 1e-3);
+}
+
+#[test]
+fn test_real_egm2008_loads() {
+    let path = data_dir().join("gravity").join("EGM2008_2190_TideFree.gfc");
+    if !path.exists() {
+        return;
+    }
+    let model =
+        crate::gravity::SphericalHarmonics::load_egm2008(path.to_str().unwrap(), 70, 70).unwrap();
+    assert_eq!(model.degree, 70);
+    assert!((model.c[2][0] - (-0.484165143790815e-03)).abs() < 1e-15);
+    assert!((model.gm - 0.3986004415e15).abs() < 1.0);
+}

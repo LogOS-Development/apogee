@@ -60,9 +60,16 @@ impl SphericalHarmonics {
     /// Load EGM2008 coefficients from a tide-free .gz, ICGEM .gfc,
     /// or plain text file.
     ///
-    /// Accepted line formats:
-    ///   degree order C S
-    ///   gfc degree order C S [sigma_C] [sigma_S]
+    /// Accepted coefficient line formats:
+    ///   `degree order C S`
+    ///   `gfc degree order C S [sigma_C] [sigma_S]`
+    ///
+    /// ICGEM `.gfc` files with a header section are handled automatically:
+    /// lines before `end_of_head` are scanned for `earth_gravity_constant`
+    /// and `radius` metadata, then skipped. Fortran double-precision
+    /// notation (`1.0d0`, `1.0d-03`) in coefficient values is converted
+    /// to standard `e` notation before parsing.
+    ///
     /// Lines outside the requested `degree`/`order` are ignored.
     pub fn load_egm2008(path: &str, degree: usize, order: usize) -> ApogeeResult<Self> {
         let file = std::fs::File::open(path)
@@ -75,17 +82,56 @@ impl SphericalHarmonics {
         };
 
         let mut model = Self::new(degree, order);
+        let mut past_header = false;
+
         for line in BufReader::new(reader).lines() {
             let line = line
                 .map_err(|e| ApogeeError::Gravity(format!("failed to read EGM2008 line: {e}")))?;
             let trimmed = line.trim();
+
             if trimmed.is_empty() || trimmed.starts_with('#') {
                 continue;
             }
+
+            // ICGEM .gfc header: scan for metadata, then skip until end_of_head.
+            if !past_header {
+                if trimmed.starts_with("end_of_head") {
+                    past_header = true;
+                    continue;
+                }
+                // Extract header metadata.
+                if let Some(val) = Self::parse_header_value(trimmed, "earth_gravity_constant") {
+                    if let Ok(gm) = parse_fortran_f64(val) {
+                        model.gm = gm;
+                    }
+                }
+                if let Some(val) = Self::parse_header_value(trimmed, "radius") {
+                    if let Ok(r) = parse_fortran_f64(val) {
+                        model.reference_radius = r;
+                    }
+                }
+                // If we haven't hit end_of_head, skip this line (it's header).
+                // But allow plain-format files (no header) to proceed: if the
+                // line looks like a coefficient line, process it.
+                let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                let is_coeff_line = if parts.len() >= 5 && parts[0].eq_ignore_ascii_case("gfc") {
+                    parts[1].parse::<usize>().is_ok()
+                } else if parts.len() >= 4 {
+                    parts[0].parse::<usize>().is_ok()
+                } else {
+                    false
+                };
+                if !is_coeff_line {
+                    continue;
+                }
+                // Falls through to coefficient parsing below.
+            }
+
             let parts: Vec<&str> = trimmed.split_whitespace().collect();
             if parts.len() < 4 {
                 continue;
             }
+
             // Allow both plain "degree order C S" and ICGEM "gfc degree order C S ...".
             let (n, m, c_nm, s_nm) = if parts.len() >= 5 && parts[0].eq_ignore_ascii_case("gfc") {
                 let n: usize = parts[1]
@@ -94,11 +140,9 @@ impl SphericalHarmonics {
                 let m: usize = parts[2]
                     .parse()
                     .map_err(|e| ApogeeError::Gravity(format!("invalid order: {e}")))?;
-                let c_nm: f64 = parts[3]
-                    .parse()
+                let c_nm: f64 = parse_fortran_f64(parts[3])
                     .map_err(|e| ApogeeError::Gravity(format!("invalid C coefficient: {e}")))?;
-                let s_nm: f64 = parts[4]
-                    .parse()
+                let s_nm: f64 = parse_fortran_f64(parts[4])
                     .map_err(|e| ApogeeError::Gravity(format!("invalid S coefficient: {e}")))?;
                 (n, m, c_nm, s_nm)
             } else {
@@ -108,11 +152,9 @@ impl SphericalHarmonics {
                 let m: usize = parts[1]
                     .parse()
                     .map_err(|e| ApogeeError::Gravity(format!("invalid order: {e}")))?;
-                let c_nm: f64 = parts[2]
-                    .parse()
+                let c_nm: f64 = parse_fortran_f64(parts[2])
                     .map_err(|e| ApogeeError::Gravity(format!("invalid C coefficient: {e}")))?;
-                let s_nm: f64 = parts[3]
-                    .parse()
+                let s_nm: f64 = parse_fortran_f64(parts[3])
                     .map_err(|e| ApogeeError::Gravity(format!("invalid S coefficient: {e}")))?;
                 (n, m, c_nm, s_nm)
             };
@@ -123,6 +165,20 @@ impl SphericalHarmonics {
             model.s[n][m] = s_nm;
         }
         Ok(model)
+    }
+
+    /// Extract the value portion of a `key value` header line from an ICGEM
+    /// `.gfc` file. Returns `None` if the line doesn't start with `key`.
+    fn parse_header_value<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix(key) {
+            let val = rest.trim_start();
+            // Value extends to the first whitespace.
+            let end = val.find(char::is_whitespace).unwrap_or(val.len());
+            Some(&val[..end])
+        } else {
+            None
+        }
     }
 
     /// Gravitational acceleration due to spherical harmonics at an inertial
@@ -234,6 +290,34 @@ impl SphericalHarmonics {
     }
 }
 
+/// Parse an f64 from a string that may use Fortran double-precision notation
+/// (`d0`, `d-03`, `d+05`) in addition to standard Rust notation (`e0`, `e-03`).
+///
+/// The Fortran `d` exponent marker is replaced with `e` before delegating to
+/// `f64::from_str`. This handles values like `1.0d0`, `-0.484...d-03`,
+/// `0.398...E+15`, and standard `1.5e-9`.
+fn parse_fortran_f64(s: &str) -> Result<f64, std::num::ParseFloatError> {
+    // Fast path: if there's no 'd' or 'D', parse directly.
+    if !s.contains(['d', 'D']) {
+        return s.parse::<f64>();
+    }
+    // Replace Fortran d/D exponent marker with e.
+    let fixed: String = s
+        .char_indices()
+        .map(|(i, c)| {
+            if c == 'd' || c == 'D' {
+                // Only replace if preceded by a digit (it's an exponent marker,
+                // not part of a hex string or identifier).
+                if i > 0 && s.as_bytes()[i - 1].is_ascii_digit() {
+                    return 'e';
+                }
+            }
+            c
+        })
+        .collect();
+    fixed.parse::<f64>()
+}
+
 /// sqrt(3), used by the normalized Legendre recurrence.
 const SQRT_3: f64 = 1.7320508075688772;
 
@@ -320,6 +404,7 @@ fn normalized_legendre(
 mod tests {
     use super::*;
     use approx::assert_relative_eq;
+    use std::path::PathBuf;
 
     /// Closed-form total gravity (central + J2 perturbation) using the
     /// unnormalized J2 value derived from the fully normalized EGM2008 C_2,0.
@@ -514,5 +599,169 @@ mod tests {
             per_call_us < 50.0,
             "degree-70 spherical harmonics took {per_call_us:.1} us per call, target < 50 us"
         );
+    }
+
+    // ---- ICGEM .gfc format tests ----
+
+    /// ICGEM .gfc file with a realistic header, `end_of_head` marker,
+    /// and Fortran `d0` scientific notation in coefficient values.
+    const SAMPLE_GFC: &str = "\
+product_type                gravity_field\n\
+modelname                   EGM2008\n\
+earth_gravity_constant      0.3986004415E+15\n\
+radius                      0.63781363E+07\n\
+max_degree                  2190\n\
+errors                      calibrated\n\
+norm                        fully_normalized\n\
+tide_system                 tide_free\n\
+\n\
+key     L    M             C                       S                    sigma C             sigma S\n\
+end_of_head ============================================================================================\n\
+gfc     0    0    1.0d0                    0.0d0                    0.0d0               0.0d0\n\
+gfc     2    0   -0.484165143790815e-03    0.000000000000000e+00    0.7481239490e-11    0.0000000000e-00\n\
+gfc     2    1   -0.206615509074176e-09    0.138441389137979e-08    0.7063781502e-11    0.7348347201e-11\n\
+gfc     2    2    0.243938357328313e-05   -0.140027370385934e-05    0.7230231722e-11    0.7425816951e-11\n\
+gfc     3    0    0.957161207093473e-06    0.000000000000000e+00    0.5731430751e-11    0.0000000000e-00\n\
+";
+
+    fn write_temp_gfc(content: &str, filename: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join("apogee_egm2008_gfc_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(filename);
+        std::fs::write(&path, content).unwrap();
+        path
+    }
+
+    #[test]
+    fn test_gfc_skips_header_and_parses_coefficients() {
+        let path = write_temp_gfc(SAMPLE_GFC, "sample.gfc");
+        let model = SphericalHarmonics::load_egm2008(path.to_str().unwrap(), 3, 3).unwrap();
+
+        // C_2,0 from the GFC file (note: differs slightly from the synthetic
+        // test value used elsewhere — this is the actual EGM2008 tide-free value).
+        assert_relative_eq!(model.c[2][0], -0.484165143790815e-03, epsilon = 1e-18);
+        assert_relative_eq!(model.s[2][1], 0.138441389137979e-08, epsilon = 1e-18);
+        assert_relative_eq!(model.c[2][2], 0.243938357328313e-05, epsilon = 1e-18);
+        assert_relative_eq!(model.s[2][2], -0.140027370385934e-05, epsilon = 1e-18);
+        assert_relative_eq!(model.c[3][0], 0.957161207093473e-06, epsilon = 1e-18);
+    }
+
+    #[test]
+    fn test_gfc_parses_fortran_d0_notation() {
+        // 1.0d0 should parse as 1.0; -0.484...d-03 should parse as -0.484...e-03.
+        let path = write_temp_gfc(SAMPLE_GFC, "fortran.gfc");
+        let model = SphericalHarmonics::load_egm2008(path.to_str().unwrap(), 2, 2).unwrap();
+
+        // The gfc 0 0 line has 1.0d0 — degree 0 is skipped in storage, but
+        // the parser must not choke on the d0 notation.
+        // Verify C_2,0 which uses e-03 notation (not d0) — but also test
+        // a pure d0 file.
+        assert_relative_eq!(model.c[2][0], -0.484165143790815e-03, epsilon = 1e-18);
+
+        // Pure Fortran d-notation file.
+        let fortran_content = "\
+end_of_head =====\n\
+gfc 2 0 -4.84165143790815d-04 0.0d0\n\
+gfc 2 1 -2.06615509074176d-10 1.38441389137979d-09\n\
+gfc 2 2 2.43938357328313d-06 -1.40027370385934d-06\n";
+        let path2 = write_temp_gfc(fortran_content, "pure_fortran.gfc");
+        let model2 = SphericalHarmonics::load_egm2008(path2.to_str().unwrap(), 2, 2).unwrap();
+        assert_relative_eq!(model2.c[2][0], -4.84165143790815e-04, epsilon = 1e-18);
+        assert_relative_eq!(model2.s[2][1], 1.38441389137979e-09, epsilon = 1e-18);
+        assert_relative_eq!(model2.c[2][2], 2.43938357328313e-06, epsilon = 1e-18);
+        assert_relative_eq!(model2.s[2][2], -1.40027370385934e-06, epsilon = 1e-18);
+    }
+
+    #[test]
+    fn test_gfc_extracts_header_metadata() {
+        let path = write_temp_gfc(SAMPLE_GFC, "metadata.gfc");
+        let model = SphericalHarmonics::load_egm2008(path.to_str().unwrap(), 2, 2).unwrap();
+
+        // GM and reference radius should be parsed from the header.
+        assert_relative_eq!(model.gm, 0.3986004415e15, epsilon = 1.0);
+        assert_relative_eq!(model.reference_radius, 0.63781363e7, epsilon = 1e-3);
+    }
+
+    #[test]
+    fn test_gfc_without_end_of_head_still_parses() {
+        // A plain-text file without a header section should still work
+        // (backward compatibility with the original synthetic format).
+        let content = "2 0 -4.84169317386951e-04 0.0\n\
+                       2 2 2.43926074800000e-06 -1.40027358800000e-06\n";
+        let path = write_temp_gfc(content, "plain.txt");
+        let model = SphericalHarmonics::load_egm2008(path.to_str().unwrap(), 2, 2).unwrap();
+        assert_relative_eq!(model.c[2][0], -4.84169317386951e-04, epsilon = 1e-15);
+        assert_relative_eq!(model.s[2][2], -1.400273588e-06, epsilon = 1e-15);
+    }
+
+    #[test]
+    fn test_truncated_fixture_loads_and_validates() {
+        // Load the vendored truncated fixture (degree 70) if present.
+        let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("egm2008_to70.gfc");
+        if !fixture_path.exists() {
+            // Fixture not generated yet; skip.
+            return;
+        }
+        let model =
+            SphericalHarmonics::load_egm2008(fixture_path.to_str().unwrap(), 70, 70).unwrap();
+        assert_eq!(model.degree, 70);
+        assert_eq!(model.order, 70);
+
+        // C_2,0 should match the known EGM2008 tide-free value.
+        assert_relative_eq!(model.c[2][0], -0.484165143790815e-03, epsilon = 1e-15);
+
+        // C_2,2 and S_2,2 should match known values.
+        assert_relative_eq!(model.c[2][2], 0.243938357328313e-05, epsilon = 1e-15);
+        assert_relative_eq!(model.s[2][2], -0.140027370385934e-05, epsilon = 1e-15);
+
+        // GM and radius from header.
+        assert_relative_eq!(model.gm, 0.3986004415e15, epsilon = 1.0);
+        assert_relative_eq!(model.reference_radius, 0.63781363e7, epsilon = 1e-3);
+
+        // Acceleration at a LEO position should be dominantly radial.
+        let pos = Vector3::new(6_778_137.0, 0.0, 0.0);
+        let a = model.acceleration(&pos).unwrap();
+        let radial = a.raw().x;
+        let tangential = (a.raw().y.powi(2) + a.raw().z.powi(2)).sqrt();
+        assert!(
+            radial.abs() > 100.0 * tangential.abs(),
+            "radial component should dominate: radial={radial}, tangential={tangential}"
+        );
+    }
+
+    #[test]
+    fn test_real_egm2008_loads_if_present() {
+        // End-to-end test: load the actual EGM2008 file downloaded by
+        // scripts/fetch_data.sh. Skips gracefully if the file is absent
+        // (e.g. in fast CI without data cache).
+        let data_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("data")
+            .join("gravity");
+        let path = data_dir.join("EGM2008_2190_TideFree.gfc");
+        if !path.exists() {
+            return;
+        }
+
+        // Load to degree 70 (fast enough for CI; full 2190 would be slow).
+        let model = SphericalHarmonics::load_egm2008(path.to_str().unwrap(), 70, 70).unwrap();
+        assert_eq!(model.degree, 70);
+        assert_eq!(model.order, 70);
+
+        // Known EGM2008 tide-free values.
+        assert_relative_eq!(model.c[2][0], -0.484165143790815e-03, epsilon = 1e-15);
+        assert_relative_eq!(model.c[2][2], 0.243938357328313e-05, epsilon = 1e-15);
+        assert_relative_eq!(model.s[2][2], -0.140027370385934e-05, epsilon = 1e-15);
+
+        // Header metadata.
+        assert_relative_eq!(model.gm, 0.3986004415e15, epsilon = 1.0);
+        assert_relative_eq!(model.reference_radius, 0.63781363e7, epsilon = 1e-3);
     }
 }
