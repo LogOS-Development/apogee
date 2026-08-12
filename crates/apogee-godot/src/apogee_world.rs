@@ -364,9 +364,9 @@ pub struct ApogeeWorld {
 impl INode for ApogeeWorld {
     fn init(base: Base<Node>) -> Self {
         let sim_config = SimulationConfig::default();
-        let world = CoreWorld::with_config(sim_config);
+        let mut world = CoreWorld::with_config(sim_config);
         let mut scheduler = Scheduler::new();
-        scheduler.add(StepWorldSystem);
+        scheduler.add(&mut world, StepWorldSystem);
         Self {
             base,
             f107: sim_config.f107,
@@ -447,7 +447,7 @@ impl ApogeeWorld {
         );
         self.world.epoch = year_start + doy_offset;
 
-        // The scheduler runs all registered systems and advances the epoch
+        // The scheduler runs all registered system entities and advances the epoch
         // exactly once after they complete. This replaces direct calls to
         // step_world/step_and_advance.
         self.scheduler
