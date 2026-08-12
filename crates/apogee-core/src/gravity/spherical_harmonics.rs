@@ -57,6 +57,20 @@ impl SphericalHarmonics {
         }
     }
 
+    /// Create a J2-only spherical harmonics model for Earth.
+    ///
+    /// Convenience constructor that sets the C_2,0 coefficient to the EGM2008
+    /// tide-free fully normalized value. All other coefficients are zero.
+    /// The model uses Earth's GM and equatorial radius as defaults.
+    ///
+    /// Unnormalized J2 = -sqrt(5) * C_2,0 ≈ 1.08263e-3.
+    pub fn j2_only() -> Self {
+        let mut model = Self::new(2, 0);
+        // EGM2008 tide-free fully normalized C_2,0.
+        model.c[2][0] = -0.484165143790815e-03;
+        model
+    }
+
     /// Load EGM2008 coefficients from a tide-free .gz, ICGEM .gfc,
     /// or plain text file.
     ///

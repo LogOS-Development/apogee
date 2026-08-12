@@ -515,9 +515,7 @@ mod tests {
     }
 
     fn orbital_energy(pos: &Vector3<f64>, vel: &Vector3<f64>) -> f64 {
-        let r = pos.norm();
-        let v2 = vel.norm_squared();
-        v2 / 2.0 - GM_EARTH / r
+        crate::orbit::specific_energy_earth(pos, vel)
     }
 
     // ------------------------------------------------------------------
