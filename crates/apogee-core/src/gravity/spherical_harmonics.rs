@@ -639,8 +639,13 @@ gfc     3    0    0.957161207093473e-06    0.000000000000000e+00    0.5731430751
 ";
 
     fn write_temp_gfc(content: &str, filename: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join("apogee_egm2008_gfc_test");
-        let _ = std::fs::remove_dir_all(&dir);
+        // Use a unique per-test directory to avoid race conditions when tests
+        // run in parallel. The directory name includes the test thread name
+        // (via thread id) to ensure isolation.
+        let thread_id = format!("{:?}", std::thread::current().id());
+        let dir = std::env::temp_dir()
+            .join("apogee_egm2008_gfc_test")
+            .join(thread_id);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(filename);
         std::fs::write(&path, content).unwrap();
