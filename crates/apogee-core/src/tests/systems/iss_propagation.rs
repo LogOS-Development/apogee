@@ -290,3 +290,181 @@ fn test_drag_srp_changes_orbital_energy() {
         "drag should decrease orbital energy (dissipative), got change={energy_change_with:.6e}"
     );
 }
+
+// ------------------------------------------------------------------
+// J2 nodal regression validation (issue #138)
+// ------------------------------------------------------------------
+
+/// Analytical J2 nodal regression rate (rad/s).
+///
+/// Omega_dot = -3/2 * n * J2 * (R_eq/a)^2 * cos(i) / (1-e^2)^2
+///
+/// where n = sqrt(GM/a^3) is the mean motion, J2 is the unnormalized
+/// zonal harmonic, a is the semi-major axis, and i is the inclination.
+fn j2_nodal_regression_rate(gm: f64, a: f64, e: f64, inclination: f64, j2: f64, r_eq: f64) -> f64 {
+    let n = (gm / a.powi(3)).sqrt();
+    let cos_i = inclination.cos();
+    let e2 = e * e;
+    -1.5 * n * j2 * (r_eq / a).powi(2) * cos_i / (1.0 - e2).powi(2)
+}
+
+/// Extract the right ascension of the ascending node (RAAN) from a state vector.
+fn raan(pos: &Vector3<f64>, vel: &Vector3<f64>) -> f64 {
+    let h = pos.cross(vel);
+    let n = Vector3::new(0.0, 0.0, 1.0).cross(&h);
+    if n.norm() < 1e-10 {
+        return 0.0;
+    }
+    n.y.atan2(n.x)
+}
+
+#[test]
+fn test_j2_nodal_regression_matches_analytical() {
+    // Propagate a LEO satellite with a J2-only spherical harmonics gravity
+    // model and verify the nodal regression rate matches the analytical
+    // formula.
+    //
+    // We use a simple circular orbit at 400 km altitude, 51.6 deg inclination
+    // (ISS-like), propagated for 3 orbits (~5.5 hours). The RAAN drift over
+    // this period should match the analytical J2 prediction within the
+    // integrator's accuracy.
+
+    let altitude = 400_000.0_f64;
+    let a = R_EARTH_EQ + altitude;
+    let e = 0.0_f64;
+    let inclination = 51.6_f64.to_radians();
+    let v_circ = (GM_EARTH / a).sqrt();
+
+    // Set up initial state: position at ascending node, velocity in the
+    // orbital plane with the given inclination.
+    let pos0 = Vector3::new(a, 0.0, 0.0);
+    let vel0 = Vector3::new(0.0, v_circ * inclination.cos(), v_circ * inclination.sin());
+
+    let kinematics = Kinematics {
+        position: pos0,
+        velocity: vel0,
+        attitude: nalgebra::Quaternion::identity(),
+        angular_velocity: Vector3::zeros(),
+    };
+    let rigid_body = RigidBody {
+        mass: Kilograms::new(1_000.0),
+        inertia: nalgebra::Matrix3::identity(),
+        cg_offset: Vector3::zeros(),
+    };
+
+    // Build a J2-only spherical harmonics model.
+    let mut sh_model = crate::gravity::SphericalHarmonics::new(2, 0);
+    // EGM2008 tide-free fully normalized C_2,0.
+    sh_model.c[2][0] = -0.484165143790815e-03;
+
+    let mut ctx = SimContext {
+        sim_config: SimulationConfig::default(),
+        gravity_sources: crate::gravity::GravitySources::new(),
+        sun_position: Vector3::new(-apogee_common::constants::AU, 0.0, 0.0),
+        epoch: Epoch::from_gregorian_utc(2026, 3, 21, 0, 0, 0, 0),
+        gravity_model: Some(sh_model.clone()),
+    };
+
+    let raan0 = raan(&kinematics.position, &kinematics.velocity);
+
+    let mut kin = kinematics;
+    let dt = Seconds::new(10.0);
+    let duration = Seconds::new(16_500.0); // ~3 orbits
+    crate::systems::step::propagate(&mut kin, &rigid_body, None, None, &mut ctx, dt, duration);
+
+    let raan1 = raan(&kin.position, &kin.velocity);
+
+    // Total RAAN drift over the propagation.
+    let raan_drift = raan1 - raan0;
+
+    // Analytical J2 nodal regression rate (rad/s).
+    // Unnormalized J2 = -sqrt(5) * C_2,0.
+    let j2 = -5.0_f64.sqrt() * sh_model.c[2][0];
+    let omega_dot = j2_nodal_regression_rate(GM_EARTH, a, e, inclination, j2, R_EARTH_EQ);
+    let expected_drift = omega_dot * duration.into_value();
+
+    // The numerical and analytical RAAN drift should agree to within ~5%
+    // (the integrator introduces some error, and the analytical formula is
+    // first-order in J2).
+    let rel_err = (raan_drift - expected_drift).abs() / expected_drift.abs();
+    assert!(
+        rel_err < 0.05,
+        "J2 nodal regression mismatch: numerical={raan_drift:.6e} rad, \
+         analytical={expected_drift:.6e} rad, rel_err={rel_err:.4}"
+    );
+}
+
+#[test]
+fn test_sh_gravity_changes_orbit_vs_point_mass() {
+    // Propagating with spherical harmonics gravity should produce a
+    // different trajectory than point-mass gravity. The J2 perturbation
+    // causes nodal regression that point-mass gravity does not.
+    let altitude = 400_000.0_f64;
+    let a = R_EARTH_EQ + altitude;
+    let v_circ = (GM_EARTH / a).sqrt();
+    let inclination = 51.6_f64.to_radians();
+
+    let pos0 = Vector3::new(a, 0.0, 0.0);
+    let vel0 = Vector3::new(0.0, v_circ * inclination.cos(), v_circ * inclination.sin());
+
+    let rb = RigidBody {
+        mass: Kilograms::new(1_000.0),
+        inertia: nalgebra::Matrix3::identity(),
+        cg_offset: Vector3::zeros(),
+    };
+
+    // Point-mass propagation.
+    let mut kin_pm = Kinematics {
+        position: pos0,
+        velocity: vel0,
+        attitude: nalgebra::Quaternion::identity(),
+        angular_velocity: Vector3::zeros(),
+    };
+    let mut ctx_pm =
+        SimContext::single_body(GM_EARTH, Epoch::from_gregorian_utc(2026, 3, 21, 0, 0, 0, 0));
+    propagate(
+        &mut kin_pm,
+        &rb,
+        None,
+        None,
+        &mut ctx_pm,
+        Seconds::new(10.0),
+        Seconds::new(16_500.0),
+    );
+
+    // SH (J2) propagation.
+    let mut sh_model = crate::gravity::SphericalHarmonics::new(2, 0);
+    sh_model.c[2][0] = -0.484165143790815e-03;
+
+    let mut kin_sh = Kinematics {
+        position: pos0,
+        velocity: vel0,
+        attitude: nalgebra::Quaternion::identity(),
+        angular_velocity: Vector3::zeros(),
+    };
+    let mut ctx_sh = SimContext {
+        sim_config: SimulationConfig::default(),
+        gravity_sources: crate::gravity::GravitySources::new(),
+        sun_position: Vector3::new(-apogee_common::constants::AU, 0.0, 0.0),
+        epoch: Epoch::from_gregorian_utc(2026, 3, 21, 0, 0, 0, 0),
+        gravity_model: Some(sh_model),
+    };
+    propagate(
+        &mut kin_sh,
+        &rb,
+        None,
+        None,
+        &mut ctx_sh,
+        Seconds::new(10.0),
+        Seconds::new(16_500.0),
+    );
+
+    // The RAAN should be different: J2 causes regression, point-mass doesn't.
+    let raan_pm = raan(&kin_pm.position, &kin_pm.velocity);
+    let raan_sh = raan(&kin_sh.position, &kin_sh.velocity);
+    let raan_diff = (raan_sh - raan_pm).abs();
+    assert!(
+        raan_diff > 1e-4,
+        "SH gravity should produce different RAAN than point-mass: diff={raan_diff:.6e} rad"
+    );
+}
