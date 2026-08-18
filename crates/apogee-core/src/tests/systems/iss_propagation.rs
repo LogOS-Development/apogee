@@ -1,13 +1,13 @@
 //! ISS single-spacecraft propagation validation (Phase 1.6).
 //!
 //! These tests exercise the end-to-end 6DOF propagation pipeline on a real ISS
-//! TLE. They are intentionally sanity checks rather than strict 1 km vs
-//! next-day TLE validation, because the latter requires:
-//!   - J2 / spherical-harmonic gravity (Phase 1.3 is still point-mass only)
-//!   - TEME-to-ICRF frame alignment and EOP
-//!   - Historical next-day TLE fixture
+//! TLE. They are sanity checks that verify the propagation pipeline produces
+//! physically reasonable trajectories with both point-mass and spherical
+//! harmonics gravity models.
 //!
-//! Those improvements are tracked in follow-up issues.
+//! Spherical harmonics gravity validation tests (J2 nodal regression,
+//! SH-vs-point-mass comparison, acceleration direction) live in
+//! `tests/gravity/spherical_harmonics.rs`.
 
 use apogee_common::constants::{GM_EARTH, R_EARTH_EQ};
 use apogee_common::units::{Area, Kilograms, Seconds};
@@ -18,6 +18,8 @@ use crate::components::drag_surfaces::{DragSurface, DragSurfaces};
 use crate::components::kinematics::Kinematics;
 use crate::components::rigid_body::{RigidBody, SimulationConfig};
 use crate::components::srp_surfaces::{SrpSurface, SrpSurfaces};
+use crate::gravity::SphericalHarmonics;
+use crate::orbit::specific_energy_earth;
 use crate::systems::step::{propagate, step_and_advance, SimContext};
 use crate::tle::Tle;
 use crate::world::World;
@@ -219,7 +221,7 @@ fn test_iss_via_propagate() {
 }
 
 fn specific_energy(pos: &Vector3<f64>, vel: &Vector3<f64>) -> f64 {
-    vel.norm_squared() / 2.0 - GM_EARTH / pos.norm()
+    specific_energy_earth(pos, vel)
 }
 
 #[test]
@@ -288,5 +290,132 @@ fn test_drag_srp_changes_orbital_energy() {
     assert!(
         energy_change_with < 0.0,
         "drag should decrease orbital energy (dissipative), got change={energy_change_with:.6e}"
+    );
+}
+
+// -----------------------------------------------------------------------
+// ISS propagation with spherical harmonics gravity
+// -----------------------------------------------------------------------
+
+/// Build a SimContext with J2 spherical harmonics gravity for Earth.
+fn sh_ctx(epoch: Epoch) -> SimContext {
+    SimContext {
+        gravity_model: Some(SphericalHarmonics::j2_only()),
+        ..earth_only_ctx(epoch)
+    }
+}
+
+#[test]
+fn test_iss_one_orbit_with_j2_stays_leo() {
+    // Propagate the ISS TLE for one orbit with J2 gravity. The orbit
+    // should remain in LEO and the altitude should be in a reasonable
+    // range. J2 causes nodal regression but does not significantly change
+    // the semi-major axis over one orbit.
+    let (_tle, mut kin, rb, drag, srp, sim_config) = iss_components();
+    let mut ctx = SimContext {
+        sim_config,
+        ..sh_ctx(iss_epoch())
+    };
+
+    propagate(
+        &mut kin,
+        &rb,
+        Some(&drag),
+        Some(&srp),
+        &mut ctx,
+        Seconds::new(30.0),
+        Seconds::new(5_500.0),
+    );
+
+    let altitude = kin.position.norm() - R_EARTH_EQ;
+    assert!(
+        altitude > 350_000.0 && altitude < 500_000.0,
+        "altitude out of ISS range with J2: {:.0} m",
+        altitude
+    );
+}
+
+#[test]
+fn test_iss_24h_with_j2_stays_leo() {
+    // 24-hour propagation with J2 gravity. J2 causes nodal regression
+    // (~5 deg/day for ISS), but the orbit should remain bounded in LEO.
+    let (_tle, mut kin, rb, drag, srp, sim_config) = iss_components();
+    let mut ctx = SimContext {
+        sim_config,
+        ..sh_ctx(iss_epoch())
+    };
+
+    propagate(
+        &mut kin,
+        &rb,
+        Some(&drag),
+        Some(&srp),
+        &mut ctx,
+        Seconds::new(60.0),
+        Seconds::new(86_400.0),
+    );
+
+    let altitude = kin.position.norm() - R_EARTH_EQ;
+    assert!(
+        altitude > 300_000.0 && altitude < 500_000.0,
+        "24h J2 propagation produced non-LEO altitude: {:.0} m",
+        altitude
+    );
+
+    let speed = kin.velocity.norm();
+    assert!(
+        speed > 7_000.0 && speed < 8_000.0,
+        "24h J2 propagation produced unrealistic speed: {:.0} m/s",
+        speed
+    );
+}
+
+#[test]
+fn test_j2_produces_different_trajectory_than_point_mass() {
+    // Propagating the ISS TLE with J2 gravity should produce a measurably
+    // different trajectory than point-mass gravity over 24 hours. The J2
+    // perturbation causes nodal regression and apsidal rotation that
+    // point-mass gravity does not.
+    let (_tle, kin, rb, drag, srp, sim_config) = iss_components();
+
+    // Point-mass propagation.
+    let mut kin_pm = kin.clone();
+    let mut ctx_pm = SimContext {
+        sim_config,
+        ..earth_only_ctx(iss_epoch())
+    };
+    propagate(
+        &mut kin_pm,
+        &rb,
+        Some(&drag),
+        Some(&srp),
+        &mut ctx_pm,
+        Seconds::new(60.0),
+        Seconds::new(86_400.0),
+    );
+
+    // J2 propagation.
+    let mut kin_j2 = kin.clone();
+    let mut ctx_j2 = SimContext {
+        sim_config,
+        ..sh_ctx(iss_epoch())
+    };
+    propagate(
+        &mut kin_j2,
+        &rb,
+        Some(&drag),
+        Some(&srp),
+        &mut ctx_j2,
+        Seconds::new(60.0),
+        Seconds::new(86_400.0),
+    );
+
+    // After 24 hours, the positions should differ by more than 10 km
+    // (J2 nodal regression is ~5 deg/day for ISS, which at 400 km altitude
+    // corresponds to a cross-track difference of tens of km).
+    let diff = (kin_pm.position - kin_j2.position).norm();
+    assert!(
+        diff > 10_000.0,
+        "J2 should produce a measurably different trajectory after 24h: diff={diff:.0} m"
     );
 }

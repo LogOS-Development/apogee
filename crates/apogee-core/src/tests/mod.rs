@@ -10,6 +10,7 @@ pub mod helpers;
 mod aero;
 mod ephemeris;
 mod frames;
+mod gravity;
 mod integrator;
 mod systems;
 mod tle;

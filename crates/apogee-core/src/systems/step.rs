@@ -28,7 +28,7 @@ use crate::components::drag_surfaces::DragSurfaces;
 use crate::components::kinematics::Kinematics;
 use crate::components::rigid_body::{RigidBody, SimulationConfig};
 use crate::components::srp_surfaces::SrpSurfaces;
-use crate::gravity::GravitySources;
+use crate::gravity::{GravitySources, SphericalHarmonics};
 use crate::integrator::{IntegrationResult, Integrator, Rk4, StateDerivative, StateVector};
 use crate::systems::force_aggregator::aggregate_forces;
 use crate::world::World;
@@ -51,6 +51,14 @@ pub struct SimContext {
     pub sun_position: apogee_common::Position,
     /// Current simulation epoch.
     pub epoch: Epoch,
+    /// Optional spherical harmonics gravity model for the central body.
+    ///
+    /// When present, the force aggregator uses this instead of point-mass
+    /// gravity for the primary body. The SH model includes its own GM and
+    /// reference radius, so the central body's point-mass contribution is
+    /// replaced (not added to) by the SH acceleration. Third-body point-mass
+    /// perturbations from other gravity sources are still added on top.
+    pub gravity_model: Option<SphericalHarmonics>,
 }
 
 impl SimContext {
@@ -72,6 +80,7 @@ impl SimContext {
             gravity_sources,
             sun_position,
             epoch: world.epoch,
+            gravity_model: None,
         }
     }
 
@@ -87,6 +96,7 @@ impl SimContext {
             gravity_sources,
             sun_position: Vector3::new(-apogee_common::constants::AU, 0.0, 0.0),
             epoch,
+            gravity_model: None,
         }
     }
 }
@@ -137,6 +147,7 @@ pub fn step_spacecraft(
     let srp = srp_surfaces.cloned();
     let sim_config = ctx.sim_config;
     let gravity_sources = ctx.gravity_sources.clone();
+    let gravity_model = ctx.gravity_model.clone();
     let sun_position = ctx.sun_position;
     let epoch = ctx.epoch;
 
@@ -156,6 +167,7 @@ pub fn step_spacecraft(
             srp.as_ref(),
             &sim_config,
             &gravity_sources,
+            gravity_model.as_ref(),
             sun_position,
             epoch,
         );
@@ -314,6 +326,7 @@ fn integrate_dynamic_celestials(
             gravity_sources: body_gs,
             sun_position: ctx.sun_position,
             epoch: ctx.epoch,
+            gravity_model: ctx.gravity_model.clone(),
         };
 
         // Dynamic bodies only feel gravity — no drag/SRP surfaces.
@@ -502,9 +515,7 @@ mod tests {
     }
 
     fn orbital_energy(pos: &Vector3<f64>, vel: &Vector3<f64>) -> f64 {
-        let r = pos.norm();
-        let v2 = vel.norm_squared();
-        v2 / 2.0 - GM_EARTH / r
+        crate::orbit::specific_energy_earth(pos, vel)
     }
 
     // ------------------------------------------------------------------
