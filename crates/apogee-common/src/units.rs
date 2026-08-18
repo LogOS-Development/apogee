@@ -235,6 +235,9 @@ pub mod dim {
     pub type MagneticFlux = Unit<(P2, P1, N2, N1, Z0, Z0, Z0)>;
     pub type MagneticFluxDensity = Unit<(Z0, P1, N2, N1, Z0, Z0, Z0)>;
     pub type GravitationalParameter = Unit<(P3, Z0, N2, Z0, Z0, Z0, Z0)>;
+    /// Gravitational constant G: m³ kg⁻¹ s⁻².
+    /// `Kilograms * GConstant = GravitationalParameter`.
+    pub type GConstant = Unit<(P3, N1, N2, Z0, Z0, Z0, Z0)>;
     pub type MomentOfInertia = Unit<(P2, P1, Z0, Z0, Z0, Z0, Z0)>;
     pub type Angle = Dimensionless;
     pub type SolidAngle = Dimensionless;
@@ -415,6 +418,9 @@ impl UnitName for dim::MagneticFluxDensity {
 }
 impl UnitName for dim::GravitationalParameter {
     const NAME: &'static str = "m³/s²";
+}
+impl UnitName for dim::GConstant {
+    const NAME: &'static str = "m³/(kg·s²)";
 }
 impl UnitName for dim::MomentOfInertia {
     const NAME: &'static str = "kg·m²";
@@ -1060,6 +1066,9 @@ pub type Inductance<T = f64> = Quantity<T, dim::Inductance>;
 pub type MagneticFlux<T = f64> = Quantity<T, dim::MagneticFlux>;
 pub type MagneticFluxDensity<T = f64> = Quantity<T, dim::MagneticFluxDensity>;
 pub type GravitationalParameter<T = f64> = Quantity<T, dim::GravitationalParameter>;
+/// Gravitational constant G as a typed quantity (m³ kg⁻¹ s⁻²).
+/// `Kilograms * GConstant = GravitationalParameter`.
+pub type GConstant<T = f64> = Quantity<T, dim::GConstant>;
 pub type MomentOfInertia<T = f64> = Quantity<T, dim::MomentOfInertia>;
 pub type Wavenumber<T = f64> = Quantity<T, dim::Wavenumber>;
 pub type MassFlowRate<T = f64> = Quantity<T, dim::MassFlowRate>;

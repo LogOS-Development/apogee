@@ -100,7 +100,7 @@ impl GravitySource {
     /// Create a gravity source from a mass, deriving GM = G * M.
     pub fn from_mass(mass: Kilograms<f64>) -> Self {
         Self {
-            gm: GravitationalParameter::new(mass.into_value() * apogee_common::constants::G),
+            gm: mass * apogee_common::constants::G,
         }
     }
 
@@ -172,7 +172,7 @@ impl CelestialBodySpec {
         velocity: apogee_common::Velocity,
     ) -> Self {
         let gm = gravitational_parameter(naif_id).map(GravitationalParameter::new);
-        let mass = gm.map(|g| Kilograms::new(g.into_value() / apogee_common::constants::G));
+        let mass = gm.map(|g| g / apogee_common::constants::G);
         Self {
             naif_id,
             kind: CelestialKind::Kinematic,
@@ -208,13 +208,13 @@ impl CelestialBodySpec {
         velocity: apogee_common::Velocity,
         mass: Kilograms<f64>,
     ) -> Self {
-        let gm = mass.into_value() * apogee_common::constants::G;
+        let gm = mass * apogee_common::constants::G;
         Self {
             naif_id,
             kind: CelestialKind::Dynamic,
             position,
             velocity,
-            gm: Some(GravitationalParameter::new(gm)),
+            gm: Some(gm),
             mass: Some(mass),
         }
     }
@@ -228,10 +228,8 @@ impl CelestialBodySpec {
 
     /// The resolved mass (derived from GM if not explicitly set).
     pub fn resolved_mass(&self) -> Kilograms<f64> {
-        self.mass.unwrap_or_else(|| {
-            let gm = self.resolved_gm();
-            Kilograms::new(gm.into_value() / apogee_common::constants::G)
-        })
+        self.mass
+            .unwrap_or_else(|| self.resolved_gm() / apogee_common::constants::G)
     }
 }
 
@@ -267,7 +265,7 @@ mod tests {
         assert!(spec.resolved_gm().into_value() > 0.0);
         assert_relative_eq!(
             spec.resolved_gm().into_value(),
-            1e15 * apogee_common::constants::G
+            (Kilograms::new(1e15) * apogee_common::constants::G).into_value()
         );
     }
 
@@ -285,7 +283,10 @@ mod tests {
     #[test]
     fn gravity_source_from_mass() {
         let gs = GravitySource::from_mass(Kilograms::new(1e15));
-        assert_relative_eq!(gs.gm.into_value(), 1e15 * apogee_common::constants::G);
+        assert_relative_eq!(
+            gs.gm.into_value(),
+            (Kilograms::new(1e15) * apogee_common::constants::G).into_value()
+        );
     }
 
     #[test]
