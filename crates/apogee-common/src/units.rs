@@ -38,7 +38,7 @@ use std::ops::{Add, AddAssign, Deref, DerefMut, Div, Mul, MulAssign, Neg, Sub, S
 
 use nalgebra::{SMatrix, SVector};
 use num_complex::Complex;
-use num_traits::{NumAssign, Zero};
+use num_traits::{Float, NumAssign, Zero};
 use serde::{Deserialize, Serialize};
 use typenum::consts::*;
 use typenum::{Diff, Sum, Z0};
@@ -81,6 +81,82 @@ impl_halvable! {
     P2 => P1, N2 => N1,
     P4 => P2, N4 => N2,
     P6 => P3, N6 => N3,
+}
+
+// ===========================================================================
+// UnitPow — raise a unit tuple to an integer power at the type level
+// ===========================================================================
+
+/// Raise a unit to an integer power `N` (a typenum signed integer).
+///
+/// Each exponent in the 7-tuple is multiplied by `N` using typenum's
+/// `Mul` impl.  `pow(P2)` doubles all exponents, `pow(N1)` negates them, etc.
+///
+/// Used by [`Quantity::pow`](Quantity::pow) to produce the correct
+/// derived unit at compile time.
+pub trait UnitPow<N> {
+    /// The unit raised to the `N`-th power.
+    type Output;
+}
+
+impl<M, Kg, S, A, K, Mol, Cd, N> UnitPow<N> for Unit<(M, Kg, S, A, K, Mol, Cd)>
+where
+    N: Copy,
+    M: Mul<N>,
+    Kg: Mul<N>,
+    S: Mul<N>,
+    A: Mul<N>,
+    K: Mul<N>,
+    Mol: Mul<N>,
+    Cd: Mul<N>,
+{
+    type Output = Unit<(
+        <M as Mul<N>>::Output,
+        <Kg as Mul<N>>::Output,
+        <S as Mul<N>>::Output,
+        <A as Mul<N>>::Output,
+        <K as Mul<N>>::Output,
+        <Mol as Mul<N>>::Output,
+        <Cd as Mul<N>>::Output,
+    )>;
+}
+
+// ===========================================================================
+// PowMap — map const i32 to typenum type for pow(N) syntax
+// ===========================================================================
+
+/// Maps a `const N: i32` to the corresponding typenum integer type.
+///
+/// This enables `quantity.pow(2)` syntax (no turbofish) while still
+/// computing the result unit at compile time via [`UnitPow`].
+///
+/// Implemented for -10 to +10 via a macro. Out-of-range values
+/// produce a compile-time error (trait bound not satisfied).
+pub trait PowMap<const N: i32> {
+    /// The typenum integer type corresponding to `N`.
+    type T;
+}
+
+macro_rules! impl_powmap {
+    ($($n:literal => $t:ident),* $(,)?) => {
+        $(
+            impl PowMap<$n> for () { type T = $t; }
+        )*
+    };
+}
+
+impl_powmap! {
+    0 => Z0,
+    1 => P1, -1 => N1,
+    2 => P2, -2 => N2,
+    3 => P3, -3 => N3,
+    4 => P4, -4 => N4,
+    5 => P5, -5 => N5,
+    6 => P6, -6 => N6,
+    7 => P7, -7 => N7,
+    8 => P8, -8 => N8,
+    9 => P9, -9 => N9,
+    10 => P10, -10 => N10,
 }
 
 // ===========================================================================
@@ -545,6 +621,31 @@ impl<T, U> Quantity<T, U> {
         U: Sqrt,
     {
         Quantity::new(self.value.sqrt())
+    }
+
+    /// Raise a quantity to an integer power.
+    ///
+    /// The exponent is a `const N: i32` — call with `s.pow::<2>()` for s²,
+    /// `m.pow::<3>()` for m³, `s.pow::<-1>()` for s⁻¹.
+    ///
+    /// For cleaner syntax, use the [`pow!`](crate::units::pow!) macro:
+    /// `pow!(s, 2)` expands to `s.pow::<2>()`.
+    ///
+    /// Each exponent in the unit tuple is multiplied by `N` at compile
+    /// time via a `PowMap` lookup from the integer literal to the
+    /// corresponding typenum type.
+    ///
+    /// Supported range: -10 to +10 (far beyond any physical SI exponent).
+    /// Out-of-range powers produce a compile-time error (no `PowMap` impl).
+    #[inline]
+    #[must_use]
+    pub fn pow<const N: i32>(self) -> Quantity<T, <U as UnitPow<<() as PowMap<N>>::T>>::Output>
+    where
+        T: Float,
+        (): PowMap<N>,
+        U: UnitPow<<() as PowMap<N>>::T>,
+    {
+        Quantity::new(self.value.powi(N))
     }
 }
 
@@ -1179,6 +1280,19 @@ pub mod si {
     pub const cd: Candelas<f64> = Candelas::new(1.0);
 }
 
+/// Raise a quantity to an integer power.
+///
+/// `pow!(s, 2)` expands to `s.pow::<2>()`, producing `s²` at compile time.
+/// `pow!(m, 3)` gives `m³`. `pow!(s, -1)` gives `s⁻¹` (frequency).
+///
+/// Supported range: -10 to +10.
+#[macro_export]
+macro_rules! pow {
+    ($q:expr, $n:literal) => {
+        $q.pow::<$n>()
+    };
+}
+
 // ===========================================================================
 // Dynamics re-exports (vector/tensor aliases live in `dynamics`)
 // ===========================================================================
@@ -1667,8 +1781,8 @@ mod tests {
     // --- Unit constant syntax tests ---
 
     mod si_syntax {
-        use super::super::si::*;
         use super::*;
+        use super::super::si::*;
 
         #[test]
         fn velocity_from_m_div_s() {
@@ -1678,13 +1792,13 @@ mod tests {
 
         #[test]
         fn acceleration() {
-            let acc: Acceleration = 9.8 * (m / s / s);
+            let acc: Acceleration = 9.8 * (m / pow!(s, 2));
             assert_relative_eq!(acc.value, 9.8);
         }
 
         #[test]
         fn area() {
-            let area: Area = 3.0 * (m * m);
+            let area: Area = 3.0 * pow!(m, 2);
             assert_relative_eq!(area.value, 3.0);
         }
 
@@ -1697,29 +1811,48 @@ mod tests {
         #[test]
         fn force() {
             // F = kg * m / s²
-            let f: Force = 10.0 * (kg * m / s / s);
+            let f: Force = 10.0 * (kg * m / pow!(s, 2));
             assert_relative_eq!(f.value, 10.0);
         }
 
         #[test]
         fn pressure() {
             // Pa = N / m² = kg / (m * s²)
-            let p: Pressure = 101_325.0 * (kg / (m * s * s));
+            let p: Pressure = 101_325.0 * (kg / (m * pow!(s, 2)));
             assert_relative_eq!(p.value, 101_325.0);
         }
 
         #[test]
         fn energy() {
             // J = N * m = kg * m² / s²
-            let e: Energy = 4.2 * (kg * m * m / s / s);
+            let e: Energy = 4.2 * (kg * pow!(m, 2) / pow!(s, 2));
             assert_relative_eq!(e.value, 4.2);
         }
 
         #[test]
         fn power() {
             // W = J / s = kg * m² / s³
-            let p: Power = 100.0 * (kg * m * m / s / s / s);
+            let p: Power = 100.0 * (kg * pow!(m, 2) / pow!(s, 3));
             assert_relative_eq!(p.value, 100.0);
+        }
+
+        #[test]
+        fn volume() {
+            let vol: Volume = 2.0 * pow!(m, 3);
+            assert_relative_eq!(vol.value, 2.0);
+        }
+
+        #[test]
+        fn inverse_meter_wavenumber() {
+            let wn: Wavenumber = 1.0 / m;
+            assert_relative_eq!(wn.value, 1.0);
+        }
+
+        #[test]
+        fn negative_power() {
+            // pow!(s, -1) = s⁻¹ = frequency
+            let freq: Frequency = 1.0 * pow!(s, -1);
+            assert_relative_eq!(freq.value, 1.0);
         }
     }
 }
