@@ -50,7 +50,10 @@ fn test_rigid_body() -> RigidBody {
 /// when computing third-body perturbations.
 fn j2_context(epoch: Epoch) -> SimContext {
     let mut gravity_sources = crate::gravity::GravitySources::new();
-    gravity_sources.push(apogee_common::units::GravitationalParameter::new(GM_EARTH), Vector3::zeros());
+    gravity_sources.push(
+        apogee_common::units::GravitationalParameter::new(GM_EARTH),
+        Vector3::zeros(),
+    );
     SimContext {
         sim_config: SimulationConfig::default(),
         gravity_sources,

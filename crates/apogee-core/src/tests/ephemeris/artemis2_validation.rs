@@ -30,16 +30,25 @@ fn build_gravity_sources(kernel: &Kernel, et: f64) -> GravitySources {
         velocity: Vector3::zeros(),
     });
     let gm_earth = gravitational_parameter(399).unwrap_or(0.0);
-    sources.push(apogee_common::units::GravitationalParameter::new(gm_earth), earth.position);
+    sources.push(
+        apogee_common::units::GravitationalParameter::new(gm_earth),
+        earth.position,
+    );
 
     if let Ok(moon) = kernel.state_at(301, et) {
         let gm_moon = gravitational_parameter(301).unwrap_or(0.0);
-        sources.push(apogee_common::units::GravitationalParameter::new(gm_moon), moon.position);
+        sources.push(
+            apogee_common::units::GravitationalParameter::new(gm_moon),
+            moon.position,
+        );
     }
 
     if let Ok(sun) = kernel.state_at(10, et) {
         let gm_sun = gravitational_parameter(10).unwrap_or(0.0);
-        sources.push(apogee_common::units::GravitationalParameter::new(gm_sun), sun.position);
+        sources.push(
+            apogee_common::units::GravitationalParameter::new(gm_sun),
+            sun.position,
+        );
     }
 
     sources

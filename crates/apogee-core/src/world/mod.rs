@@ -410,7 +410,10 @@ mod tests {
         assert!(world.get_component::<CelestialKind>(entity).is_some());
         let gs = world.get_component::<GravitySource>(entity);
         assert!(gs.is_some());
-        assert_relative_eq!(gs.unwrap().gm.into_value(), apogee_common::constants::GM_EARTH);
+        assert_relative_eq!(
+            gs.unwrap().gm.into_value(),
+            apogee_common::constants::GM_EARTH
+        );
     }
 
     #[test]

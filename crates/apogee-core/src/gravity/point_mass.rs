@@ -82,7 +82,10 @@ mod tests {
 
     fn source(naif_id: i32, position: [f64; 3]) -> (GravitationalParameter<f64>, Position) {
         let gm = gravitational_parameter(naif_id).unwrap_or(0.0);
-        (GravitationalParameter::new(gm), Vector3::new(position[0], position[1], position[2]))
+        (
+            GravitationalParameter::new(gm),
+            Vector3::new(position[0], position[1], position[2]),
+        )
     }
 
     #[test]
@@ -146,7 +149,10 @@ mod tests {
         let sources = GravitySources {
             sources: vec![
                 source(10, [0.0, 0.0, 0.0]),
-                (GravitationalParameter::new(0.0), Vector3::new(0.0, apogee_common::constants::AU, 0.0)),
+                (
+                    GravitationalParameter::new(0.0),
+                    Vector3::new(0.0, apogee_common::constants::AU, 0.0),
+                ),
             ],
         };
 

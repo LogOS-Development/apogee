@@ -90,7 +90,10 @@ impl SimContext {
     /// without setting up a full ECS world.
     pub fn single_body(gm: f64, epoch: Epoch) -> Self {
         let mut gravity_sources = GravitySources::new();
-        gravity_sources.push(apogee_common::units::GravitationalParameter::new(gm), Vector3::zeros());
+        gravity_sources.push(
+            apogee_common::units::GravitationalParameter::new(gm),
+            Vector3::zeros(),
+        );
         Self {
             sim_config: SimulationConfig::default(),
             gravity_sources,

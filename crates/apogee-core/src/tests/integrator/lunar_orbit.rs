@@ -22,7 +22,10 @@ const R_MOON: f64 = 1_737_400.0;
 fn moon_system() -> GravitySources {
     let gm = gravitational_parameter(301).unwrap_or(0.0);
     GravitySources {
-        sources: vec![(apogee_common::units::GravitationalParameter::new(gm), Vector3::zeros())],
+        sources: vec![(
+            apogee_common::units::GravitationalParameter::new(gm),
+            Vector3::zeros(),
+        )],
     }
 }
 
@@ -152,7 +155,10 @@ fn test_moon_geocentric_orbit_vs_horizons_apollo_era() {
     // using a point-mass Earth+Moon model in the geocentric inertial frame.
     let gm_earth = gravitational_parameter(399).unwrap_or(0.0);
     let sources = GravitySources {
-        sources: vec![(apogee_common::units::GravitationalParameter::new(gm_earth), Vector3::zeros())],
+        sources: vec![(
+            apogee_common::units::GravitationalParameter::new(gm_earth),
+            Vector3::zeros(),
+        )],
     };
 
     let mut state = StateVector {

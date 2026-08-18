@@ -37,9 +37,9 @@ use std::marker::PhantomData;
 use std::ops::{Add, AddAssign, Deref, DerefMut, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use nalgebra::{SMatrix, SVector};
-use serde::{Deserialize, Serialize};
 use num_complex::Complex;
 use num_traits::{NumAssign, Zero};
+use serde::{Deserialize, Serialize};
 use typenum::consts::*;
 use typenum::{Diff, Sum, Z0};
 

@@ -48,7 +48,9 @@ impl GravitySources {
     }
 
     /// Iterate over all (GM, position) pairs.
-    pub fn iter(&self) -> impl Iterator<Item = &(GravitationalParameter<f64>, apogee_common::Position)> {
+    pub fn iter(
+        &self,
+    ) -> impl Iterator<Item = &(GravitationalParameter<f64>, apogee_common::Position)> {
         self.sources.iter()
     }
 

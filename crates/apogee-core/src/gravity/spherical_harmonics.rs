@@ -459,7 +459,12 @@ mod tests {
         let pos = Vector3::new(R_EARTH_EQ + 400_000.0, 0.0, 0.0);
 
         let a_sh = *model.acceleration(&pos).unwrap().raw();
-        let a_closed = j2_closed_form(&pos, model.gm.into_value(), model.reference_radius.into_value(), model.c[2][0]);
+        let a_closed = j2_closed_form(
+            &pos,
+            model.gm.into_value(),
+            model.reference_radius.into_value(),
+            model.c[2][0],
+        );
 
         assert_relative_eq!(a_sh.x, a_closed.x, epsilon = 1e-9);
         assert_relative_eq!(a_sh.y, a_closed.y, epsilon = 1e-15);
@@ -473,7 +478,12 @@ mod tests {
         let pos = Vector3::new(0.0, 0.0, R_EARTH_EQ + 400_000.0);
 
         let a_sh = *model.acceleration(&pos).unwrap().raw();
-        let a_closed = j2_closed_form(&pos, model.gm.into_value(), model.reference_radius.into_value(), model.c[2][0]);
+        let a_closed = j2_closed_form(
+            &pos,
+            model.gm.into_value(),
+            model.reference_radius.into_value(),
+            model.c[2][0],
+        );
 
         assert_relative_eq!(a_sh.x, a_closed.x, epsilon = 1e-12);
         assert_relative_eq!(a_sh.y, a_closed.y, epsilon = 1e-12);
@@ -701,7 +711,11 @@ gfc 2 2 2.43938357328313d-06 -1.40027370385934d-06\n";
 
         // GM and reference radius should be parsed from the header.
         assert_relative_eq!(model.gm.into_value(), 0.3986004415e15, epsilon = 1.0);
-        assert_relative_eq!(model.reference_radius.into_value(), 0.63781363e7, epsilon = 1e-3);
+        assert_relative_eq!(
+            model.reference_radius.into_value(),
+            0.63781363e7,
+            epsilon = 1e-3
+        );
     }
 
     #[test]
@@ -741,7 +755,11 @@ gfc 2 2 2.43938357328313d-06 -1.40027370385934d-06\n";
 
         // GM and radius from header.
         assert_relative_eq!(model.gm.into_value(), 0.3986004415e15, epsilon = 1.0);
-        assert_relative_eq!(model.reference_radius.into_value(), 0.63781363e7, epsilon = 1e-3);
+        assert_relative_eq!(
+            model.reference_radius.into_value(),
+            0.63781363e7,
+            epsilon = 1e-3
+        );
 
         // Acceleration at a LEO position should be dominantly radial.
         let pos = Vector3::new(6_778_137.0, 0.0, 0.0);
@@ -783,6 +801,10 @@ gfc 2 2 2.43938357328313d-06 -1.40027370385934d-06\n";
 
         // Header metadata.
         assert_relative_eq!(model.gm.into_value(), 0.3986004415e15, epsilon = 1.0);
-        assert_relative_eq!(model.reference_radius.into_value(), 0.63781363e7, epsilon = 1e-3);
+        assert_relative_eq!(
+            model.reference_radius.into_value(),
+            0.63781363e7,
+            epsilon = 1e-3
+        );
     }
 }
