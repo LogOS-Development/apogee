@@ -176,8 +176,8 @@ impl World {
         let gm = spec.resolved_gm();
         let mass = spec.resolved_mass();
 
-        if gm.into_value() > 0.0 {
-            let gravity = GravitySource::from_gm(gm.into_value());
+        if gm.value > 0.0 {
+            let gravity = GravitySource::from_gm(gm);
             if kind.is_dynamic() {
                 let celestial_mass = crate::components::celestial::CelestialMass::new(mass);
                 self.spawn((kinematics, naif_id, kind, gravity, celestial_mass))

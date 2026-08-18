@@ -91,10 +91,8 @@ pub struct GravitySource {
 
 impl GravitySource {
     /// Create a gravity source from a known GM value.
-    pub fn from_gm(gm: f64) -> Self {
-        Self {
-            gm: GravitationalParameter::new(gm),
-        }
+    pub fn from_gm(gm: GravitationalParameter<f64>) -> Self {
+        Self { gm }
     }
 
     /// Create a gravity source from a mass, deriving GM = G * M.
@@ -107,7 +105,9 @@ impl GravitySource {
     /// Create a gravity source by looking up GM from the NAIF ID table.
     /// Returns `None` if the NAIF ID is not in the built-in table.
     pub fn from_naif_id(naif_id: NaifId) -> Option<Self> {
-        gravitational_parameter(naif_id).map(Self::from_gm)
+        gravitational_parameter(naif_id)
+            .map(GravitationalParameter::new)
+            .map(Self::from_gm)
     }
 }
 
@@ -188,7 +188,7 @@ impl CelestialBodySpec {
         naif_id: NaifId,
         position: apogee_common::Position,
         velocity: apogee_common::Velocity,
-        gm: f64,
+        gm: GravitationalParameter<f64>,
         mass: Kilograms<f64>,
     ) -> Self {
         Self {
@@ -196,7 +196,7 @@ impl CelestialBodySpec {
             kind: CelestialKind::Dynamic,
             position,
             velocity,
-            gm: Some(GravitationalParameter::new(gm)),
+            gm: Some(gm),
             mass: Some(mass),
         }
     }

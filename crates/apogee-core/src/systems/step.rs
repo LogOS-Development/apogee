@@ -32,6 +32,7 @@ use crate::gravity::{GravitySources, SphericalHarmonics};
 use crate::integrator::{IntegrationResult, Integrator, Rk4, StateDerivative, StateVector};
 use crate::systems::force_aggregator::aggregate_forces;
 use crate::world::World;
+use apogee_common::units::GravitationalParameter;
 use hifitime::{Epoch, Unit};
 
 /// Shared simulation environment passed to propagation functions.
@@ -88,12 +89,9 @@ impl SimContext {
     ///
     /// Convenience for tests that need a simple Earth-at-origin gravity model
     /// without setting up a full ECS world.
-    pub fn single_body(gm: f64, epoch: Epoch) -> Self {
+    pub fn single_body(gm: GravitationalParameter<f64>, epoch: Epoch) -> Self {
         let mut gravity_sources = GravitySources::new();
-        gravity_sources.push(
-            apogee_common::units::GravitationalParameter::new(gm),
-            Vector3::zeros(),
-        );
+        gravity_sources.push(gm, Vector3::zeros());
         Self {
             sim_config: SimulationConfig::default(),
             gravity_sources,
@@ -387,7 +385,7 @@ pub fn propagate(
 #[cfg(test)]
 mod tests {
     use apogee_common::constants::{GM_EARTH, R_EARTH_EQ};
-    use apogee_common::units::{Kilograms, Seconds};
+    use apogee_common::units::{GravitationalParameter, Kilograms, Seconds};
     use approx::assert_relative_eq;
     use nalgebra::Vector3;
 
@@ -420,7 +418,7 @@ mod tests {
     #[test]
     fn test_two_body_orbit_energy_conservation() {
         let (mut kin, rb) = make_orbit_components();
-        let mut ctx = SimContext::single_body(GM_EARTH, test_epoch());
+        let mut ctx = SimContext::single_body(GravitationalParameter::new(GM_EARTH), test_epoch());
 
         let e0 = orbital_energy(&kin.position, &kin.velocity);
         propagate(

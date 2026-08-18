@@ -14,7 +14,7 @@ use crate::gravity::GravitySources;
 use crate::integrator::{Integrator, Rk4, StateVector};
 use crate::tests::helpers::point_mass_derivative;
 use apogee_common::constants::GM_MOON;
-use apogee_common::units::Seconds;
+use apogee_common::units::{GravitationalParameter, Seconds};
 use nalgebra::Vector3;
 
 /// Apollo 15 reference trajectory fixture. Generated with spiceypy from
@@ -59,10 +59,7 @@ fn load_reference() -> Option<Vec<Sample>> {
 /// Build a Moon-centered gravity source set with Moon as the origin.
 fn moon_only_sources() -> GravitySources {
     GravitySources {
-        sources: vec![(
-            apogee_common::units::GravitationalParameter::new(GM_MOON),
-            Vector3::zeros(),
-        )],
+        sources: vec![(GravitationalParameter::new(GM_MOON), Vector3::zeros())],
     }
 }
 

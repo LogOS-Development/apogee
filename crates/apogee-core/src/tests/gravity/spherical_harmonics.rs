@@ -8,8 +8,8 @@
 //! Unit tests for the SH acceleration math and file loading live in
 //! `crates/apogee-core/src/gravity/spherical_harmonics.rs`.
 
-use apogee_common::constants::{GM_EARTH, R_EARTH_EQ};
-use apogee_common::units::{Kilograms, Seconds};
+use apogee_common::constants::{GM_EARTH, GM_MOON, R_EARTH_EQ};
+use apogee_common::units::{GravitationalParameter, Kilograms, Seconds};
 use hifitime::Epoch;
 use nalgebra::Vector3;
 
@@ -65,7 +65,7 @@ fn j2_context(epoch: Epoch) -> SimContext {
 
 /// Build a SimContext with point-mass gravity only (no SH).
 fn point_mass_context(epoch: Epoch) -> SimContext {
-    SimContext::single_body(GM_EARTH, epoch)
+    SimContext::single_body(GravitationalParameter::new(GM_EARTH), epoch)
 }
 
 fn kinematics(pos: Vector3<f64>, vel: Vector3<f64>) -> Kinematics {
@@ -251,7 +251,7 @@ fn test_sh_with_third_body_perturbation() {
     let mut kin_sh_3body = kinematics(pos0, vel0);
     let mut ctx_sh_3body = j2_context(epoch);
     ctx_sh_3body.gravity_sources.push(
-        apogee_common::units::GravitationalParameter::new(4.902800118e12), // GM_MOON
+        GravitationalParameter::new(GM_MOON),
         Vector3::new(384_400_000.0, 0.0, 0.0),
     );
     propagate(
