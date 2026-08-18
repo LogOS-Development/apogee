@@ -37,6 +37,7 @@ use std::marker::PhantomData;
 use std::ops::{Add, AddAssign, Deref, DerefMut, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use nalgebra::{SMatrix, SVector};
+use serde::{Deserialize, Serialize};
 use num_complex::Complex;
 use num_traits::{NumAssign, Zero};
 use typenum::consts::*;
@@ -446,7 +447,9 @@ impl UnitName for dim::Wavenumber {
 ///
 /// Public type aliases like [`Meters`], [`Velocity`], [`Force`] etc.
 /// provide convenient names for common `Quantity` instantiations.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+#[serde(bound(serialize = "T: Serialize", deserialize = "T: Deserialize<'de>"))]
 pub struct Quantity<T, U> {
     /// The raw scalar value in SI base units.
     pub value: T,
@@ -668,7 +671,12 @@ impl<T: fmt::Display, U: UnitName> fmt::Display for Quantity<T, U> {
 /// components.  Arithmetic follows the same dimensional rules as
 /// [`Quantity`]: `Add`/`Sub` require matching units, `Mul`/`Div` by a
 /// scalar preserves units, and `dot`/`cross` produce unit products.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+#[serde(bound(
+    serialize = "SVector<T, N>: Serialize",
+    deserialize = "SVector<T, N>: Deserialize<'de>"
+))]
 pub struct VectorQuantity<T, const N: usize, U> {
     /// The raw nalgebra vector, stored in SI base units.
     pub vector: SVector<T, N>,
@@ -875,7 +883,12 @@ where
 ///
 /// Wraps `nalgebra::SMatrix<T, M, N>`.  Used for inertia tensors, stress
 /// tensors, transformation matrices, etc.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+#[serde(bound(
+    serialize = "SMatrix<T, M, N>: Serialize",
+    deserialize = "SMatrix<T, M, N>: Deserialize<'de>"
+))]
 pub struct TensorQuantity<T, const M: usize, const N: usize, U> {
     /// The raw nalgebra matrix, stored in SI base units.
     pub matrix: SMatrix<T, M, N>,

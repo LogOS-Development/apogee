@@ -21,7 +21,7 @@ authors = ["Apogee Contributors"]
 
 [workspace.dependencies]
 # Numerics
-nalgebra = "0.33"
+nalgebra = { version = "0.33", features = ["serde-serialize"] }
 num-complex = "0.4"
 num-traits = "0.2"
 typenum = "1.17"

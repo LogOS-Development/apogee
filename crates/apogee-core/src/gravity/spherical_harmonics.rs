@@ -4,7 +4,7 @@
 //! the gravitational acceleration from a set of Stokes coefficients (C/S)
 //! up to a configured degree and order.
 
-use apogee_common::units::AccelerationVector;
+use apogee_common::units::{AccelerationVector, GravitationalParameter, Meters};
 use apogee_common::{constants::GM_EARTH, constants::R_EARTH_EQ, ApogeeError, ApogeeResult};
 use nalgebra::Vector3;
 use std::io::{BufRead, BufReader, Read};
@@ -19,9 +19,9 @@ pub struct SphericalHarmonics {
     /// Fully normalized sine coefficients S[n][m].
     pub s: Vec<Vec<f64>>,
     /// Reference radius used to non-dimensionalize the coefficients (m).
-    pub reference_radius: f64,
+    pub reference_radius: Meters<f64>,
     /// Gravitational parameter paired with these coefficients (m^3/s^2).
-    pub gm: f64,
+    pub gm: GravitationalParameter<f64>,
 }
 
 impl Default for SphericalHarmonics {
@@ -31,8 +31,8 @@ impl Default for SphericalHarmonics {
             order: 0,
             c: vec![],
             s: vec![],
-            reference_radius: R_EARTH_EQ,
-            gm: GM_EARTH,
+            reference_radius: Meters::new(R_EARTH_EQ),
+            gm: GravitationalParameter::new(GM_EARTH),
         }
     }
 }
@@ -52,8 +52,8 @@ impl SphericalHarmonics {
             order,
             c,
             s,
-            reference_radius: R_EARTH_EQ,
-            gm: GM_EARTH,
+            reference_radius: Meters::new(R_EARTH_EQ),
+            gm: GravitationalParameter::new(GM_EARTH),
         }
     }
 
@@ -116,12 +116,12 @@ impl SphericalHarmonics {
                 // Extract header metadata.
                 if let Some(val) = Self::parse_header_value(trimmed, "earth_gravity_constant") {
                     if let Ok(gm) = parse_fortran_f64(val) {
-                        model.gm = gm;
+                        model.gm = GravitationalParameter::new(gm);
                     }
                 }
                 if let Some(val) = Self::parse_header_value(trimmed, "radius") {
                     if let Ok(r) = parse_fortran_f64(val) {
-                        model.reference_radius = r;
+                        model.reference_radius = Meters::new(r);
                     }
                 }
                 // If we haven't hit end_of_head, skip this line (it's header).
@@ -230,7 +230,9 @@ impl SphericalHarmonics {
         let x = position.x;
         let y = position.y;
         let z = position.z;
-        let rho = self.reference_radius / r;
+        let reference_radius = self.reference_radius.into_value();
+        let gm = self.gm.into_value();
+        let rho = reference_radius / r;
         let sin_phi = z / r;
         let cos_phi = ((x * x + y * y).sqrt() / r).max(1e-15);
         let lambda = y.atan2(x);
@@ -265,7 +267,7 @@ impl SphericalHarmonics {
         // Potential U = -(GM/r) * (1 + sum ...). Acceleration = -∇U, so
         // outward-positive spherical components are the negatives of the
         // partial derivatives computed above.
-        let gm_over_r2 = self.gm / (r * r);
+        let gm_over_r2 = gm / (r * r);
         let a_r = -gm_over_r2 * (1.0 + d_u_d_r);
         let a_phi = gm_over_r2 * d_u_d_phi;
         let a_lambda = gm_over_r2 * d_u_d_lambda / cos_phi;
@@ -457,7 +459,7 @@ mod tests {
         let pos = Vector3::new(R_EARTH_EQ + 400_000.0, 0.0, 0.0);
 
         let a_sh = *model.acceleration(&pos).unwrap().raw();
-        let a_closed = j2_closed_form(&pos, model.gm, model.reference_radius, model.c[2][0]);
+        let a_closed = j2_closed_form(&pos, model.gm.into_value(), model.reference_radius.into_value(), model.c[2][0]);
 
         assert_relative_eq!(a_sh.x, a_closed.x, epsilon = 1e-9);
         assert_relative_eq!(a_sh.y, a_closed.y, epsilon = 1e-15);
@@ -471,7 +473,7 @@ mod tests {
         let pos = Vector3::new(0.0, 0.0, R_EARTH_EQ + 400_000.0);
 
         let a_sh = *model.acceleration(&pos).unwrap().raw();
-        let a_closed = j2_closed_form(&pos, model.gm, model.reference_radius, model.c[2][0]);
+        let a_closed = j2_closed_form(&pos, model.gm.into_value(), model.reference_radius.into_value(), model.c[2][0]);
 
         assert_relative_eq!(a_sh.x, a_closed.x, epsilon = 1e-12);
         assert_relative_eq!(a_sh.y, a_closed.y, epsilon = 1e-12);
@@ -698,8 +700,8 @@ gfc 2 2 2.43938357328313d-06 -1.40027370385934d-06\n";
         let model = SphericalHarmonics::load_egm2008(path.to_str().unwrap(), 2, 2).unwrap();
 
         // GM and reference radius should be parsed from the header.
-        assert_relative_eq!(model.gm, 0.3986004415e15, epsilon = 1.0);
-        assert_relative_eq!(model.reference_radius, 0.63781363e7, epsilon = 1e-3);
+        assert_relative_eq!(model.gm.into_value(), 0.3986004415e15, epsilon = 1.0);
+        assert_relative_eq!(model.reference_radius.into_value(), 0.63781363e7, epsilon = 1e-3);
     }
 
     #[test]
@@ -738,8 +740,8 @@ gfc 2 2 2.43938357328313d-06 -1.40027370385934d-06\n";
         assert_relative_eq!(model.s[2][2], -0.140027370385934e-05, epsilon = 1e-15);
 
         // GM and radius from header.
-        assert_relative_eq!(model.gm, 0.3986004415e15, epsilon = 1.0);
-        assert_relative_eq!(model.reference_radius, 0.63781363e7, epsilon = 1e-3);
+        assert_relative_eq!(model.gm.into_value(), 0.3986004415e15, epsilon = 1.0);
+        assert_relative_eq!(model.reference_radius.into_value(), 0.63781363e7, epsilon = 1e-3);
 
         // Acceleration at a LEO position should be dominantly radial.
         let pos = Vector3::new(6_778_137.0, 0.0, 0.0);
@@ -780,7 +782,7 @@ gfc 2 2 2.43938357328313d-06 -1.40027370385934d-06\n";
         assert_relative_eq!(model.s[2][2], -0.140027370385934e-05, epsilon = 1e-15);
 
         // Header metadata.
-        assert_relative_eq!(model.gm, 0.3986004415e15, epsilon = 1.0);
-        assert_relative_eq!(model.reference_radius, 0.63781363e7, epsilon = 1e-3);
+        assert_relative_eq!(model.gm.into_value(), 0.3986004415e15, epsilon = 1.0);
+        assert_relative_eq!(model.reference_radius.into_value(), 0.63781363e7, epsilon = 1e-3);
     }
 }

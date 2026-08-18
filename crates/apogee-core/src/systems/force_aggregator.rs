@@ -116,10 +116,11 @@ pub fn aggregate_forces(
                 // already captured by the SH model.
                 continue;
             }
+            let gm_val = gm.into_value();
             let delta = kinematics.position - body_pos;
             let r = delta.norm();
             if r > 0.0 {
-                third_body -= gm * delta / (r * r * r);
+                third_body -= gm_val * delta / (r * r * r);
             }
         }
         AccelerationVector::new(*sh_accel.raw() + third_body)
@@ -204,7 +205,7 @@ pub(crate) fn ecef_lat_lon_from_inertial(position: &Position) -> LatLonAlt {
 #[cfg(test)]
 mod tests {
     use apogee_common::constants::{GM_EARTH, R_EARTH_EQ};
-    use apogee_common::units::{Area, Kilograms};
+    use apogee_common::units::{Area, GravitationalParameter, Kilograms};
     use nalgebra::Vector3;
 
     use super::*;
@@ -243,7 +244,7 @@ mod tests {
         let (kin, rb, drag, srp) = make_iss_components();
         let sim_config = SimulationConfig::default();
         let gravity_sources = GravitySources {
-            sources: vec![(GM_EARTH, Vector3::zeros())],
+            sources: vec![(GravitationalParameter::new(GM_EARTH), Vector3::zeros())],
         };
         let sun_position = Vector3::new(-apogee_common::constants::AU, 0.0, 0.0);
         let epoch = Epoch::from_gregorian_utc(2026, 3, 21, 12, 0, 0, 0);
@@ -268,7 +269,7 @@ mod tests {
         let (kin, rb, _, _) = make_iss_components();
         let sim_config = SimulationConfig::default();
         let gravity_sources = GravitySources {
-            sources: vec![(GM_EARTH, Vector3::zeros())],
+            sources: vec![(GravitationalParameter::new(GM_EARTH), Vector3::zeros())],
         };
         let sun_position = Vector3::new(-apogee_common::constants::AU, 0.0, 0.0);
         let epoch = Epoch::from_gregorian_utc(2026, 3, 21, 12, 0, 0, 0);

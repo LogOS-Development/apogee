@@ -59,7 +59,7 @@ fn load_reference() -> Option<Vec<Sample>> {
 /// Build a Moon-centered gravity source set with Moon as the origin.
 fn moon_only_sources() -> GravitySources {
     GravitySources {
-        sources: vec![(GM_MOON, Vector3::zeros())],
+        sources: vec![(apogee_common::units::GravitationalParameter::new(GM_MOON), Vector3::zeros())],
     }
 }
 

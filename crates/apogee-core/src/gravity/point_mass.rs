@@ -38,7 +38,8 @@ impl PointMassGravity {
         let mut acc = Vector3::zeros();
 
         for &(gm, body_pos) in &sources.sources {
-            if gm == 0.0 {
+            let gm_val = gm.into_value();
+            if gm_val == 0.0 {
                 continue;
             }
 
@@ -46,14 +47,14 @@ impl PointMassGravity {
             let r2 = delta.norm_squared();
             if r2 == 0.0 {
                 return Err(format!(
-                    "coincident positions with gravity source (GM={gm}): singularity in point-mass gravity"
+                    "coincident positions with gravity source (GM={gm_val}): singularity in point-mass gravity"
                 ));
             }
             let r3 = r2 * r2.sqrt();
             // GM has units m³/s², dividing by m³ (delta/r3) yields m/s². The
             // type tag is preserved in the wrapper; the underlying arithmetic
             // is dimensionally consistent.
-            acc += gm * delta / r3;
+            acc += gm_val * delta / r3;
         }
 
         Ok(AccelerationVector::new(acc))
@@ -77,9 +78,11 @@ mod tests {
     use apogee_common::gravitational_parameter;
     use approx::assert_relative_eq;
 
-    fn source(naif_id: i32, position: [f64; 3]) -> (f64, Position) {
+    use apogee_common::units::GravitationalParameter;
+
+    fn source(naif_id: i32, position: [f64; 3]) -> (GravitationalParameter<f64>, Position) {
         let gm = gravitational_parameter(naif_id).unwrap_or(0.0);
-        (gm, Vector3::new(position[0], position[1], position[2]))
+        (GravitationalParameter::new(gm), Vector3::new(position[0], position[1], position[2]))
     }
 
     #[test]
@@ -143,7 +146,7 @@ mod tests {
         let sources = GravitySources {
             sources: vec![
                 source(10, [0.0, 0.0, 0.0]),
-                (0.0, Vector3::new(0.0, apogee_common::constants::AU, 0.0)),
+                (GravitationalParameter::new(0.0), Vector3::new(0.0, apogee_common::constants::AU, 0.0)),
             ],
         };
 

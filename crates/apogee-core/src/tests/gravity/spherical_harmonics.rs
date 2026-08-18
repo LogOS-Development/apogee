@@ -50,7 +50,7 @@ fn test_rigid_body() -> RigidBody {
 /// when computing third-body perturbations.
 fn j2_context(epoch: Epoch) -> SimContext {
     let mut gravity_sources = crate::gravity::GravitySources::new();
-    gravity_sources.push(GM_EARTH, Vector3::zeros());
+    gravity_sources.push(apogee_common::units::GravitationalParameter::new(GM_EARTH), Vector3::zeros());
     SimContext {
         sim_config: SimulationConfig::default(),
         gravity_sources,
@@ -248,7 +248,7 @@ fn test_sh_with_third_body_perturbation() {
     let mut kin_sh_3body = kinematics(pos0, vel0);
     let mut ctx_sh_3body = j2_context(epoch);
     ctx_sh_3body.gravity_sources.push(
-        4.902800118e12, // GM_MOON
+        apogee_common::units::GravitationalParameter::new(4.902800118e12), // GM_MOON
         Vector3::new(384_400_000.0, 0.0, 0.0),
     );
     propagate(
