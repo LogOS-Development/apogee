@@ -6,7 +6,7 @@
 
 use std::f64::consts::PI;
 
-use apogee_common::units::Meters;
+use apogee_common::units::{Meters, Radians};
 use apogee_core::aero::{
     jacchia_bowman::JacchiaBowman, model::AtmosphereInput, nrlmsise00::Nrlmsise00,
 };
@@ -239,8 +239,8 @@ fn sample_point(
 
     let input = AtmosphereInput {
         altitude_m: Meters::new(altitude_m),
-        latitude_rad: lat_rad,
-        longitude_rad: lon_rad,
+        latitude_rad: Radians::new(lat_rad),
+        longitude_rad: Radians::new(lon_rad),
         day_of_year: doy,
         seconds_utc,
         f107,
@@ -266,9 +266,9 @@ fn sample_point(
     let wind = {
         use apogee_core::aero::hwm::Hwm14;
         let wind_input = apogee_core::aero::WindInput {
-            altitude_m,
-            latitude_rad: lat_rad,
-            longitude_rad: lon_rad,
+            altitude_m: Meters::new(altitude_m),
+            latitude_rad: Radians::new(lat_rad),
+            longitude_rad: Radians::new(lon_rad),
             local_solar_time_hours: (seconds_utc / 3600.0 + lon_rad.to_degrees() / 15.0)
                 .rem_euclid(24.0),
             day_of_year: doy,

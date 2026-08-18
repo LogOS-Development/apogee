@@ -6,7 +6,7 @@
 //! zero. The `SpacecraftConfig` struct has been replaced by
 //! `SpacecraftDefinition` (a load-time blueprint, not a runtime component).
 
-use apogee_common::units::{AccelerationVector, Kilograms, TorqueVector};
+use apogee_common::units::{AccelerationVector, Kilograms, Meters, Radians, TorqueVector};
 use apogee_common::Position;
 use nalgebra::Vector3;
 
@@ -138,7 +138,7 @@ pub fn aggregate_forces(
         let model = crate::aero::nrlmsise00::Nrlmsise00;
         let latlon = ecef_lat_lon_from_inertial(&kinematics.position);
         let input = crate::aero::model::AtmosphereInput {
-            altitude_m: apogee_common::units::Meters::new(latlon.altitude_m),
+            altitude_m: latlon.altitude_m,
             latitude_rad: latlon.latitude_rad,
             longitude_rad: latlon.longitude_rad,
             day_of_year,
@@ -183,9 +183,9 @@ pub fn aggregate_forces(
 /// position. This is a coarse spherical approximation sufficient for
 /// atmosphere-model inputs in a first-pass 6DOF demo.
 pub(crate) struct LatLonAlt {
-    pub(crate) latitude_rad: f64,
-    pub(crate) longitude_rad: f64,
-    pub(crate) altitude_m: f64,
+    pub(crate) latitude_rad: Radians<f64>,
+    pub(crate) longitude_rad: Radians<f64>,
+    pub(crate) altitude_m: Meters<f64>,
 }
 
 pub(crate) fn ecef_lat_lon_from_inertial(position: &Position) -> LatLonAlt {
@@ -196,9 +196,9 @@ pub(crate) fn ecef_lat_lon_from_inertial(position: &Position) -> LatLonAlt {
     let lon = position.y.atan2(position.x);
     let alt = r - apogee_common::constants::R_EARTH_EQ;
     LatLonAlt {
-        latitude_rad: lat,
-        longitude_rad: lon,
-        altitude_m: alt,
+        latitude_rad: Radians::new(lat),
+        longitude_rad: Radians::new(lon),
+        altitude_m: Meters::new(alt),
     }
 }
 
