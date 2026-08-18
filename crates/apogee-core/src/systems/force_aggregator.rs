@@ -6,7 +6,7 @@
 //! zero. The `SpacecraftConfig` struct has been replaced by
 //! `SpacecraftDefinition` (a load-time blueprint, not a runtime component).
 
-use apogee_common::units::{AccelerationVector, Kilograms, TorqueVector};
+use apogee_common::units::{AccelerationVector, Kilograms, Meters, Radians, TorqueVector};
 use apogee_common::Position;
 use nalgebra::Vector3;
 
@@ -116,10 +116,11 @@ pub fn aggregate_forces(
                 // already captured by the SH model.
                 continue;
             }
+            let gm_val = gm.into_value();
             let delta = kinematics.position - body_pos;
             let r = delta.norm();
             if r > 0.0 {
-                third_body -= gm * delta / (r * r * r);
+                third_body -= gm_val * delta / (r * r * r);
             }
         }
         AccelerationVector::new(*sh_accel.raw() + third_body)
@@ -137,7 +138,7 @@ pub fn aggregate_forces(
         let model = crate::aero::nrlmsise00::Nrlmsise00;
         let latlon = ecef_lat_lon_from_inertial(&kinematics.position);
         let input = crate::aero::model::AtmosphereInput {
-            altitude_m: apogee_common::units::Meters::new(latlon.altitude_m),
+            altitude_m: latlon.altitude_m,
             latitude_rad: latlon.latitude_rad,
             longitude_rad: latlon.longitude_rad,
             day_of_year,
@@ -182,9 +183,9 @@ pub fn aggregate_forces(
 /// position. This is a coarse spherical approximation sufficient for
 /// atmosphere-model inputs in a first-pass 6DOF demo.
 pub(crate) struct LatLonAlt {
-    pub(crate) latitude_rad: f64,
-    pub(crate) longitude_rad: f64,
-    pub(crate) altitude_m: f64,
+    pub(crate) latitude_rad: Radians<f64>,
+    pub(crate) longitude_rad: Radians<f64>,
+    pub(crate) altitude_m: Meters<f64>,
 }
 
 pub(crate) fn ecef_lat_lon_from_inertial(position: &Position) -> LatLonAlt {
@@ -195,16 +196,16 @@ pub(crate) fn ecef_lat_lon_from_inertial(position: &Position) -> LatLonAlt {
     let lon = position.y.atan2(position.x);
     let alt = r - apogee_common::constants::R_EARTH_EQ;
     LatLonAlt {
-        latitude_rad: lat,
-        longitude_rad: lon,
-        altitude_m: alt,
+        latitude_rad: Radians::new(lat),
+        longitude_rad: Radians::new(lon),
+        altitude_m: Meters::new(alt),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use apogee_common::constants::{GM_EARTH, R_EARTH_EQ};
-    use apogee_common::units::{Area, Kilograms};
+    use apogee_common::units::{Area, GravitationalParameter, Kilograms};
     use nalgebra::Vector3;
 
     use super::*;
@@ -243,7 +244,7 @@ mod tests {
         let (kin, rb, drag, srp) = make_iss_components();
         let sim_config = SimulationConfig::default();
         let gravity_sources = GravitySources {
-            sources: vec![(GM_EARTH, Vector3::zeros())],
+            sources: vec![(GravitationalParameter::new(GM_EARTH), Vector3::zeros())],
         };
         let sun_position = Vector3::new(-apogee_common::constants::AU, 0.0, 0.0);
         let epoch = Epoch::from_gregorian_utc(2026, 3, 21, 12, 0, 0, 0);
@@ -268,7 +269,7 @@ mod tests {
         let (kin, rb, _, _) = make_iss_components();
         let sim_config = SimulationConfig::default();
         let gravity_sources = GravitySources {
-            sources: vec![(GM_EARTH, Vector3::zeros())],
+            sources: vec![(GravitationalParameter::new(GM_EARTH), Vector3::zeros())],
         };
         let sun_position = Vector3::new(-apogee_common::constants::AU, 0.0, 0.0);
         let epoch = Epoch::from_gregorian_utc(2026, 3, 21, 12, 0, 0, 0);

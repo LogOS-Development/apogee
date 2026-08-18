@@ -5,7 +5,7 @@
 //! latitude, plus space-weather indices; outputs are total mass density,
 //! temperature, and (optionally) number densities for major species.
 
-use apogee_common::units::{Density, Kelvins, Meters};
+use apogee_common::units::{Density, Kelvins, Meters, Radians};
 
 /// Geodetic location and local conditions used by atmosphere models.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -13,9 +13,9 @@ pub struct AtmosphereInput {
     /// Altitude above the ellipsoid.
     pub altitude_m: Meters<f64>,
     /// Geodetic latitude, radians.
-    pub latitude_rad: f64,
+    pub latitude_rad: Radians<f64>,
     /// Geodetic longitude, radians.
-    pub longitude_rad: f64,
+    pub longitude_rad: Radians<f64>,
     /// Day of year (1..=366).
     pub day_of_year: u16,
     /// Seconds since local midnight, UTC.
@@ -34,8 +34,8 @@ impl AtmosphereInput {
     pub fn at_altitude(altitude_m: f64) -> Self {
         Self {
             altitude_m: Meters::new(altitude_m),
-            latitude_rad: 0.0,
-            longitude_rad: 0.0,
+            latitude_rad: Radians::new(0.0),
+            longitude_rad: Radians::new(0.0),
             day_of_year: 80,
             seconds_utc: 0.0,
             f107: 150.0,

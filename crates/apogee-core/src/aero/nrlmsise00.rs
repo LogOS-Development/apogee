@@ -44,8 +44,8 @@ impl Nrlmsise00 {
             doy: input.day_of_year as i32,
             sec: input.seconds_utc,
             alt: input.altitude_m.into_value() / 1000.0,
-            g_lat: input.latitude_rad.to_degrees(),
-            g_lon: input.longitude_rad.to_degrees(),
+            g_lat: input.latitude_rad.into_value().to_degrees(),
+            g_lon: input.longitude_rad.into_value().to_degrees(),
             lst: local_solar_time(input),
             f107a: input.f107a,
             f107: input.f107,
@@ -97,7 +97,7 @@ fn full_model_flags() -> NrlmsiseFlags {
 /// Compute local apparent solar time in hours from longitude and UTC seconds.
 fn local_solar_time(input: &AtmosphereInput) -> f64 {
     let utc_hours = input.seconds_utc / 3600.0;
-    let lon_hours = input.longitude_rad.to_degrees() / 15.0;
+    let lon_hours = input.longitude_rad.into_value().to_degrees() / 15.0;
     (utc_hours + lon_hours).rem_euclid(24.0)
 }
 

@@ -116,8 +116,8 @@ fn test_fixture_egm2008_truncated_loads() {
     // Known EGM2008 tide-free C_2,0.
     assert!((model.c[2][0] - (-0.484165143790815e-03)).abs() < 1e-15);
     // GM and radius from header.
-    assert!((model.gm - 0.3986004415e15).abs() < 1.0);
-    assert!((model.reference_radius - 0.63781363e7).abs() < 1e-3);
+    assert!((model.gm.into_value() - 0.3986004415e15).abs() < 1.0);
+    assert!((model.reference_radius.into_value() - 0.63781363e7).abs() < 1e-3);
 }
 
 #[test]
@@ -130,5 +130,5 @@ fn test_real_egm2008_loads() {
         crate::gravity::SphericalHarmonics::load_egm2008(path.to_str().unwrap(), 70, 70).unwrap();
     assert_eq!(model.degree, 70);
     assert!((model.c[2][0] - (-0.484165143790815e-03)).abs() < 1e-15);
-    assert!((model.gm - 0.3986004415e15).abs() < 1.0);
+    assert!((model.gm.into_value() - 0.3986004415e15).abs() < 1.0);
 }

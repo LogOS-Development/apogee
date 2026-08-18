@@ -11,6 +11,8 @@ use approx::relative_eq;
 use crate::aero::model::AtmosphereInput;
 use crate::aero::nrlmsise00::Nrlmsise00;
 
+use apogee_common::units::Radians;
+
 /// Reference case and expected output.
 struct ReferenceCase {
     doy: u16,
@@ -82,8 +84,8 @@ fn test_nrlmsise00_matches_pymsis_density() {
     for case in CASES {
         let input = AtmosphereInput {
             altitude_m: apogee_common::units::Meters::new(case.alt_m),
-            latitude_rad: case.lat_rad,
-            longitude_rad: case.lon_rad,
+            latitude_rad: Radians::new(case.lat_rad),
+            longitude_rad: Radians::new(case.lon_rad),
             day_of_year: case.doy,
             seconds_utc: case.sec,
             f107: case.f107,
@@ -112,8 +114,8 @@ fn test_nrlmsise00_matches_pymsis_temperature() {
     for case in CASES {
         let input = AtmosphereInput {
             altitude_m: apogee_common::units::Meters::new(case.alt_m),
-            latitude_rad: case.lat_rad,
-            longitude_rad: case.lon_rad,
+            latitude_rad: Radians::new(case.lat_rad),
+            longitude_rad: Radians::new(case.lon_rad),
             day_of_year: case.doy,
             seconds_utc: case.sec,
             f107: case.f107,
@@ -141,8 +143,8 @@ fn test_nrlmsise00_matches_pymsis_temperature() {
 fn test_nrlmsise00_evaluates_at_iss_altitude() {
     let input = AtmosphereInput {
         altitude_m: apogee_common::units::Meters::new(408_000.0),
-        latitude_rad: 51.6f64.to_radians(),
-        longitude_rad: 0.0,
+        latitude_rad: Radians::new(51.6f64.to_radians()),
+        longitude_rad: Radians::new(0.0),
         day_of_year: 80,
         seconds_utc: 43200.0,
         f107: 150.0,

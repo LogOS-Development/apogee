@@ -12,7 +12,7 @@
 //! `hwm14` feature for real HWM14 wind vectors; otherwise the wind column is
 //! zero (placeholder).
 
-use apogee_common::units::Meters;
+use apogee_common::units::{Meters, Radians};
 use apogee_core::aero::{
     jacchia_bowman::JacchiaBowman, model::AtmosphereInput, nrlmsise00::Nrlmsise00,
 };
@@ -43,8 +43,8 @@ fn main() {
 
                     let input = AtmosphereInput {
                         altitude_m: Meters::new(alt_km * 1000.0),
-                        latitude_rad: lat_rad,
-                        longitude_rad: lon_rad,
+                        latitude_rad: Radians::new(lat_rad),
+                        longitude_rad: Radians::new(lon_rad),
                         day_of_year: 80,
                         seconds_utc: 12.0 * 3600.0,
                         f107: 150.0,

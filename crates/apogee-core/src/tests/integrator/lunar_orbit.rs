@@ -11,7 +11,7 @@ use crate::integrator::{Integrator, Rk4, StateVector};
 use crate::tests::helpers::point_mass_derivative;
 use apogee_common::constants::GM_MOON;
 use apogee_common::gravitational_parameter;
-use apogee_common::units::Seconds;
+use apogee_common::units::{GravitationalParameter, Seconds};
 use approx::assert_relative_eq;
 use nalgebra::Vector3;
 
@@ -20,7 +20,9 @@ const R_MOON: f64 = 1_737_400.0;
 
 /// Build a single-body Moon-centered model for testing the integrator.
 fn moon_system() -> GravitySources {
-    let gm = gravitational_parameter(301).unwrap_or(0.0);
+    let gm = gravitational_parameter(301)
+        .map(GravitationalParameter::new)
+        .unwrap_or_default();
     GravitySources {
         sources: vec![(gm, Vector3::zeros())],
     }
@@ -150,7 +152,9 @@ fn test_moon_geocentric_orbit_vs_horizons_apollo_era() {
 
     // Treat the Moon as the test particle and propagate it around the Earth
     // using a point-mass Earth+Moon model in the geocentric inertial frame.
-    let gm_earth = gravitational_parameter(399).unwrap_or(0.0);
+    let gm_earth = gravitational_parameter(399)
+        .map(GravitationalParameter::new)
+        .unwrap_or_default();
     let sources = GravitySources {
         sources: vec![(gm_earth, Vector3::zeros())],
     };
