@@ -8,9 +8,7 @@
 //!
 //! Types use the full word "Vector" — no abbreviations.
 
-use crate::units::{dim, Quantity, TensorQuantity, VectorQuantity};
-
-use nalgebra::Vector3;
+use metron::{dim, Quantity, TensorQuantity, VectorQuantity};
 
 // ---------------------------------------------------------------------------
 // 3-D vector aliases
@@ -73,72 +71,34 @@ pub type Mu = Quantity<f64, dim::GravitationalParameter>;
 pub type PowerScalar = Quantity<f64, dim::Power>;
 
 // ---------------------------------------------------------------------------
-// Inherent helper methods on VectorQuantity aliases
+// Position vector helper methods (trait — can't add inherent impls on
+// types from metron, so we use an extension trait)
 // ---------------------------------------------------------------------------
 
-impl PositionVector {
+/// Extension trait for position vector helpers.
+pub trait PositionExt {
     /// Scalar (Euclidean) distance to another position.
+    fn distance_to(&self, other: &Self) -> f64;
+    /// Displacement vector from self to `other`.
+    fn vector_to(&self, other: &Self) -> Self;
+    /// Unit direction from self toward `other`.
+    fn direction_to(&self, other: &Self) -> DirectionVector;
+}
+
+impl PositionExt for PositionVector {
     #[inline]
-    #[must_use]
-    pub fn distance_to(&self, other: &Self) -> f64 {
+    fn distance_to(&self, other: &Self) -> f64 {
         (other.vector - self.vector).norm()
     }
 
-    /// Displacement vector from self to `other`.
     #[inline]
-    #[must_use]
-    pub fn vector_to(&self, other: &Self) -> Self {
+    fn vector_to(&self, other: &Self) -> Self {
         Self::new(other.vector - self.vector)
     }
 
-    /// Unit direction from self toward `other`.
     #[inline]
-    #[must_use]
-    pub fn direction_to(&self, other: &Self) -> DirectionVector {
+    fn direction_to(&self, other: &Self) -> DirectionVector {
         DirectionVector::new((other.vector - self.vector).normalize())
-    }
-
-    /// Construct from `[x, y, z]` in meters.
-    #[inline]
-    #[must_use]
-    pub fn from_xyz(x: f64, y: f64, z: f64) -> Self {
-        Self::new(Vector3::new(x, y, z))
-    }
-}
-
-impl VelocityVector {
-    /// Construct from `[vx, vy, vz]` in m/s.
-    #[inline]
-    #[must_use]
-    pub fn from_xyz(x: f64, y: f64, z: f64) -> Self {
-        Self::new(Vector3::new(x, y, z))
-    }
-}
-
-impl AccelerationVector {
-    /// Construct from `[ax, ay, az]` in m/s².
-    #[inline]
-    #[must_use]
-    pub fn from_xyz(x: f64, y: f64, z: f64) -> Self {
-        Self::new(Vector3::new(x, y, z))
-    }
-}
-
-impl ForceVector {
-    /// Construct from `[fx, fy, fz]` in newtons.
-    #[inline]
-    #[must_use]
-    pub fn from_xyz(x: f64, y: f64, z: f64) -> Self {
-        Self::new(Vector3::new(x, y, z))
-    }
-}
-
-impl TorqueVector {
-    /// Construct from `[tx, ty, tz]` in N·m.
-    #[inline]
-    #[must_use]
-    pub fn from_xyz(x: f64, y: f64, z: f64) -> Self {
-        Self::new(Vector3::new(x, y, z))
     }
 }
 
