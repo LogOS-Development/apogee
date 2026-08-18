@@ -661,6 +661,28 @@ impl<T: NumAssign, U> MulAssign<T> for Quantity<T, U> {
     }
 }
 
+// --- Reverse scalar ops: f64 * Quantity, f64 / Quantity ---
+// These enable `5.0 * (m / s)` and `1.0 / s` syntax with unit constants.
+// Legal under the orphan rule because Quantity is a local type appearing
+// as the Rhs parameter of the foreign Mul/Div traits.
+impl<U> Mul<Quantity<f64, U>> for f64 {
+    type Output = Quantity<f64, U>;
+    #[inline]
+    fn mul(self, rhs: Quantity<f64, U>) -> Self::Output {
+        Quantity::new(self * rhs.value)
+    }
+}
+impl<U> Div<Quantity<f64, U>> for f64
+where
+    dim::Dimensionless: Div<U>,
+{
+    type Output = Quantity<f64, <dim::Dimensionless as Div<U>>::Output>;
+    #[inline]
+    fn div(self, rhs: Quantity<f64, U>) -> Self::Output {
+        Quantity::new(self / rhs.value)
+    }
+}
+
 impl<T: fmt::Display, U: UnitName> fmt::Display for Quantity<T, U> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} {}", self.value, U::NAME)
@@ -1111,6 +1133,51 @@ pub type ComplexVolts = Quantity<Complex<f64>, dim::Voltage>;
 pub type ComplexAmperes = Quantity<Complex<f64>, dim::Ampere>;
 pub type ComplexFrequency = Quantity<Complex<f64>, dim::Frequency>;
 pub type ComplexWavenumber = Quantity<Complex<f64>, dim::Wavenumber>;
+
+// ===========================================================================
+// SI base unit constants — 1 of each base unit.
+//
+// Enables natural unit-expression syntax:
+//   use apogee_common::units::si::*;
+//   5.0 * (m / s)          → Velocity (m/s)
+//   9.8 * (m / s / s)      → Acceleration (m/s²)
+//   3.0 * (m * m)          → Area (m²)
+//   1.0 / s                → Frequency (Hz = s⁻¹)
+//   420_000.0 * (kg * g)   → GravitationalParameter (m³/s²)  [g is G constant]
+//
+// Only the 7 SI base units are defined here. All derived units are
+// expressed via typed arithmetic on these constants.
+//
+// The constants live in a `si` submodule so that `use units::*` does not
+// pollute the caller's namespace with single-letter names. Import them
+// explicitly with `use units::si::*` when you want the syntax sugar.
+// ===========================================================================
+
+pub mod si {
+    use super::*;
+
+    /// 1 metre.
+    #[allow(non_upper_case_globals)]
+    pub const m: Meters<f64> = Meters::new(1.0);
+    /// 1 second.
+    #[allow(non_upper_case_globals)]
+    pub const s: Seconds<f64> = Seconds::new(1.0);
+    /// 1 kilogram.
+    #[allow(non_upper_case_globals)]
+    pub const kg: Kilograms<f64> = Kilograms::new(1.0);
+    /// 1 ampere.
+    #[allow(non_upper_case_globals)]
+    pub const a: Amperes<f64> = Amperes::new(1.0);
+    /// 1 kelvin.
+    #[allow(non_upper_case_globals)]
+    pub const k: Kelvins<f64> = Kelvins::new(1.0);
+    /// 1 mole.
+    #[allow(non_upper_case_globals)]
+    pub const mol: Moles<f64> = Moles::new(1.0);
+    /// 1 candela.
+    #[allow(non_upper_case_globals)]
+    pub const cd: Candelas<f64> = Candelas::new(1.0);
+}
 
 // ===========================================================================
 // Dynamics re-exports (vector/tensor aliases live in `dynamics`)
@@ -1595,5 +1662,64 @@ mod tests {
         let r = area.sqrt();
         assert_relative_eq!(r.value.re, 2.0);
         assert_relative_eq!(r.value.im, 1.0);
+    }
+
+    // --- Unit constant syntax tests ---
+
+    mod si_syntax {
+        use super::super::si::*;
+        use super::*;
+
+        #[test]
+        fn velocity_from_m_div_s() {
+            let v: Velocity = 5.0 * (m / s);
+            assert_relative_eq!(v.value, 5.0);
+        }
+
+        #[test]
+        fn acceleration() {
+            let acc: Acceleration = 9.8 * (m / s / s);
+            assert_relative_eq!(acc.value, 9.8);
+        }
+
+        #[test]
+        fn area() {
+            let area: Area = 3.0 * (m * m);
+            assert_relative_eq!(area.value, 3.0);
+        }
+
+        #[test]
+        fn frequency_from_inverse_s() {
+            let freq: Frequency = 1.0 / s;
+            assert_relative_eq!(freq.value, 1.0);
+        }
+
+        #[test]
+        fn force() {
+            // F = kg * m / s²
+            let f: Force = 10.0 * (kg * m / s / s);
+            assert_relative_eq!(f.value, 10.0);
+        }
+
+        #[test]
+        fn pressure() {
+            // Pa = N / m² = kg / (m * s²)
+            let p: Pressure = 101_325.0 * (kg / (m * s * s));
+            assert_relative_eq!(p.value, 101_325.0);
+        }
+
+        #[test]
+        fn energy() {
+            // J = N * m = kg * m² / s²
+            let e: Energy = 4.2 * (kg * m * m / s / s);
+            assert_relative_eq!(e.value, 4.2);
+        }
+
+        #[test]
+        fn power() {
+            // W = J / s = kg * m² / s³
+            let p: Power = 100.0 * (kg * m * m / s / s / s);
+            assert_relative_eq!(p.value, 100.0);
+        }
     }
 }
