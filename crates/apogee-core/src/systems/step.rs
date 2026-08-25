@@ -33,6 +33,7 @@ use crate::integrator::{IntegrationResult, Integrator, Rk4, StateDerivative, Sta
 use crate::systems::force_aggregator::aggregate_forces;
 use crate::world::World;
 use apogee_common::units::GravitationalParameter;
+use apogee_common::NaifId;
 use hifitime::{Epoch, Unit};
 
 /// Shared simulation environment passed to propagation functions.
@@ -199,15 +200,16 @@ pub fn step_spacecraft(
 
 /// Step the entire simulation world forward by `dt` seconds.
 ///
-/// Iterates all live entities that have `Kinematics + RigidBody`, calling
-/// `step_spacecraft` on each one in-place. `DragSurfaces` and `SrpSurfaces`
-/// are queried as optional components — entities without them get zero
-/// drag/SRP. Then integrates dynamic celestial bodies (entities with
-/// `Kinematics + GravitySource + CelestialKind::Dynamic + CelestialMass`).
-/// Kinematic celestial bodies are left untouched (their positions are driven
-/// by the ephemeris service). The world epoch is advanced by `dt` after all
-/// entities have been stepped.
+/// 1. If an ephemeris service is attached, update all kinematic celestial
+///    bodies from the ephemeris at the current epoch.
+/// 2. Build the simulation context from the updated ECS world.
+/// 3. Step all spacecraft entities (Kinematics + RigidBody) using RK4.
+/// 4. Integrate dynamic celestial bodies under point-mass gravity.
+/// 5. Advance the world epoch by `dt`.
 pub fn step_world(world: &mut World, dt: Seconds<f64>) {
+    // Update kinematic celestial bodies from the ephemeris service.
+    update_kinematic_from_ephemeris(world);
+
     // Build the simulation context from the ECS world — this collects
     // gravity sources and the Sun's position from celestial body entities.
     let ctx = SimContext::from_world(world);
@@ -275,6 +277,47 @@ pub fn step_world(world: &mut World, dt: Seconds<f64>) {
 pub fn step_and_advance(world: &mut World, dt: Seconds<f64>) {
     step_world(world, dt);
     world.epoch += dt.into_value() * Unit::Second;
+}
+
+/// Update kinematic celestial bodies from the ephemeris service.
+///
+/// If the world has an `EphemerisService`, queries each kinematic celestial
+/// body by NAIF ID and updates its position/velocity. Dynamic bodies and
+/// bodies without a NAIF ID component are skipped. Errors are silently
+/// ignored — a missing ephemeris segment for a body leaves it at its
+/// current position.
+fn update_kinematic_from_ephemeris(world: &mut World) {
+    let Some(ephemeris) = world.ephemeris.as_mut() else {
+        return;
+    };
+    let epoch = world.epoch;
+
+    let kinematic_bodies: Vec<(hecs::Entity, NaifId)> = world
+        .ecs
+        .query::<(&NaifIdComponent, &CelestialKind)>()
+        .iter()
+        .filter(|(_, (_, kind))| kind.is_kinematic())
+        .map(|(e, (id, _))| (e, id.0))
+        .collect();
+
+    let updates: Vec<(
+        hecs::Entity,
+        apogee_common::Position,
+        apogee_common::Velocity,
+    )> = kinematic_bodies
+        .into_iter()
+        .filter_map(|(entity, naif_id)| {
+            let state = ephemeris.state_at(naif_id, epoch).ok()?;
+            Some((entity, state.position, state.velocity))
+        })
+        .collect();
+
+    for (entity, position, velocity) in updates {
+        if let Some(mut kin) = world.get_component_mut::<Kinematics>(entity) {
+            kin.position = position;
+            kin.velocity = velocity;
+        }
+    }
 }
 
 /// Integrate all dynamic celestial bodies in the ECS world one step forward.
@@ -392,6 +435,9 @@ mod tests {
     use super::*;
     use crate::components::celestial::CelestialBodySpec;
     use crate::components::kinematics::Kinematics;
+    use crate::ephemeris::kernel::tests::build_type3_fixture;
+    use crate::ephemeris::{EphemerisService, Kernel};
+    use crate::frames::ClockService;
 
     fn make_orbit_components() -> (Kinematics, RigidBody) {
         let r = R_EARTH_EQ + 400_000.0;
@@ -590,7 +636,7 @@ mod tests {
     fn test_spacecraft_orbits_with_kinematic_and_propagated_bodies() {
         // Spacecraft orbits a kinematic Earth while a propagated asteroid
         // also orbits. Both should maintain stable orbits.
-        let mut world = World::new();
+        let mut world = World::with_config_and_epoch(SimulationConfig::default(), test_epoch());
         world.add_celestial_body(CelestialBodySpec::kinematic(
             399,
             Vector3::zeros(),
@@ -648,5 +694,119 @@ mod tests {
         let kin = world.get_component::<Kinematics>(sc_entity).unwrap();
         let sc_alt = kin.position.norm() - R_EARTH_EQ;
         assert!(sc_alt > 350_000.0 && sc_alt < 500_000.0);
+    }
+
+    // ------------------------------------------------------------------
+    // ClockService + EphemerisService integration (#140, #139)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_epoch_advances_with_step_and_advance() {
+        let mut world = World::with_config_and_epoch(SimulationConfig::default(), test_epoch());
+        let e0 = world.epoch;
+        step_and_advance(&mut world, Seconds::new(60.0));
+        assert_eq!(world.epoch, e0 + 60.0 * Unit::Second);
+    }
+
+    #[test]
+    fn test_with_clock_attaches_clock_service() {
+        let world = World::new().with_clock(ClockService::new());
+        assert!(world.clock.is_some());
+    }
+
+    #[test]
+    fn test_with_ephemeris_attaches_ephemeris_service() {
+        let fixture =
+            build_type3_fixture(499, 0.0, 86400.0, 1, |_x| [1.0, 2.0, 3.0], |_x| [0.0; 3]);
+        let kernel = Kernel::from_bytes(&fixture).unwrap();
+        let service = EphemerisService::from_kernel(kernel, 4);
+        let world = World::new().with_ephemeris(service);
+        assert!(world.ephemeris.is_some());
+    }
+
+    #[test]
+    fn test_ephemeris_updates_kinematic_body() {
+        // A kinematic body with NAIF ID 499 should have its position updated
+        // from the ephemeris service when step_world is called.
+        let fixture =
+            build_type3_fixture(499, 0.0, 86400.0, 1, |_x| [1e7, 2e7, 3e7], |_x| [0.0; 3]);
+        let kernel = Kernel::from_bytes(&fixture).unwrap();
+        let service = EphemerisService::from_kernel(kernel, 4);
+
+        let epoch = Epoch::from_et_seconds(43200.0);
+        let mut world = World::with_config_and_epoch(SimulationConfig::default(), epoch)
+            .with_ephemeris(service);
+
+        // Spawn a kinematic Mars at the origin.
+        world.add_celestial_body(CelestialBodySpec::kinematic(
+            499,
+            Vector3::zeros(),
+            Vector3::zeros(),
+        ));
+
+        // Step the world — the ephemeris update should move Mars to (1e7, 2e7, 3e7).
+        step_world(&mut world, Seconds::new(60.0));
+
+        let mars = world.find_celestial(499).unwrap();
+        let kin = world.get_component::<Kinematics>(mars).unwrap();
+        assert_relative_eq!(kin.position.x, 1e7, epsilon = 1e-3);
+        assert_relative_eq!(kin.position.y, 2e7, epsilon = 1e-3);
+        assert_relative_eq!(kin.position.z, 3e7, epsilon = 1e-3);
+    }
+
+    #[test]
+    fn test_ephemeris_skips_dynamic_bodies() {
+        // Dynamic bodies should not be updated by the ephemeris service.
+        let fixture = build_type3_fixture(
+            2_000_001,
+            0.0,
+            86400.0,
+            1,
+            |_x| [5e6, 0.0, 0.0],
+            |_x| [0.0; 3],
+        );
+        let kernel = Kernel::from_bytes(&fixture).unwrap();
+        let service = EphemerisService::from_kernel(kernel, 4);
+
+        let epoch = Epoch::from_et_seconds(43200.0);
+        let mut world = World::with_config_and_epoch(SimulationConfig::default(), epoch)
+            .with_ephemeris(service);
+
+        // Spawn a dynamic body at the origin — it should NOT be moved by ephemeris.
+        world.add_celestial_body(CelestialBodySpec::dynamic_from_mass(
+            2_000_001,
+            Vector3::zeros(),
+            Vector3::zeros(),
+            Kilograms::new(1e10),
+        ));
+
+        step_world(&mut world, Seconds::new(60.0));
+
+        let body = world.find_celestial(2_000_001).unwrap();
+        let kin = world.get_component::<Kinematics>(body).unwrap();
+        // The dynamic body should still be at the origin (ephemeris update skipped it).
+        // It may have moved slightly from gravity, but not to (5e6, 0, 0).
+        assert!(
+            kin.position.x < 1e6,
+            "dynamic body should not have been teleported by ephemeris, got x={}",
+            kin.position.x
+        );
+    }
+
+    #[test]
+    fn test_no_ephemeris_leaves_kinematic_bodies_untouched() {
+        // Without an ephemeris service, kinematic bodies stay at their initial position.
+        let mut world = World::with_config_and_epoch(SimulationConfig::default(), test_epoch());
+        world.add_celestial_body(CelestialBodySpec::kinematic(
+            399,
+            Vector3::new(1e8, 0.0, 0.0),
+            Vector3::zeros(),
+        ));
+
+        step_world(&mut world, Seconds::new(60.0));
+
+        let earth = world.find_celestial(399).unwrap();
+        let kin = world.get_component::<Kinematics>(earth).unwrap();
+        assert_relative_eq!(kin.position.x, 1e8);
     }
 }
