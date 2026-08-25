@@ -8,7 +8,7 @@ pub use gradient_torque::*;
 pub use point_mass::*;
 pub use spherical_harmonics::*;
 
-use apogee_common::units::{AccelerationVector, TorqueVector};
+use apogee_common::units::{AccelerationVector, GravitationalParameter, TorqueVector};
 
 /// A snapshot of all gravity sources in the simulation, collected from the
 /// ECS world before a force evaluation.
@@ -23,7 +23,7 @@ use apogee_common::units::{AccelerationVector, TorqueVector};
 #[derive(Debug, Clone, Default)]
 pub struct GravitySources {
     /// (GM, position) pairs for all massive bodies.
-    pub sources: Vec<(f64, apogee_common::Position)>,
+    pub sources: Vec<(GravitationalParameter<f64>, apogee_common::Position)>,
 }
 
 impl GravitySources {
@@ -33,7 +33,7 @@ impl GravitySources {
     }
 
     /// Add a gravity source.
-    pub fn push(&mut self, gm: f64, position: apogee_common::Position) {
+    pub fn push(&mut self, gm: GravitationalParameter<f64>, position: apogee_common::Position) {
         self.sources.push((gm, position));
     }
 
@@ -48,7 +48,9 @@ impl GravitySources {
     }
 
     /// Iterate over all (GM, position) pairs.
-    pub fn iter(&self) -> impl Iterator<Item = &(f64, apogee_common::Position)> {
+    pub fn iter(
+        &self,
+    ) -> impl Iterator<Item = &(GravitationalParameter<f64>, apogee_common::Position)> {
         self.sources.iter()
     }
 

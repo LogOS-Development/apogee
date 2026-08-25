@@ -33,4 +33,7 @@ uv.lock
 
 # Symbolic verification scripts (Z3, SymPy, Lean 4)
 # These are development-time design checks, not part of the codebase.
-verification/
+verification/metron
+
+# Metron units library — local path dependency, checked out as sibling or symlink
+metron

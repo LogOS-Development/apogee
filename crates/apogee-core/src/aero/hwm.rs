@@ -11,6 +11,7 @@
 //! model is available via [`Hwm14`], which calls the vendored NRL Fortran
 //! implementation through a C-ABI FFI boundary.
 
+use apogee_common::units::{Meters, Radians};
 use nalgebra::Vector3;
 
 // ---------------------------------------------------------------------------
@@ -138,11 +139,11 @@ fn write_hwm14_data_files() -> std::path::PathBuf {
 #[derive(Debug, Clone, Copy)]
 pub struct WindInput {
     /// Altitude above the ellipsoid, metres.
-    pub altitude_m: f64,
+    pub altitude_m: Meters<f64>,
     /// Geodetic latitude, radians.
-    pub latitude_rad: f64,
+    pub latitude_rad: Radians<f64>,
     /// Geodetic longitude, radians.
-    pub longitude_rad: f64,
+    pub longitude_rad: Radians<f64>,
     /// Local apparent solar time, hours.
     pub local_solar_time_hours: f64,
     /// Day of year (1..=366).
@@ -212,9 +213,9 @@ impl Hwm14 {
         let (meridional, zonal) = hwm14_ffi_evaluate(
             iyd,
             sec,
-            input.altitude_m / 1000.0,
-            input.latitude_rad.to_degrees(),
-            input.longitude_rad.to_degrees(),
+            input.altitude_m.into_value() / 1000.0,
+            input.latitude_rad.into_value().to_degrees(),
+            input.longitude_rad.into_value().to_degrees(),
             input.local_solar_time_hours,
             -1.0,
             -1.0,
@@ -250,9 +251,9 @@ mod tests {
     #[test]
     fn test_placeholder_returns_zero() {
         let input = WindInput {
-            altitude_m: 400_000.0,
-            latitude_rad: 0.0,
-            longitude_rad: 0.0,
+            altitude_m: Meters::new(400_000.0),
+            latitude_rad: Radians::new(0.0),
+            longitude_rad: Radians::new(0.0),
             local_solar_time_hours: 12.0,
             day_of_year: 80,
             f107: 150.0,
@@ -271,9 +272,9 @@ mod tests {
         // Reference case from pyhwm2014 example: 1993 DOY 323, 12 UT,
         // 300 km, lat -11.95, lon -76.77, ap=35.
         let input = WindInput {
-            altitude_m: 300_000.0,
-            latitude_rad: (-11.95_f64).to_radians(),
-            longitude_rad: (-76.77_f64).to_radians(),
+            altitude_m: Meters::new(300_000.0),
+            latitude_rad: Radians::new((-11.95_f64).to_radians()),
+            longitude_rad: Radians::new((-76.77_f64).to_radians()),
             local_solar_time_hours: 12.0,
             day_of_year: 323,
             f107: -1.0,

@@ -24,7 +24,7 @@
 //! are integrated by `step_world` like spacecraft.
 
 use apogee_common::gravitational_parameter;
-use apogee_common::units::Kilograms;
+use apogee_common::units::{GravitationalParameter, Kilograms};
 use apogee_common::NaifId;
 
 /// Kind of celestial body: kinematic (ephemeris-driven) or dynamic.
@@ -86,26 +86,28 @@ impl NaifIdComponent {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct GravitySource {
     /// Gravitational parameter GM (m³/s²).
-    pub gm: f64,
+    pub gm: GravitationalParameter<f64>,
 }
 
 impl GravitySource {
     /// Create a gravity source from a known GM value.
-    pub fn from_gm(gm: f64) -> Self {
+    pub fn from_gm(gm: GravitationalParameter<f64>) -> Self {
         Self { gm }
     }
 
     /// Create a gravity source from a mass, deriving GM = G * M.
     pub fn from_mass(mass: Kilograms<f64>) -> Self {
         Self {
-            gm: mass.into_value() * apogee_common::constants::G,
+            gm: mass * apogee_common::constants::G,
         }
     }
 
     /// Create a gravity source by looking up GM from the NAIF ID table.
     /// Returns `None` if the NAIF ID is not in the built-in table.
     pub fn from_naif_id(naif_id: NaifId) -> Option<Self> {
-        gravitational_parameter(naif_id).map(Self::from_gm)
+        gravitational_parameter(naif_id)
+            .map(GravitationalParameter::new)
+            .map(Self::from_gm)
     }
 }
 
@@ -154,7 +156,7 @@ pub struct CelestialBodySpec {
     /// Inertial velocity (m/s).
     pub velocity: apogee_common::Velocity,
     /// Gravitational parameter GM (m³/s²). If `None`, looked up from NAIF ID.
-    pub gm: Option<f64>,
+    pub gm: Option<GravitationalParameter<f64>>,
     /// Mass (kg). If `None`, derived from GM for dynamic bodies.
     pub mass: Option<Kilograms<f64>>,
 }
@@ -169,8 +171,8 @@ impl CelestialBodySpec {
         position: apogee_common::Position,
         velocity: apogee_common::Velocity,
     ) -> Self {
-        let gm = gravitational_parameter(naif_id);
-        let mass = gm.map(|g| Kilograms::new(g / apogee_common::constants::G));
+        let gm = gravitational_parameter(naif_id).map(GravitationalParameter::new);
+        let mass = gm.map(|g| g / apogee_common::constants::G);
         Self {
             naif_id,
             kind: CelestialKind::Kinematic,
@@ -186,7 +188,7 @@ impl CelestialBodySpec {
         naif_id: NaifId,
         position: apogee_common::Position,
         velocity: apogee_common::Velocity,
-        gm: f64,
+        gm: GravitationalParameter<f64>,
         mass: Kilograms<f64>,
     ) -> Self {
         Self {
@@ -206,7 +208,7 @@ impl CelestialBodySpec {
         velocity: apogee_common::Velocity,
         mass: Kilograms<f64>,
     ) -> Self {
-        let gm = mass.into_value() * apogee_common::constants::G;
+        let gm = mass * apogee_common::constants::G;
         Self {
             naif_id,
             kind: CelestialKind::Dynamic,
@@ -218,17 +220,16 @@ impl CelestialBodySpec {
     }
 
     /// The resolved GM value (0 if not set and NAIF lookup failed).
-    pub fn resolved_gm(&self) -> f64 {
-        self.gm
-            .unwrap_or_else(|| gravitational_parameter(self.naif_id).unwrap_or(0.0))
+    pub fn resolved_gm(&self) -> GravitationalParameter<f64> {
+        self.gm.unwrap_or_else(|| {
+            GravitationalParameter::new(gravitational_parameter(self.naif_id).unwrap_or(0.0))
+        })
     }
 
     /// The resolved mass (derived from GM if not explicitly set).
     pub fn resolved_mass(&self) -> Kilograms<f64> {
-        self.mass.unwrap_or_else(|| {
-            let gm = self.resolved_gm();
-            Kilograms::new(gm / apogee_common::constants::G)
-        })
+        self.mass
+            .unwrap_or_else(|| self.resolved_gm() / apogee_common::constants::G)
     }
 }
 
@@ -242,14 +243,17 @@ mod tests {
     fn kinematic_spec_has_gm_from_naif_id() {
         let spec = CelestialBodySpec::kinematic(399, Vector3::zeros(), Vector3::zeros());
         assert_eq!(spec.kind, CelestialKind::Kinematic);
-        assert_relative_eq!(spec.resolved_gm(), apogee_common::constants::GM_EARTH);
-        assert!(spec.resolved_gm() > 0.0);
+        assert_relative_eq!(
+            spec.resolved_gm().into_value(),
+            apogee_common::constants::GM_EARTH
+        );
+        assert!(spec.resolved_gm().into_value() > 0.0);
     }
 
     #[test]
     fn kinematic_spec_unknown_naif_has_zero_gm() {
         let spec = CelestialBodySpec::kinematic(12345, Vector3::zeros(), Vector3::zeros());
-        assert_relative_eq!(spec.resolved_gm(), 0.0);
+        assert_relative_eq!(spec.resolved_gm().into_value(), 0.0);
     }
 
     #[test]
@@ -258,14 +262,17 @@ mod tests {
         let spec =
             CelestialBodySpec::dynamic_from_mass(2000001, Vector3::zeros(), Vector3::zeros(), mass);
         assert_eq!(spec.kind, CelestialKind::Dynamic);
-        assert!(spec.resolved_gm() > 0.0);
-        assert_relative_eq!(spec.resolved_gm(), 1e15 * apogee_common::constants::G);
+        assert!(spec.resolved_gm().into_value() > 0.0);
+        assert_relative_eq!(
+            spec.resolved_gm().into_value(),
+            (Kilograms::new(1e15) * apogee_common::constants::G).into_value()
+        );
     }
 
     #[test]
     fn gravity_source_from_naif_id() {
         let gs = GravitySource::from_naif_id(399).unwrap();
-        assert_relative_eq!(gs.gm, apogee_common::constants::GM_EARTH);
+        assert_relative_eq!(gs.gm.into_value(), apogee_common::constants::GM_EARTH);
     }
 
     #[test]
@@ -276,7 +283,10 @@ mod tests {
     #[test]
     fn gravity_source_from_mass() {
         let gs = GravitySource::from_mass(Kilograms::new(1e15));
-        assert_relative_eq!(gs.gm, 1e15 * apogee_common::constants::G);
+        assert_relative_eq!(
+            gs.gm.into_value(),
+            (Kilograms::new(1e15) * apogee_common::constants::G).into_value()
+        );
     }
 
     #[test]

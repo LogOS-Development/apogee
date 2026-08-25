@@ -21,7 +21,7 @@ authors = ["Apogee Contributors"]
 
 [workspace.dependencies]
 # Numerics
-nalgebra = "0.33"
+nalgebra = { version = "0.34", features = ["serde-serialize"] }
 num-complex = "0.4"
 num-traits = "0.2"
 typenum = "1.17"
@@ -51,5 +51,7 @@ apogee-strategic = { path = "crates/apogee-strategic" }
 apogee-tactical = { path = "crates/apogee-tactical" }
 apogee-discovery = { path = "crates/apogee-discovery" }
 apogee-llm = { path = "crates/apogee-llm" }
+# Units library (extracted from apogee-common)
+metron = { path = "metron" }
 # EOP cache directory
 # dirs = "5.0"

@@ -10,7 +10,7 @@
 //! `tests/gravity/spherical_harmonics.rs`.
 
 use apogee_common::constants::{GM_EARTH, R_EARTH_EQ};
-use apogee_common::units::{Area, Kilograms, Seconds};
+use apogee_common::units::{Area, GravitationalParameter, Kilograms, Seconds};
 use hifitime::Epoch;
 use nalgebra::Vector3;
 
@@ -73,7 +73,7 @@ fn iss_components() -> (
 
 /// Build a SimContext with Earth at the origin (single gravity source).
 fn earth_only_ctx(epoch: Epoch) -> SimContext {
-    SimContext::single_body(GM_EARTH, epoch)
+    SimContext::single_body(GravitationalParameter::new(GM_EARTH), epoch)
 }
 
 #[test]

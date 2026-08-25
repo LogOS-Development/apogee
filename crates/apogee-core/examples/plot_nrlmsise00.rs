@@ -9,7 +9,7 @@
 //!
 //! Pipe or redirect the output to a file and plot with your preferred tool.
 
-use apogee_common::units::Meters;
+use apogee_common::units::{Meters, Radians};
 use apogee_core::aero::model::AtmosphereInput;
 use apogee_core::aero::nrlmsise00::Nrlmsise00;
 
@@ -29,8 +29,8 @@ fn main() {
     while alt_km <= alt_max_km {
         let input = AtmosphereInput {
             altitude_m: Meters::new(alt_km * 1000.0),
-            latitude_rad: 0.0,
-            longitude_rad: 0.0,
+            latitude_rad: Radians::new(0.0),
+            longitude_rad: Radians::new(0.0),
             day_of_year: 80,
             seconds_utc: 12.0 * 3600.0,
             f107: 150.0,

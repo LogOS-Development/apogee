@@ -13,7 +13,7 @@ use crate::gravity::GravitySources;
 use crate::integrator::{Integrator, Rk4, StateVector};
 use crate::tests::helpers::point_mass_derivative;
 use apogee_common::gravitational_parameter;
-use apogee_common::units::Seconds;
+use apogee_common::units::{GravitationalParameter, Seconds};
 use nalgebra::Vector3;
 
 /// Path to the Artemis 2 SPK fixture.
@@ -29,16 +29,22 @@ fn build_gravity_sources(kernel: &Kernel, et: f64) -> GravitySources {
         position: Vector3::zeros(),
         velocity: Vector3::zeros(),
     });
-    let gm_earth = gravitational_parameter(399).unwrap_or(0.0);
+    let gm_earth = gravitational_parameter(399)
+        .map(GravitationalParameter::new)
+        .unwrap_or_default();
     sources.push(gm_earth, earth.position);
 
     if let Ok(moon) = kernel.state_at(301, et) {
-        let gm_moon = gravitational_parameter(301).unwrap_or(0.0);
+        let gm_moon = gravitational_parameter(301)
+            .map(GravitationalParameter::new)
+            .unwrap_or_default();
         sources.push(gm_moon, moon.position);
     }
 
     if let Ok(sun) = kernel.state_at(10, et) {
-        let gm_sun = gravitational_parameter(10).unwrap_or(0.0);
+        let gm_sun = gravitational_parameter(10)
+            .map(GravitationalParameter::new)
+            .unwrap_or_default();
         sources.push(gm_sun, sun.position);
     }
 

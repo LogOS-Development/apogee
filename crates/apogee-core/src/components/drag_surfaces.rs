@@ -229,7 +229,7 @@ impl crate::systems::force_model::ForceModel for DragSurfaces {
         let latlon =
             crate::systems::force_aggregator::ecef_lat_lon_from_inertial(&ctx.kinematics.position);
         let input = AtmosphereInput {
-            altitude_m: apogee_common::units::Meters::new(latlon.altitude_m),
+            altitude_m: latlon.altitude_m,
             latitude_rad: latlon.latitude_rad,
             longitude_rad: latlon.longitude_rad,
             day_of_year,

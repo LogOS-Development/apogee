@@ -17,6 +17,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Checkout metron (path dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: LogOS-Development/metron
+          path: metron
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -51,6 +57,12 @@ jobs:
           # Full history needed to commit the badge update back to main.
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Checkout metron (path dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: LogOS-Development/metron
+          path: metron
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -146,6 +158,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Checkout metron (path dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: LogOS-Development/metron
+          path: metron
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

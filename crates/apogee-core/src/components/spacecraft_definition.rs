@@ -23,7 +23,7 @@ use crate::components::srp_surfaces::{SrpSurface, SrpSurfaces};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DragSurfaceSpec {
     /// Physical surface area (m^2).
-    pub area: f64,
+    pub area: Area<f64>,
     /// Drag coefficient (dimensionless).
     pub cd: f64,
     /// Body-frame outward normal direction. `[0, 0, 0]` = cannonball
@@ -37,10 +37,10 @@ pub struct DragSurfaceSpec {
 impl From<DragSurfaceSpec> for DragSurface {
     fn from(spec: DragSurfaceSpec) -> Self {
         if spec.normal_dir == [0.0, 0.0, 0.0] {
-            DragSurface::new(Area::new(spec.area), spec.cd)
+            DragSurface::new(spec.area, spec.cd)
         } else {
             DragSurface::flat_plate(
-                Area::new(spec.area),
+                spec.area,
                 spec.cd,
                 nalgebra::Vector3::new(spec.normal_dir[0], spec.normal_dir[1], spec.normal_dir[2]),
                 nalgebra::Vector3::new(
@@ -57,7 +57,7 @@ impl From<DragSurfaceSpec> for DragSurface {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SrpSurfaceSpec {
     /// Physical surface area (m^2).
-    pub area: f64,
+    pub area: Area<f64>,
     /// Reflectivity coefficient (0.0 = fully absorbing, 1.0 = perfectly
     /// reflecting).
     pub reflectivity: f64,
@@ -72,10 +72,10 @@ pub struct SrpSurfaceSpec {
 impl From<SrpSurfaceSpec> for SrpSurface {
     fn from(spec: SrpSurfaceSpec) -> Self {
         if spec.normal_dir == [0.0, 0.0, 0.0] {
-            SrpSurface::new(Area::new(spec.area), spec.reflectivity)
+            SrpSurface::new(spec.area, spec.reflectivity)
         } else {
             SrpSurface::flat_plate(
-                Area::new(spec.area),
+                spec.area,
                 spec.reflectivity,
                 nalgebra::Vector3::new(spec.normal_dir[0], spec.normal_dir[1], spec.normal_dir[2]),
                 nalgebra::Vector3::new(
@@ -96,7 +96,7 @@ impl From<SrpSurfaceSpec> for SrpSurface {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpacecraftDefinition {
     /// Total spacecraft mass (kg).
-    pub mass: f64,
+    pub mass: Kilograms<f64>,
     /// Inertia tensor in the body frame (kg m^2), row-major 3x3.
     pub inertia: [[f64; 3]; 3],
     /// Center-of-mass offset from the reference point (m).
@@ -116,7 +116,7 @@ impl SpacecraftDefinition {
     /// automatically.
     pub fn build(&self) -> (RigidBody, Option<DragSurfaces>, Option<SrpSurfaces>) {
         let rigid_body = RigidBody {
-            mass: Kilograms::new(self.mass),
+            mass: self.mass,
             inertia: nalgebra::Matrix3::new(
                 self.inertia[0][0],
                 self.inertia[0][1],
@@ -161,7 +161,7 @@ impl SpacecraftDefinition {
 impl Default for SpacecraftDefinition {
     fn default() -> Self {
         Self {
-            mass: 1000.0,
+            mass: Kilograms::new(1000.0),
             inertia: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
             cg_offset: [0.0, 0.0, 0.0],
             drag_surfaces: Vec::new(),
@@ -178,24 +178,24 @@ mod tests {
     #[test]
     fn build_produces_rigid_body_and_surfaces() {
         let def = SpacecraftDefinition {
-            mass: 500.0,
+            mass: Kilograms::new(500.0),
             inertia: [[10.0, 0.0, 0.0], [0.0, 20.0, 0.0], [0.0, 0.0, 30.0]],
             cg_offset: [0.1, 0.0, 0.0],
             drag_surfaces: vec![DragSurfaceSpec {
-                area: 5.0,
+                area: Area::new(5.0),
                 cd: 2.2,
                 normal_dir: [0.0, 0.0, 0.0],
                 reference_point: [0.0, 0.0, 0.0],
             }],
             srp_surfaces: vec![
                 SrpSurfaceSpec {
-                    area: 2.0,
+                    area: Area::new(2.0),
                     reflectivity: 0.3,
                     normal_dir: [0.0, 0.0, 0.0],
                     reference_point: [0.0, 0.0, 0.0],
                 },
                 SrpSurfaceSpec {
-                    area: 8.0,
+                    area: Area::new(8.0),
                     reflectivity: 0.5,
                     normal_dir: [0.0, 0.0, 0.0],
                     reference_point: [0.0, 0.0, 0.0],
@@ -234,17 +234,17 @@ mod tests {
     #[test]
     fn serialize_deserialize_roundtrip() {
         let def = SpacecraftDefinition {
-            mass: 420_000.0,
+            mass: Kilograms::new(420_000.0),
             inertia: [[1e7, 0.0, 0.0], [0.0, 1e7, 0.0], [0.0, 0.0, 1e7]],
             cg_offset: [0.0, 0.0, 0.0],
             drag_surfaces: vec![DragSurfaceSpec {
-                area: 2500.0,
+                area: Area::new(2500.0),
                 cd: 2.2,
                 normal_dir: [0.0, 0.0, 0.0],
                 reference_point: [0.0, 0.0, 0.0],
             }],
             srp_surfaces: vec![SrpSurfaceSpec {
-                area: 2500.0,
+                area: Area::new(2500.0),
                 reflectivity: 1.2,
                 normal_dir: [0.0, 0.0, 0.0],
                 reference_point: [0.0, 0.0, 0.0],
@@ -253,9 +253,9 @@ mod tests {
 
         let json = serde_json::to_string(&def).unwrap();
         let def2: SpacecraftDefinition = serde_json::from_str(&json).unwrap();
-        assert_relative_eq!(def2.mass, def.mass);
+        assert_relative_eq!(def2.mass.value, def.mass.value);
         assert_eq!(def2.drag_surfaces.len(), 1);
-        assert_relative_eq!(def2.drag_surfaces[0].area, 2500.0);
+        assert_relative_eq!(def2.drag_surfaces[0].area.value, 2500.0);
         assert_eq!(def2.srp_surfaces.len(), 1);
         assert_relative_eq!(def2.srp_surfaces[0].reflectivity, 1.2);
     }

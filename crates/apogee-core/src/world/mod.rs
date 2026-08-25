@@ -176,7 +176,7 @@ impl World {
         let gm = spec.resolved_gm();
         let mass = spec.resolved_mass();
 
-        if gm > 0.0 {
+        if gm.value > 0.0 {
             let gravity = GravitySource::from_gm(gm);
             if kind.is_dynamic() {
                 let celestial_mass = crate::components::celestial::CelestialMass::new(mass);
@@ -410,7 +410,10 @@ mod tests {
         assert!(world.get_component::<CelestialKind>(entity).is_some());
         let gs = world.get_component::<GravitySource>(entity);
         assert!(gs.is_some());
-        assert_relative_eq!(gs.unwrap().gm, apogee_common::constants::GM_EARTH);
+        assert_relative_eq!(
+            gs.unwrap().gm.into_value(),
+            apogee_common::constants::GM_EARTH
+        );
     }
 
     #[test]
@@ -427,7 +430,7 @@ mod tests {
         assert!(kind.is_dynamic());
         let gs = world.get_component::<GravitySource>(entity);
         assert!(gs.is_some());
-        assert!(gs.unwrap().gm > 0.0);
+        assert!(gs.unwrap().gm.into_value() > 0.0);
     }
 
     #[test]
