@@ -297,10 +297,16 @@ fn test_drag_srp_changes_orbital_energy() {
 // ISS propagation with spherical harmonics gravity
 // -----------------------------------------------------------------------
 
-/// Build a SimContext with J2 spherical harmonics gravity for Earth.
+/// Build a SimContext with Earth J2 SH + Moon point-mass perturbation.
 fn sh_ctx(epoch: Epoch) -> SimContext {
     let mut ctx = earth_only_ctx(epoch);
     ctx.gravity_sources.sources[0].spherical_harmonics = Some(SphericalHarmonics::j2_only());
+    // Add Moon as a third-body perturbation.
+    ctx.gravity_sources.push_with_sh(
+        GravitationalParameter::new(apogee_common::constants::GM_MOON),
+        Vector3::new(384_400_000.0, 0.0, 0.0),
+        None,
+    );
     ctx
 }
 

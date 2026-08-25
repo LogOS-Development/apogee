@@ -42,25 +42,25 @@ fn test_rigid_body() -> RigidBody {
     }
 }
 
-/// Build a SimContext with J2-only SH gravity.
-///
-/// The central body (Earth) is included as the first gravity source so that
-/// third-body perturbations can be added as additional sources. The SH model
-/// handles the central body's gravity; the force aggregator skips source[0]
-/// when computing third-body perturbations.
-fn j2_context(epoch: Epoch) -> SimContext {
+/// Build a SimContext with J2-only SH gravity for a given central body.
+fn j2_context_for(gm: f64, reference_radius: f64, epoch: Epoch) -> SimContext {
     let mut gravity_sources = crate::gravity::GravitySources::new();
-    gravity_sources.push_with_sh(
-        apogee_common::units::GravitationalParameter::new(GM_EARTH),
-        Vector3::zeros(),
-        Some(SphericalHarmonics::j2_only()),
-    );
+    let mut sh = SphericalHarmonics::new(2, 0);
+    sh.gm = GravitationalParameter::new(gm);
+    sh.reference_radius = apogee_common::units::Meters::new(reference_radius);
+    sh.c[2][0] = -0.484165143790815e-03;
+    gravity_sources.push_with_sh(GravitationalParameter::new(gm), Vector3::zeros(), Some(sh));
     SimContext {
         sim_config: SimulationConfig::default(),
         gravity_sources,
         sun_position: Vector3::new(-apogee_common::constants::AU, 0.0, 0.0),
         epoch,
     }
+}
+
+/// Build a SimContext with J2-only SH gravity for Earth.
+fn j2_context(epoch: Epoch) -> SimContext {
+    j2_context_for(GM_EARTH, R_EARTH_EQ, epoch)
 }
 
 /// Build a SimContext with point-mass gravity only (no SH).

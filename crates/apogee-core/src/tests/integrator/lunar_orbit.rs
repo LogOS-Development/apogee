@@ -159,12 +159,25 @@ fn test_moon_geocentric_orbit_vs_horizons_apollo_era() {
     let gm_earth = gravitational_parameter(399)
         .map(GravitationalParameter::new)
         .unwrap_or_default();
+    let gm_moon = gravitational_parameter(301)
+        .map(GravitationalParameter::new)
+        .unwrap_or_default();
     let sources = GravitySources {
-        sources: vec![GravitySourceEntry {
-            gm: gm_earth,
-            position: Vector3::zeros(),
-            spherical_harmonics: None,
-        }],
+        sources: vec![
+            GravitySourceEntry {
+                gm: gm_earth,
+                position: Vector3::zeros(),
+                spherical_harmonics: None,
+            },
+            // Moon as a gravity source (for completeness — the test particle
+            // starts at the Moon's position, so the force aggregator sees
+            // zero distance to this source and skips it via the r2 > 0 guard).
+            GravitySourceEntry {
+                gm: gm_moon,
+                position: moon_start_pos,
+                spherical_harmonics: None,
+            },
+        ],
     };
 
     let mut state = StateVector {

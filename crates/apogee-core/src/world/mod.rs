@@ -99,6 +99,22 @@ impl World {
         self
     }
 
+    /// Spawn a celestial body and return `&mut self` for chaining.
+    pub fn add_body(&mut self, spec: CelestialBodySpec) -> &mut Self {
+        self.add_celestial_body(spec);
+        self
+    }
+
+    /// Spawn a spacecraft with kinematics and rigid body, return `&mut self`.
+    pub fn add_spacecraft(
+        &mut self,
+        kinematics: Kinematics,
+        rigid_body: crate::components::rigid_body::RigidBody,
+    ) -> &mut Self {
+        self.spawn((kinematics, rigid_body));
+        self
+    }
+
     // ------------------------------------------------------------------
     // Entity API
     // ------------------------------------------------------------------
