@@ -43,12 +43,15 @@ fn test_rigid_body() -> RigidBody {
 }
 
 /// Build a SimContext with J2-only SH gravity for a given central body.
-fn j2_context_for(gm: f64, reference_radius: f64, epoch: Epoch) -> SimContext {
+///
+/// `j2_coeff` is the fully normalized C_2,0 coefficient for that body
+/// (e.g. Earth EGM2008: -0.484165143790815e-03).
+fn j2_context_for(gm: f64, reference_radius: f64, j2_coeff: f64, epoch: Epoch) -> SimContext {
     let mut gravity_sources = crate::gravity::GravitySources::new();
     let mut sh = SphericalHarmonics::new(2, 0);
     sh.gm = GravitationalParameter::new(gm);
     sh.reference_radius = apogee_common::units::Meters::new(reference_radius);
-    sh.c[2][0] = -0.484165143790815e-03;
+    sh.c[2][0] = j2_coeff;
     gravity_sources.push_with_sh(GravitationalParameter::new(gm), Vector3::zeros(), Some(sh));
     SimContext {
         sim_config: SimulationConfig::default(),
@@ -60,7 +63,7 @@ fn j2_context_for(gm: f64, reference_radius: f64, epoch: Epoch) -> SimContext {
 
 /// Build a SimContext with J2-only SH gravity for Earth.
 fn j2_context(epoch: Epoch) -> SimContext {
-    j2_context_for(GM_EARTH, R_EARTH_EQ, epoch)
+    j2_context_for(GM_EARTH, R_EARTH_EQ, -0.484165143790815e-03, epoch)
 }
 
 /// Build a SimContext with point-mass gravity only (no SH).

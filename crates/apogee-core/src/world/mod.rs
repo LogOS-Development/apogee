@@ -100,12 +100,29 @@ impl World {
     }
 
     /// Spawn a celestial body and return `&mut self` for chaining.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let mut world = World::new()
+    ///     .with_epoch(epoch)
+    ///     .with_ephemeris(eph);
+    /// world.add_body(CelestialBodySpec::kinematic(399, pos, vel))
+    ///     .add_body(CelestialBodySpec::kinematic(301, moon_pos, moon_vel));
+    /// ```
     pub fn add_body(&mut self, spec: CelestialBodySpec) -> &mut Self {
         self.add_celestial_body(spec);
         self
     }
 
     /// Spawn a spacecraft with kinematics and rigid body, return `&mut self`.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// world.add_spacecraft(kinematics, rigid_body)
+    ///     .add_spacecraft(kin2, rb2);
+    /// ```
     pub fn add_spacecraft(
         &mut self,
         kinematics: Kinematics,

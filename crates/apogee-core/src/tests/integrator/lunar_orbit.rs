@@ -154,30 +154,20 @@ fn test_moon_geocentric_orbit_vs_horizons_apollo_era() {
         horizons_geocentric_state(301, "1969-07-19T23:22:00", "1969-07-19T23:23:00")
             .expect("HORIZONS query for Moon");
 
-    // Treat the Moon as the test particle and propagate it around the Earth
-    // using a point-mass Earth+Moon model in the geocentric inertial frame.
+    // Treat the Moon as a test particle and propagate it around the Earth
+    // using a point-mass Earth model in the geocentric inertial frame.
+    // The Moon is NOT a gravity source here — it's the body being propagated.
+    // In step_world, self-gravity is excluded by matching position; but this
+    // test uses propagate() directly, so we only include Earth.
     let gm_earth = gravitational_parameter(399)
         .map(GravitationalParameter::new)
         .unwrap_or_default();
-    let gm_moon = gravitational_parameter(301)
-        .map(GravitationalParameter::new)
-        .unwrap_or_default();
     let sources = GravitySources {
-        sources: vec![
-            GravitySourceEntry {
-                gm: gm_earth,
-                position: Vector3::zeros(),
-                spherical_harmonics: None,
-            },
-            // Moon as a gravity source (for completeness — the test particle
-            // starts at the Moon's position, so the force aggregator sees
-            // zero distance to this source and skips it via the r2 > 0 guard).
-            GravitySourceEntry {
-                gm: gm_moon,
-                position: moon_start_pos,
-                spherical_harmonics: None,
-            },
-        ],
+        sources: vec![GravitySourceEntry {
+            gm: gm_earth,
+            position: Vector3::zeros(),
+            spherical_harmonics: None,
+        }],
     };
 
     let mut state = StateVector {
