@@ -10,7 +10,7 @@
 //! real mission data.
 
 use crate::gravity::point_mass::PointMassGravity;
-use crate::gravity::GravitySources;
+use crate::gravity::{GravitySourceEntry, GravitySources};
 use crate::integrator::{Integrator, Rk4, StateVector};
 use crate::tests::helpers::point_mass_derivative;
 use apogee_common::constants::GM_MOON;
@@ -56,10 +56,22 @@ fn load_reference() -> Option<Vec<Sample>> {
     Some(out)
 }
 
-/// Build a Moon-centered gravity source set with Moon as the origin.
-fn moon_only_sources() -> GravitySources {
+/// Build a Moon-centered gravity source set with Moon at origin and Earth
+/// as a third-body perturbation.
+fn moon_earth_sources() -> GravitySources {
     GravitySources {
-        sources: vec![(GravitationalParameter::new(GM_MOON), Vector3::zeros())],
+        sources: vec![
+            GravitySourceEntry {
+                gm: GravitationalParameter::new(GM_MOON),
+                position: Vector3::zeros(),
+                spherical_harmonics: None,
+            },
+            GravitySourceEntry {
+                gm: GravitationalParameter::new(apogee_common::constants::GM_EARTH),
+                position: Vector3::new(384_400_000.0, 0.0, 0.0),
+                spherical_harmonics: None,
+            },
+        ],
     }
 }
 
@@ -73,7 +85,7 @@ fn test_apollo15_lunar_orbit_vs_reference() {
     );
 
     let gravity = PointMassGravity {};
-    let sources = moon_only_sources();
+    let sources = moon_earth_sources();
     let mut integrator = Rk4::new(Seconds::new(10.0)); // 10 s fixed step
 
     let (et0, pos0, vel0) = reference[0];
@@ -124,7 +136,7 @@ fn test_apollo15_multi_point_trajectory() {
     );
 
     let gravity = PointMassGravity {};
-    let sources = moon_only_sources();
+    let sources = moon_earth_sources();
     let mut integrator = Rk4::new(Seconds::new(10.0));
 
     let (et0, pos0, vel0) = reference[0];

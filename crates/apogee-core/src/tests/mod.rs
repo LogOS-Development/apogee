@@ -12,5 +12,6 @@ mod ephemeris;
 mod frames;
 mod gravity;
 mod integrator;
+mod star_system;
 mod systems;
 mod tle;

@@ -27,7 +27,8 @@ use crate::components::kinematics::Kinematics;
 use crate::components::rigid_body::SimulationConfig;
 use crate::ephemeris::EphemerisService;
 use crate::frames::ClockService;
-use apogee_common::NaifId;
+use apogee_common::units::{GravitationalParameter, Kilograms};
+use apogee_common::{ApogeeResult, NaifId};
 
 /// The simulation world.
 ///
@@ -96,6 +97,109 @@ impl World {
     /// Attach an ephemeris service for kinematic body updates.
     pub fn with_ephemeris(mut self, ephemeris: EphemerisService) -> Self {
         self.ephemeris = Some(ephemeris);
+        self
+    }
+
+    /// Spawn a celestial body and return `&mut self` for chaining.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let mut world = World::new()
+    ///     .with_epoch(epoch)
+    ///     .with_ephemeris(eph);
+    /// world.add_body(CelestialBodySpec::kinematic(399, pos, vel))
+    ///     .add_body(CelestialBodySpec::kinematic(301, moon_pos, moon_vel));
+    /// ```
+    pub fn add_body(&mut self, spec: CelestialBodySpec) -> &mut Self {
+        self.add_celestial_body(spec);
+        self
+    }
+
+    /// Spawn an entire star system from a [`SystemDefinition`].
+    ///
+    /// Each body becomes an ECS entity:
+    ///
+    /// - `Star`/`Central` bodies are kinematic (not integrated).
+    /// - `Planet`/`Moon`/`Minor` bodies are dynamic (integrated by
+    ///   `step_world` under N-body gravity, with self-gravity excluded).
+    /// - Bodies with a `GravityConfig` other than `PointMass` get their
+    ///   resolved `SphericalHarmonics` model attached to the `GravitySource`.
+    ///
+    /// Returns the entities in the same order as `definition.bodies`.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use apogee_core::star_system::{SystemDefinition, presets};
+    ///
+    /// let system = presets::earth_moon_j2();
+    /// world.add_system(&system);
+    /// ```
+    pub fn add_system(
+        &mut self,
+        definition: &crate::star_system::SystemDefinition,
+    ) -> ApogeeResult<Vec<Entity>> {
+        use crate::components::celestial::CelestialKind;
+        use crate::star_system::{BodyRole, GravityConfig};
+
+        let mut entities = Vec::with_capacity(definition.bodies.len());
+
+        for body in &definition.bodies {
+            let kind = if matches!(body.role, BodyRole::Star | BodyRole::Central) {
+                CelestialKind::Kinematic
+            } else {
+                CelestialKind::Dynamic
+            };
+
+            let gm = GravitationalParameter::new(body.gm);
+            let mass = Kilograms::new(
+                body.mass
+                    .unwrap_or_else(|| body.gm / apogee_common::constants::G.into_value()),
+            );
+
+            let position =
+                nalgebra::Vector3::new(body.position[0], body.position[1], body.position[2]);
+            let velocity =
+                nalgebra::Vector3::new(body.velocity[0], body.velocity[1], body.velocity[2]);
+
+            // Resolve the gravity model (None = point-mass).
+            let sh = match &body.gravity {
+                GravityConfig::PointMass => None,
+                config => config.resolve(gm),
+            };
+
+            let spec = CelestialBodySpec {
+                naif_id: body.naif_id.unwrap_or(0),
+                kind,
+                position,
+                velocity,
+                gm: Some(gm),
+                mass: Some(mass),
+                spherical_harmonics: sh,
+            };
+
+            let entity = self.add_celestial_body(spec);
+            entities.push(entity);
+        }
+
+        Ok(entities)
+    }
+
+    /// Spawn a spacecraft with kinematics and rigid body, return `&mut self`.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// world.add_spacecraft(kinematics, rigid_body)
+    ///     .add_spacecraft(kin2, rb2);
+    /// ```
+    pub fn add_spacecraft(
+        &mut self,
+        kinematics: Kinematics,
+        rigid_body: crate::components::rigid_body::RigidBody,
+    ) -> &mut Self {
+        self.spawn((kinematics, rigid_body));
         self
     }
 
@@ -201,7 +305,10 @@ impl World {
         let mass = spec.resolved_mass();
 
         if gm.value > 0.0 {
-            let gravity = GravitySource::from_gm(gm);
+            let mut gravity = GravitySource::from_gm(gm);
+            if let Some(ref sh) = spec.spherical_harmonics {
+                gravity = gravity.with_spherical_harmonics(sh.clone());
+            }
             if kind.is_dynamic() {
                 let celestial_mass = crate::components::celestial::CelestialMass::new(mass);
                 self.spawn((kinematics, naif_id, kind, gravity, celestial_mass))

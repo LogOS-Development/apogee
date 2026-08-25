@@ -6,7 +6,7 @@
 //! orbit period ~2 hours.
 
 use crate::gravity::point_mass::PointMassGravity;
-use crate::gravity::GravitySources;
+use crate::gravity::{GravitySourceEntry, GravitySources};
 use crate::integrator::{Integrator, Rk4, StateVector};
 use crate::tests::helpers::point_mass_derivative;
 use apogee_common::constants::GM_MOON;
@@ -24,7 +24,11 @@ fn moon_system() -> GravitySources {
         .map(GravitationalParameter::new)
         .unwrap_or_default();
     GravitySources {
-        sources: vec![(gm, Vector3::zeros())],
+        sources: vec![GravitySourceEntry {
+            gm,
+            position: Vector3::zeros(),
+            spherical_harmonics: None,
+        }],
     }
 }
 
@@ -150,13 +154,20 @@ fn test_moon_geocentric_orbit_vs_horizons_apollo_era() {
         horizons_geocentric_state(301, "1969-07-19T23:22:00", "1969-07-19T23:23:00")
             .expect("HORIZONS query for Moon");
 
-    // Treat the Moon as the test particle and propagate it around the Earth
-    // using a point-mass Earth+Moon model in the geocentric inertial frame.
+    // Treat the Moon as a test particle and propagate it around the Earth
+    // using a point-mass Earth model in the geocentric inertial frame.
+    // The Moon is NOT a gravity source here — it's the body being propagated.
+    // In step_world, self-gravity is excluded by matching position; but this
+    // test uses propagate() directly, so we only include Earth.
     let gm_earth = gravitational_parameter(399)
         .map(GravitationalParameter::new)
         .unwrap_or_default();
     let sources = GravitySources {
-        sources: vec![(gm_earth, Vector3::zeros())],
+        sources: vec![GravitySourceEntry {
+            gm: gm_earth,
+            position: Vector3::zeros(),
+            spherical_harmonics: None,
+        }],
     };
 
     let mut state = StateVector {

@@ -42,25 +42,28 @@ fn test_rigid_body() -> RigidBody {
     }
 }
 
-/// Build a SimContext with J2-only SH gravity.
+/// Build a SimContext with J2-only SH gravity for a given central body.
 ///
-/// The central body (Earth) is included as the first gravity source so that
-/// third-body perturbations can be added as additional sources. The SH model
-/// handles the central body's gravity; the force aggregator skips source[0]
-/// when computing third-body perturbations.
-fn j2_context(epoch: Epoch) -> SimContext {
+/// `j2_coeff` is the fully normalized C_2,0 coefficient for that body
+/// (e.g. Earth EGM2008: -0.484165143790815e-03).
+fn j2_context_for(gm: f64, reference_radius: f64, j2_coeff: f64, epoch: Epoch) -> SimContext {
     let mut gravity_sources = crate::gravity::GravitySources::new();
-    gravity_sources.push(
-        apogee_common::units::GravitationalParameter::new(GM_EARTH),
-        Vector3::zeros(),
-    );
+    let mut sh = SphericalHarmonics::new(2, 0);
+    sh.gm = GravitationalParameter::new(gm);
+    sh.reference_radius = apogee_common::units::Meters::new(reference_radius);
+    sh.c[2][0] = j2_coeff;
+    gravity_sources.push_with_sh(GravitationalParameter::new(gm), Vector3::zeros(), Some(sh));
     SimContext {
         sim_config: SimulationConfig::default(),
         gravity_sources,
         sun_position: Vector3::new(-apogee_common::constants::AU, 0.0, 0.0),
         epoch,
-        gravity_model: Some(SphericalHarmonics::j2_only()),
     }
+}
+
+/// Build a SimContext with J2-only SH gravity for Earth.
+fn j2_context(epoch: Epoch) -> SimContext {
+    j2_context_for(GM_EARTH, R_EARTH_EQ, -0.484165143790815e-03, epoch)
 }
 
 /// Build a SimContext with point-mass gravity only (no SH).
@@ -273,8 +276,124 @@ fn test_sh_with_third_body_perturbation() {
 }
 
 // -----------------------------------------------------------------------
-// Backward compatibility: no SH model = point-mass
+// Multi-body: Earth SH + Moon point-mass in the same simulation
 // -----------------------------------------------------------------------
+
+#[test]
+fn test_multi_body_earth_sh_moon_point_mass() {
+    // Earth has SH (J2) gravity, Moon has point-mass only. Both in the same
+    // GravitySources. The force aggregator should compute SH for Earth and
+    // point-mass for Moon, summing the contributions.
+    let (pos0, vel0) = circular_orbit(400_000.0, 51.6);
+    let rb = test_rigid_body();
+    let epoch = Epoch::from_gregorian_utc(2026, 3, 21, 0, 0, 0, 0);
+    let dt = Seconds::new(10.0);
+    let duration = Seconds::new(5_500.0); // ~1 orbit
+
+    // Multi-body: Earth with J2 + Moon as point-mass far away.
+    let mut gravity_sources = crate::gravity::GravitySources::new();
+    gravity_sources.push_with_sh(
+        GravitationalParameter::new(GM_EARTH),
+        Vector3::zeros(),
+        Some(SphericalHarmonics::j2_only()),
+    );
+    gravity_sources.push_with_sh(
+        GravitationalParameter::new(GM_MOON),
+        Vector3::new(384_400_000.0, 0.0, 0.0),
+        None, // Moon: point-mass only
+    );
+
+    let ctx_multi = SimContext {
+        sim_config: SimulationConfig::default(),
+        gravity_sources,
+        sun_position: Vector3::new(-apogee_common::constants::AU, 0.0, 0.0),
+        epoch,
+    };
+
+    let mut kin_multi = kinematics(pos0, vel0);
+    propagate(
+        &mut kin_multi,
+        &rb,
+        None,
+        None,
+        &mut ctx_multi.clone(),
+        dt,
+        duration,
+    );
+
+    // SH-only (Earth J2, no Moon) for comparison.
+    let mut kin_sh_only = kinematics(pos0, vel0);
+    let mut ctx_sh = j2_context(epoch);
+    propagate(&mut kin_sh_only, &rb, None, None, &mut ctx_sh, dt, duration);
+
+    // The multi-body trajectory should differ from SH-only due to Moon perturbation.
+    let diff = (kin_multi.position - kin_sh_only.position).norm();
+    assert!(
+        diff > 1.0,
+        "Moon point-mass perturbation should produce measurable difference: {diff:.6e} m"
+    );
+}
+
+#[test]
+fn test_two_sh_bodies_different_models() {
+    // Two bodies with different SH models: Earth (J2) and a fictional body
+    // with J2-only but different GM and radius. Both contribute SH gravity.
+    let pos = Vector3::new(R_EARTH_EQ + 400_000.0, 0.0, 0.0);
+    let vel = Vector3::new(0.0, (GM_EARTH / (R_EARTH_EQ + 400_000.0)).sqrt(), 0.0);
+
+    let kin = Kinematics {
+        position: pos,
+        velocity: vel,
+        attitude: nalgebra::Quaternion::identity(),
+        angular_velocity: Vector3::zeros(),
+    };
+    let rb = test_rigid_body();
+
+    // Earth at origin with J2 SH.
+    // Second body far away with its own J2 SH model (fictional GM).
+    let mut gravity_sources = crate::gravity::GravitySources::new();
+    gravity_sources.push_with_sh(
+        GravitationalParameter::new(GM_EARTH),
+        Vector3::zeros(),
+        Some(SphericalHarmonics::j2_only()),
+    );
+
+    // Second body: same J2 coeff but different GM and radius.
+    let mut sh2 = SphericalHarmonics::j2_only();
+    sh2.gm = GravitationalParameter::new(1e14); // Fictional smaller body
+    sh2.reference_radius = apogee_common::units::Meters::new(3_000_000.0);
+    gravity_sources.push_with_sh(
+        GravitationalParameter::new(1e14),
+        Vector3::new(1e8, 0.0, 0.0), // Far away
+        Some(sh2),
+    );
+
+    let epoch = Epoch::from_gregorian_utc(2026, 3, 21, 0, 0, 0, 0);
+    let ctx = SimContext {
+        sim_config: SimulationConfig::default(),
+        gravity_sources,
+        sun_position: Vector3::new(-apogee_common::constants::AU, 0.0, 0.0),
+        epoch,
+    };
+
+    let forces = crate::systems::force_aggregator::aggregate_forces(
+        &kin,
+        &rb,
+        None,
+        None,
+        &ctx.sim_config,
+        &ctx.gravity_sources,
+        None,
+        ctx.sun_position,
+        ctx.epoch,
+    );
+
+    // Gravity should be finite and dominated by Earth.
+    let total = forces.total();
+    assert!(total.raw().norm() > 0.0);
+    assert!(total.raw().x < 0.0, "x should be toward Earth (negative)");
+    assert!(total.raw().iter().all(|v| v.is_finite()));
+}
 
 #[test]
 fn test_no_gravity_model_falls_back_to_point_mass() {
@@ -292,10 +411,7 @@ fn test_no_gravity_model_falls_back_to_point_mass() {
     propagate(&mut kin1, &rb, None, None, &mut ctx1, dt, duration);
 
     let mut kin2 = kinematics(pos0, vel0);
-    let mut ctx2 = SimContext {
-        gravity_model: None,
-        ..point_mass_context(epoch)
-    };
+    let mut ctx2 = point_mass_context(epoch);
     propagate(&mut kin2, &rb, None, None, &mut ctx2, dt, duration);
 
     // Both should produce identical trajectories.

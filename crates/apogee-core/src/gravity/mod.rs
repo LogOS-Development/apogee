@@ -13,17 +13,25 @@ use apogee_common::units::{AccelerationVector, GravitationalParameter, TorqueVec
 /// A snapshot of all gravity sources in the simulation, collected from the
 /// ECS world before a force evaluation.
 ///
-/// This replaces the old `SolarSystemState` as the input to point-mass
-/// gravity computation. The force aggregator builds a `GravitySources` by
-/// querying the ECS world for `(&GravitySource, &Kinematics)` entities,
-/// then passes it to `PointMassGravity::acceleration`.
-///
-/// Each entry is `(gm, position)` — the gravitational parameter and the
-/// inertial position of the massive body.
+/// Each entry carries the gravitational parameter, position, and optional
+/// spherical harmonics model for a massive body. The force aggregator
+/// iterates all entries: bodies with SH coefficients get SH acceleration;
+/// bodies without get point-mass acceleration.
 #[derive(Debug, Clone, Default)]
 pub struct GravitySources {
-    /// (GM, position) pairs for all massive bodies.
-    pub sources: Vec<(GravitationalParameter<f64>, apogee_common::Position)>,
+    /// Gravity source entries, each with GM, position, and optional SH.
+    pub sources: Vec<GravitySourceEntry>,
+}
+
+/// A single gravity source entry in the snapshot.
+#[derive(Debug, Clone)]
+pub struct GravitySourceEntry {
+    /// Gravitational parameter GM (m³/s²).
+    pub gm: GravitationalParameter<f64>,
+    /// Inertial position of the body (m).
+    pub position: apogee_common::Position,
+    /// Optional spherical harmonics model for this body.
+    pub spherical_harmonics: Option<SphericalHarmonics>,
 }
 
 impl GravitySources {
@@ -32,9 +40,27 @@ impl GravitySources {
         Self::default()
     }
 
-    /// Add a gravity source.
+    /// Add a point-mass gravity source (no SH).
     pub fn push(&mut self, gm: GravitationalParameter<f64>, position: apogee_common::Position) {
-        self.sources.push((gm, position));
+        self.sources.push(GravitySourceEntry {
+            gm,
+            position,
+            spherical_harmonics: None,
+        });
+    }
+
+    /// Add a gravity source with optional spherical harmonics.
+    pub fn push_with_sh(
+        &mut self,
+        gm: GravitationalParameter<f64>,
+        position: apogee_common::Position,
+        sh: Option<SphericalHarmonics>,
+    ) {
+        self.sources.push(GravitySourceEntry {
+            gm,
+            position,
+            spherical_harmonics: sh,
+        });
     }
 
     /// Number of gravity sources.
@@ -47,23 +73,14 @@ impl GravitySources {
         self.sources.is_empty()
     }
 
-    /// Iterate over all (GM, position) pairs.
-    pub fn iter(
-        &self,
-    ) -> impl Iterator<Item = &(GravitationalParameter<f64>, apogee_common::Position)> {
+    /// Iterate over all entries.
+    pub fn iter(&self) -> impl Iterator<Item = &GravitySourceEntry> {
         self.sources.iter()
     }
 
-    /// Find the position of the body with the given NAIF ID, if present.
-    ///
-    /// This requires the caller to have stored the NAIF ID alongside the
-    /// gravity source when building the snapshot. Since `GravitySources` is
-    /// a lightweight `(gm, position)` list, the NAIF ID lookup is done at
-    /// the ECS query level before building this snapshot. For the Sun's
-    /// position (needed by SRP), use [`World::find_celestial`] to locate the
-    /// Sun entity and read its `Kinematics`.
+    /// Find the position of the body at the given index, if present.
     pub fn position_of(&self, index: usize) -> Option<apogee_common::Position> {
-        self.sources.get(index).map(|(_, pos)| *pos)
+        self.sources.get(index).map(|e| e.position)
     }
 }
 

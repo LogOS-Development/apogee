@@ -37,13 +37,13 @@ impl PointMassGravity {
     ) -> Result<AccelerationVector, String> {
         let mut acc = Vector3::zeros();
 
-        for &(gm, body_pos) in &sources.sources {
-            let gm_val = gm.into_value();
+        for entry in &sources.sources {
+            let gm_val = entry.gm.into_value();
             if gm_val == 0.0 {
                 continue;
             }
 
-            let delta = body_pos - position;
+            let delta = entry.position - position;
             let r2 = delta.norm_squared();
             if r2 == 0.0 {
                 return Err(format!(
@@ -75,17 +75,19 @@ impl crate::systems::force_model::ForceModel for PointMassGravity {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gravity::GravitySourceEntry;
     use apogee_common::gravitational_parameter;
     use approx::assert_relative_eq;
 
     use apogee_common::units::GravitationalParameter;
 
-    fn source(naif_id: i32, position: [f64; 3]) -> (GravitationalParameter<f64>, Position) {
+    fn source(naif_id: i32, position: [f64; 3]) -> GravitySourceEntry {
         let gm = gravitational_parameter(naif_id).unwrap_or(0.0);
-        (
-            GravitationalParameter::new(gm),
-            Vector3::new(position[0], position[1], position[2]),
-        )
+        GravitySourceEntry {
+            gm: GravitationalParameter::new(gm),
+            position: Vector3::new(position[0], position[1], position[2]),
+            spherical_harmonics: None,
+        }
     }
 
     #[test]
@@ -149,10 +151,11 @@ mod tests {
         let sources = GravitySources {
             sources: vec![
                 source(10, [0.0, 0.0, 0.0]),
-                (
-                    GravitationalParameter::new(0.0),
-                    Vector3::new(0.0, apogee_common::constants::AU, 0.0),
-                ),
+                GravitySourceEntry {
+                    gm: GravitationalParameter::new(0.0),
+                    position: Vector3::new(0.0, apogee_common::constants::AU, 0.0),
+                    spherical_harmonics: None,
+                },
             ],
         };
 

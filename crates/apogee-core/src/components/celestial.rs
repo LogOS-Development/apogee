@@ -23,6 +23,7 @@
 //! from the ephemeris service each step; dynamic bodies (asteroids, debris)
 //! are integrated by `step_world` like spacecraft.
 
+use crate::gravity::SphericalHarmonics;
 use apogee_common::gravitational_parameter;
 use apogee_common::units::{GravitationalParameter, Kilograms};
 use apogee_common::NaifId;
@@ -77,28 +78,40 @@ impl NaifIdComponent {
 /// Gravitational source component.
 ///
 /// Carries the gravitational parameter GM (m³/s²) for point-mass gravity
-/// computation. Attached to any entity that contributes to the gravity field
-/// — planets, moons, asteroids, the Sun.
+/// computation, plus optional spherical harmonics coefficients for higher-
+/// fidelity gravity modeling. Attached to any entity that contributes to the
+/// gravity field — planets, moons, asteroids, the Sun.
 ///
 /// For bodies with a known NAIF ID, GM is looked up from the built-in table
 /// at construction time. For user-spawned bodies (asteroids, debris), the
 /// caller supplies GM directly or derives it from mass.
-#[derive(Debug, Clone, Copy, Default)]
+///
+/// When `spherical_harmonics` is `Some`, the force aggregator uses the SH
+/// model for this body instead of point-mass gravity. This enables per-body
+/// gravity fidelity: Earth can have EGM2008 degree-70 while Mars uses
+/// point-mass, all in the same simulation.
+#[derive(Debug, Clone, Default)]
 pub struct GravitySource {
     /// Gravitational parameter GM (m³/s²).
     pub gm: GravitationalParameter<f64>,
+    /// Optional spherical harmonics model for this body.
+    pub spherical_harmonics: Option<SphericalHarmonics>,
 }
 
 impl GravitySource {
     /// Create a gravity source from a known GM value.
     pub fn from_gm(gm: GravitationalParameter<f64>) -> Self {
-        Self { gm }
+        Self {
+            gm,
+            spherical_harmonics: None,
+        }
     }
 
     /// Create a gravity source from a mass, deriving GM = G * M.
     pub fn from_mass(mass: Kilograms<f64>) -> Self {
         Self {
             gm: mass * apogee_common::constants::G,
+            spherical_harmonics: None,
         }
     }
 
@@ -108,6 +121,12 @@ impl GravitySource {
         gravitational_parameter(naif_id)
             .map(GravitationalParameter::new)
             .map(Self::from_gm)
+    }
+
+    /// Attach spherical harmonics coefficients to this gravity source.
+    pub fn with_spherical_harmonics(mut self, sh: SphericalHarmonics) -> Self {
+        self.spherical_harmonics = Some(sh);
+        self
     }
 }
 
@@ -159,6 +178,8 @@ pub struct CelestialBodySpec {
     pub gm: Option<GravitationalParameter<f64>>,
     /// Mass (kg). If `None`, derived from GM for dynamic bodies.
     pub mass: Option<Kilograms<f64>>,
+    /// Optional spherical harmonics model for this body.
+    pub spherical_harmonics: Option<SphericalHarmonics>,
 }
 
 impl CelestialBodySpec {
@@ -180,6 +201,7 @@ impl CelestialBodySpec {
             velocity,
             gm,
             mass,
+            spherical_harmonics: None,
         }
     }
 
@@ -198,6 +220,7 @@ impl CelestialBodySpec {
             velocity,
             gm: Some(gm),
             mass: Some(mass),
+            spherical_harmonics: None,
         }
     }
 
@@ -216,6 +239,7 @@ impl CelestialBodySpec {
             velocity,
             gm: Some(gm),
             mass: Some(mass),
+            spherical_harmonics: None,
         }
     }
 
@@ -230,6 +254,12 @@ impl CelestialBodySpec {
     pub fn resolved_mass(&self) -> Kilograms<f64> {
         self.mass
             .unwrap_or_else(|| self.resolved_gm() / apogee_common::constants::G)
+    }
+
+    /// Attach spherical harmonics to this body spec.
+    pub fn with_spherical_harmonics(mut self, sh: SphericalHarmonics) -> Self {
+        self.spherical_harmonics = Some(sh);
+        self
     }
 }
 
