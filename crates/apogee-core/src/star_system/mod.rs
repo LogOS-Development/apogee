@@ -1,9 +1,13 @@
-//! Low-fidelity analytic star-system state for visualization and mission planning.
+//! Star-system definitions and low-fidelity analytic states.
 //!
-//! This module is intentionally simple: analytic formulas for major bodies
-//! that are fast and good enough for visual rendering (~1° accuracy for the
-//! Sun/Earth/Moon). Higher precision ephemeris can be swapped in later without
-//! changing the public API.
+//! Two layers live here:
+//!
+//! - [`definition`]: config-driven `SystemDefinition` — serde-serializable
+//!   descriptions of arbitrary systems (presets, JSON files, seeded random
+//!   generation) with per-body gravity models.
+//! - This module's analytic `StarSystem`/`CelestialBody`: a quick
+//!   low-fidelity state for visualization and mission planning (~1°
+//!   accuracy for the Sun/Earth/Moon), computable at any epoch.
 //!
 //! All state is stored in SI units: positions in meters, velocities in
 //! meters per second, accelerations in meters per second squared, and GM in
@@ -11,12 +15,18 @@
 //! natural scale, but results are converted to SI at construction time.
 //! Callers that need AU, km/s, etc. convert at output boundaries.
 
+pub mod definition;
+
+pub use definition::{presets, BodyDefinition, BodyRole, GravityConfig, SystemDefinition};
+
 use std::collections::HashMap;
 
 use apogee_common::constants::AU;
 use apogee_common::math::modulo;
 use apogee_common::units::GravitationalParameter;
-use apogee_common::units::{PositionVector, VelocityVector, AccelerationVector, AngularVelocityVector, Radians};
+use apogee_common::units::{
+    AccelerationVector, AngularVelocityVector, PositionVector, Radians, VelocityVector,
+};
 use hifitime::Epoch;
 
 /// A celestial body with barycentric state, physical parameters, and orientation.
@@ -59,7 +69,7 @@ impl CelestialBody {
 
     /// Scalar distance from this body to an observer at `origin` (meters).
     pub fn distance_to(&self, origin: &PositionVector) -> f64 {
-        self.position.distance_to(origin)
+        (self.position.value() - origin.value()).norm()
     }
 
     /// Relative velocity of `origin` with respect to this body (m/s).
@@ -204,7 +214,11 @@ impl StarSystem {
 
     /// Unit direction from `observer_name` to `target_name`.
     /// Convention: vector points from target to observer.
-    pub fn direction_between(&self, observer_name: &str, target_name: &str) -> Option<PositionVector> {
+    pub fn direction_between(
+        &self,
+        observer_name: &str,
+        target_name: &str,
+    ) -> Option<PositionVector> {
         let observer = self.body(observer_name)?;
         let target = self.body(target_name)?;
         Some(observer.direction_to(&target.position))
@@ -221,6 +235,7 @@ impl StarSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use approx::assert_relative_eq;
     use hifitime::{TimeScale, Unit};
 
     #[test]
