@@ -6,7 +6,7 @@
 //! orbit period ~2 hours.
 
 use crate::gravity::point_mass::PointMassGravity;
-use crate::gravity::GravitySources;
+use crate::gravity::{GravitySourceEntry, GravitySources};
 use crate::integrator::{Integrator, Rk4, StateVector};
 use crate::tests::helpers::point_mass_derivative;
 use apogee_common::constants::GM_MOON;
@@ -24,7 +24,11 @@ fn moon_system() -> GravitySources {
         .map(GravitationalParameter::new)
         .unwrap_or_default();
     GravitySources {
-        sources: vec![(gm, Vector3::zeros())],
+        sources: vec![GravitySourceEntry {
+            gm,
+            position: Vector3::zeros(),
+            spherical_harmonics: None,
+        }],
     }
 }
 
@@ -156,7 +160,11 @@ fn test_moon_geocentric_orbit_vs_horizons_apollo_era() {
         .map(GravitationalParameter::new)
         .unwrap_or_default();
     let sources = GravitySources {
-        sources: vec![(gm_earth, Vector3::zeros())],
+        sources: vec![GravitySourceEntry {
+            gm: gm_earth,
+            position: Vector3::zeros(),
+            spherical_harmonics: None,
+        }],
     };
 
     let mut state = StateVector {

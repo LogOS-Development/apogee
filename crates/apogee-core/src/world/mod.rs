@@ -201,7 +201,10 @@ impl World {
         let mass = spec.resolved_mass();
 
         if gm.value > 0.0 {
-            let gravity = GravitySource::from_gm(gm);
+            let mut gravity = GravitySource::from_gm(gm);
+            if let Some(ref sh) = spec.spherical_harmonics {
+                gravity = gravity.with_spherical_harmonics(sh.clone());
+            }
             if kind.is_dynamic() {
                 let celestial_mass = crate::components::celestial::CelestialMass::new(mass);
                 self.spawn((kinematics, naif_id, kind, gravity, celestial_mass))

@@ -15,7 +15,7 @@ use crate::components::drag_surfaces::DragSurfaces;
 use crate::components::kinematics::Kinematics;
 use crate::components::rigid_body::{RigidBody, SimulationConfig};
 use crate::components::srp_surfaces::SrpSurfaces;
-use crate::gravity::{GravitySources, PointMassGravity, SphericalHarmonics};
+use crate::gravity::{GravitySources, SphericalHarmonics};
 use hifitime::Epoch;
 
 /// Aggregated forces and torques on a body.
@@ -92,43 +92,38 @@ pub fn aggregate_forces(
     srp_surfaces: Option<&SrpSurfaces>,
     sim_config: &SimulationConfig,
     gravity_sources: &GravitySources,
-    gravity_model: Option<&SphericalHarmonics>,
+    _gravity_model: Option<&SphericalHarmonics>,
     sun_position: Position,
     epoch: Epoch,
 ) -> AggregatedForces {
-    // Gravity: use spherical harmonics for the central body if a model is
-    // provided; otherwise fall back to pure point-mass. Third-body
-    // perturbations from other gravity sources are added as point-mass
-    // contributions on top of the SH central-body acceleration.
-    let gravity = if let Some(sh) = gravity_model {
-        // SH acceleration already includes the central body's GM. Add
-        // third-body perturbations from any other gravity sources (skip
-        // the first one, which is the central body at or near the origin).
-        let sh_accel = sh
-            .acceleration(&kinematics.position)
-            .unwrap_or_else(|_| AccelerationVector::new(Vector3::zeros()));
-
-        // Add point-mass perturbations from other bodies (skip the primary).
-        let mut third_body = Vector3::zeros();
-        for (i, &(gm, body_pos)) in gravity_sources.sources.iter().enumerate() {
-            if i == 0 {
-                // The first source is the central body — its gravity is
-                // already captured by the SH model.
-                continue;
-            }
-            let gm_val = gm.into_value();
-            let delta = kinematics.position - body_pos;
-            let r = delta.norm();
-            if r > 0.0 {
-                third_body -= gm_val * delta / (r * r * r);
+    // Gravity: iterate all gravity sources. Bodies with SH coefficients
+    // get SH acceleration; bodies without get point-mass. This is the
+    // ECS-native multi-body pattern — each source carries its own gravity
+    // model, no singleton.
+    let mut total_gravity = Vector3::zeros();
+    for entry in &gravity_sources.sources {
+        let gm_val = entry.gm.into_value();
+        if gm_val == 0.0 {
+            continue;
+        }
+        if let Some(ref sh) = entry.spherical_harmonics {
+            // SH acceleration relative to this body's position.
+            let r_relative = kinematics.position - entry.position;
+            let sh_accel = sh
+                .acceleration(&r_relative)
+                .unwrap_or_else(|_| AccelerationVector::new(Vector3::zeros()));
+            total_gravity += *sh_accel.raw();
+        } else {
+            // Point-mass: a = GM * (body_pos - pos) / |body_pos - pos|^3
+            let delta = entry.position - kinematics.position;
+            let r2 = delta.norm_squared();
+            if r2 > 0.0 {
+                let r3 = r2 * r2.sqrt();
+                total_gravity += gm_val * delta / r3;
             }
         }
-        AccelerationVector::new(*sh_accel.raw() + third_body)
-    } else {
-        PointMassGravity
-            .acceleration(&kinematics.position, gravity_sources)
-            .unwrap_or_else(|_| AccelerationVector::new(Vector3::zeros()))
-    };
+    }
+    let gravity = AccelerationVector::new(total_gravity);
 
     let drag = if let Some(ds) = drag_surfaces {
         let doy_f64 = epoch.day_of_year();
@@ -212,6 +207,7 @@ mod tests {
     use crate::components::drag_surfaces::{DragSurface, DragSurfaces};
     use crate::components::kinematics::Kinematics;
     use crate::components::srp_surfaces::{SrpSurface, SrpSurfaces};
+    use crate::gravity::GravitySourceEntry;
     use approx::assert_relative_eq;
 
     fn make_iss_components() -> (Kinematics, RigidBody, DragSurfaces, SrpSurfaces) {
@@ -244,7 +240,11 @@ mod tests {
         let (kin, rb, drag, srp) = make_iss_components();
         let sim_config = SimulationConfig::default();
         let gravity_sources = GravitySources {
-            sources: vec![(GravitationalParameter::new(GM_EARTH), Vector3::zeros())],
+            sources: vec![GravitySourceEntry {
+                gm: GravitationalParameter::new(GM_EARTH),
+                position: Vector3::zeros(),
+                spherical_harmonics: None,
+            }],
         };
         let sun_position = Vector3::new(-apogee_common::constants::AU, 0.0, 0.0);
         let epoch = Epoch::from_gregorian_utc(2026, 3, 21, 12, 0, 0, 0);
@@ -269,7 +269,11 @@ mod tests {
         let (kin, rb, _, _) = make_iss_components();
         let sim_config = SimulationConfig::default();
         let gravity_sources = GravitySources {
-            sources: vec![(GravitationalParameter::new(GM_EARTH), Vector3::zeros())],
+            sources: vec![GravitySourceEntry {
+                gm: GravitationalParameter::new(GM_EARTH),
+                position: Vector3::zeros(),
+                spherical_harmonics: None,
+            }],
         };
         let sun_position = Vector3::new(-apogee_common::constants::AU, 0.0, 0.0);
         let epoch = Epoch::from_gregorian_utc(2026, 3, 21, 12, 0, 0, 0);

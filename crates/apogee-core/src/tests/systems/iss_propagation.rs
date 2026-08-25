@@ -299,10 +299,9 @@ fn test_drag_srp_changes_orbital_energy() {
 
 /// Build a SimContext with J2 spherical harmonics gravity for Earth.
 fn sh_ctx(epoch: Epoch) -> SimContext {
-    SimContext {
-        gravity_model: Some(SphericalHarmonics::j2_only()),
-        ..earth_only_ctx(epoch)
-    }
+    let mut ctx = earth_only_ctx(epoch);
+    ctx.gravity_sources.sources[0].spherical_harmonics = Some(SphericalHarmonics::j2_only());
+    ctx
 }
 
 #[test]

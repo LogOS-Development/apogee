@@ -10,7 +10,7 @@
 //! real mission data.
 
 use crate::gravity::point_mass::PointMassGravity;
-use crate::gravity::GravitySources;
+use crate::gravity::{GravitySourceEntry, GravitySources};
 use crate::integrator::{Integrator, Rk4, StateVector};
 use crate::tests::helpers::point_mass_derivative;
 use apogee_common::constants::GM_MOON;
@@ -59,7 +59,11 @@ fn load_reference() -> Option<Vec<Sample>> {
 /// Build a Moon-centered gravity source set with Moon as the origin.
 fn moon_only_sources() -> GravitySources {
     GravitySources {
-        sources: vec![(GravitationalParameter::new(GM_MOON), Vector3::zeros())],
+        sources: vec![GravitySourceEntry {
+            gm: GravitationalParameter::new(GM_MOON),
+            position: Vector3::zeros(),
+            spherical_harmonics: None,
+        }],
     }
 }
 

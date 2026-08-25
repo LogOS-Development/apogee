@@ -28,7 +28,7 @@ use crate::components::drag_surfaces::DragSurfaces;
 use crate::components::kinematics::Kinematics;
 use crate::components::rigid_body::{RigidBody, SimulationConfig};
 use crate::components::srp_surfaces::SrpSurfaces;
-use crate::gravity::{GravitySources, SphericalHarmonics};
+use crate::gravity::GravitySources;
 use crate::integrator::{IntegrationResult, Integrator, Rk4, StateDerivative, StateVector};
 use crate::systems::force_aggregator::aggregate_forces;
 use crate::world::World;
@@ -47,20 +47,12 @@ use hifitime::{Epoch, Unit};
 pub struct SimContext {
     /// Space-weather / environment configuration for force models.
     pub sim_config: SimulationConfig,
-    /// Gravity source snapshot (GM + position of all massive bodies).
+    /// Gravity source snapshot (GM, position, optional SH per body).
     pub gravity_sources: GravitySources,
     /// Position of the Sun (NAIF ID 10), for SRP calculation.
     pub sun_position: apogee_common::Position,
     /// Current simulation epoch.
     pub epoch: Epoch,
-    /// Optional spherical harmonics gravity model for the central body.
-    ///
-    /// When present, the force aggregator uses this instead of point-mass
-    /// gravity for the primary body. The SH model includes its own GM and
-    /// reference radius, so the central body's point-mass contribution is
-    /// replaced (not added to) by the SH acceleration. Third-body point-mass
-    /// perturbations from other gravity sources are still added on top.
-    pub gravity_model: Option<SphericalHarmonics>,
 }
 
 impl SimContext {
@@ -72,7 +64,7 @@ impl SimContext {
     pub fn from_world(world: &World) -> Self {
         let mut gravity_sources = GravitySources::new();
         for (_, (gs, kin)) in world.ecs.query::<(&GravitySource, &Kinematics)>().iter() {
-            gravity_sources.push(gs.gm, kin.position);
+            gravity_sources.push_with_sh(gs.gm, kin.position, gs.spherical_harmonics.clone());
         }
 
         let sun_position = find_sun_position(world);
@@ -82,7 +74,6 @@ impl SimContext {
             gravity_sources,
             sun_position,
             epoch: world.epoch,
-            gravity_model: None,
         }
     }
 
@@ -98,7 +89,6 @@ impl SimContext {
             gravity_sources,
             sun_position: Vector3::new(-apogee_common::constants::AU, 0.0, 0.0),
             epoch,
-            gravity_model: None,
         }
     }
 }
@@ -149,13 +139,10 @@ pub fn step_spacecraft(
     let srp = srp_surfaces.cloned();
     let sim_config = ctx.sim_config;
     let gravity_sources = ctx.gravity_sources.clone();
-    let gravity_model = ctx.gravity_model.clone();
     let sun_position = ctx.sun_position;
     let epoch = ctx.epoch;
 
     let derivative_fn = |s: &StateVector| {
-        // Reconstruct a temporary kinematics from the integrator state so
-        // force models see the trial position/velocity/attitude/rate.
         let trial_kinematics = Kinematics {
             position: s.position,
             velocity: s.velocity,
@@ -169,7 +156,7 @@ pub fn step_spacecraft(
             srp.as_ref(),
             &sim_config,
             &gravity_sources,
-            gravity_model.as_ref(),
+            None,
             sun_position,
             epoch,
         );
@@ -359,9 +346,9 @@ fn integrate_dynamic_celestials(
         // not feel its own gravity — including it produces a singularity
         // at the initial position that silently zeroes the k1 acceleration.
         let mut body_gs = GravitySources::new();
-        for &(gm, pos) in &ctx.gravity_sources.sources {
-            if pos != body_position {
-                body_gs.push(gm, pos);
+        for entry in &ctx.gravity_sources.sources {
+            if entry.position != body_position {
+                body_gs.push_with_sh(entry.gm, entry.position, entry.spherical_harmonics.clone());
             }
         }
 
@@ -370,7 +357,6 @@ fn integrate_dynamic_celestials(
             gravity_sources: body_gs,
             sun_position: ctx.sun_position,
             epoch: ctx.epoch,
-            gravity_model: ctx.gravity_model.clone(),
         };
 
         // Dynamic bodies only feel gravity — no drag/SRP surfaces.
