@@ -25,6 +25,8 @@ use crate::components::celestial::{
 };
 use crate::components::kinematics::Kinematics;
 use crate::components::rigid_body::SimulationConfig;
+use crate::ephemeris::EphemerisService;
+use crate::frames::ClockService;
 use apogee_common::NaifId;
 
 /// The simulation world.
@@ -39,6 +41,10 @@ pub struct World {
     pub sim_config: SimulationConfig,
     /// Current simulation epoch.
     pub epoch: hifitime::Epoch,
+    /// Optional clock service for time scale conversions (UT1, EOP).
+    pub clock: Option<ClockService>,
+    /// Optional ephemeris service for kinematic body updates.
+    pub ephemeris: Option<EphemerisService>,
 }
 
 impl Default for World {
@@ -54,6 +60,8 @@ impl World {
             ecs: hecs::World::new(),
             sim_config: SimulationConfig::default(),
             epoch: hifitime::Epoch::from_tai_duration(hifitime::Duration::ZERO),
+            clock: None,
+            ephemeris: None,
         }
     }
 
@@ -63,6 +71,8 @@ impl World {
             ecs: hecs::World::new(),
             sim_config,
             epoch: hifitime::Epoch::from_tai_duration(hifitime::Duration::ZERO),
+            clock: None,
+            ephemeris: None,
         }
     }
 
@@ -72,7 +82,21 @@ impl World {
             ecs: hecs::World::new(),
             sim_config,
             epoch,
+            clock: None,
+            ephemeris: None,
         }
+    }
+
+    /// Attach a clock service for time scale conversions (UT1, EOP).
+    pub fn with_clock(mut self, clock: ClockService) -> Self {
+        self.clock = Some(clock);
+        self
+    }
+
+    /// Attach an ephemeris service for kinematic body updates.
+    pub fn with_ephemeris(mut self, ephemeris: EphemerisService) -> Self {
+        self.ephemeris = Some(ephemeris);
+        self
     }
 
     // ------------------------------------------------------------------
