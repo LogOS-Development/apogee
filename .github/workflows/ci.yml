@@ -21,7 +21,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: LogOS-Development/metron
-          path: ../metron
+          path: metron
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -62,7 +62,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: LogOS-Development/metron
-          path: ../metron
+          path: metron
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -163,7 +163,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: LogOS-Development/metron
-          path: ../metron
+          path: metron
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

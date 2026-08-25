@@ -52,6 +52,6 @@ apogee-tactical = { path = "crates/apogee-tactical" }
 apogee-discovery = { path = "crates/apogee-discovery" }
 apogee-llm = { path = "crates/apogee-llm" }
 # Units library (extracted from apogee-common)
-metron = { path = "../metron" }
+metron = { path = "metron" }
 # EOP cache directory
 # dirs = "5.0"
