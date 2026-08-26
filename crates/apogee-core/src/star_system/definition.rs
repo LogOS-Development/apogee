@@ -121,20 +121,49 @@ impl GravityConfig {
 // -----------------------------------------------------------------------
 
 /// The role of a body within the system.
+///
+/// Roles decide the body's propagation class when the system goes live
+/// (see `World::add_system` and `star_system::StarSystem`):
+///
+/// - `Star`, `Central`, `Planet`, `Moon` — **kinematic**: their states come
+///   from the attached ephemeris service (JPL SPICE) when one exists, or
+///   stay at their configured values otherwise. They are never integrated.
+/// - `Minor`, `Asteroid`, `AsteroidCluster` — **dynamic**: integrated by
+///   `step_world` under full N-body gravity with self-gravity excluded.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum BodyRole {
-    /// Central star (e.g. the Sun).
+    /// Central star (e.g. the Sun). Kinematic.
     #[default]
     Star,
-    /// Body whose motion is defined by the definition, not integrated.
+    /// Body whose motion is defined by the definition, not integrated. Kinematic.
     Central,
-    /// Body integrated by `step_world` under N-body gravity.
+    /// Major body following an ephemeris when available. Kinematic.
     Planet,
-    /// Natural satellite of a planet.
+    /// Natural satellite of a planet. Kinematic.
     Moon,
-    /// Minor body (asteroid, comet, dwarf planet).
+    /// Minor body (asteroid, comet, dwarf planet). Dynamic — N-body integrated.
     Minor,
+    /// Individual asteroid. Dynamic — N-body integrated.
+    Asteroid,
+    /// Aggregate of many small rocks gravitating as one mass. Dynamic.
+    AsteroidCluster,
+}
+
+impl BodyRole {
+    /// Kinematic bodies are placed by ephemeris or configuration, never
+    /// integrated. Dynamic bodies are N-body integrated by `step_world`.
+    pub fn is_kinematic(&self) -> bool {
+        matches!(
+            self,
+            BodyRole::Star | BodyRole::Central | BodyRole::Planet | BodyRole::Moon
+        )
+    }
+
+    /// Dynamic bodies are integrated under N-body gravity.
+    pub fn is_dynamic(&self) -> bool {
+        !self.is_kinematic()
+    }
 }
 
 /// Static (config-time) description of one celestial body.
@@ -167,6 +196,35 @@ pub struct BodyDefinition {
     /// Gravity model for this body.
     #[serde(default)]
     pub gravity: GravityConfig,
+    /// Cluster membership when `role == AsteroidCluster`. Ignored otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cluster: Option<AsteroidClusterSpec>,
+}
+
+/// Config-time description of an asteroid cluster: a list of member rocks.
+///
+/// The cluster gravitates as ONE body with the aggregate GM of all
+/// members. Member states are recorded relative to the cluster
+/// barycenter so individual rocks can later be promoted to full N-body
+/// entities (`StarSystem` reduces the cluster's aggregate GM accordingly).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct AsteroidClusterSpec {
+    /// Individual rocks.
+    pub members: Vec<ClusterMemberSpec>,
+}
+
+/// Config-time description of one rock inside an [`AsteroidClusterSpec`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ClusterMemberSpec {
+    /// Human-readable identifier, e.g. "belt-1-rock-17".
+    pub name: String,
+    /// Position relative to the cluster barycenter (m).
+    pub offset: [f64; 3],
+    /// Velocity relative to the cluster barycenter (m/s).
+    #[serde(default)]
+    pub velocity_offset: [f64; 3],
+    /// GM of the individual rock (m³/s²).
+    pub gm: f64,
 }
 
 impl BodyDefinition {
@@ -182,6 +240,7 @@ impl BodyDefinition {
             mass: None,
             radius: None,
             gravity: GravityConfig::PointMass,
+            cluster: None,
         }
     }
 
@@ -203,6 +262,29 @@ impl BodyDefinition {
             mass: None,
             radius: Some(reference_radius),
             gravity: GravityConfig::J2 { c20 },
+            cluster: None,
+        }
+    }
+
+    /// Build an asteroid cluster body carrying the aggregate GM of its
+    /// members, positioned at the cluster barycenter.
+    pub fn asteroid_cluster(
+        name: impl Into<String>,
+        members: Vec<ClusterMemberSpec>,
+        position: [f64; 3],
+    ) -> Self {
+        let aggregate_gm: f64 = members.iter().map(|m| m.gm).sum();
+        Self {
+            name: name.into(),
+            naif_id: None,
+            role: BodyRole::AsteroidCluster,
+            position,
+            velocity: [0.0; 3],
+            gm: aggregate_gm,
+            mass: None,
+            radius: None,
+            gravity: GravityConfig::PointMass,
+            cluster: Some(AsteroidClusterSpec { members }),
         }
     }
 
