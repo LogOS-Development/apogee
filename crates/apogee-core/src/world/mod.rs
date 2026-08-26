@@ -141,12 +141,12 @@ impl World {
         definition: &crate::star_system::SystemDefinition,
     ) -> ApogeeResult<Vec<Entity>> {
         use crate::components::celestial::CelestialKind;
-        use crate::star_system::{BodyRole, GravityConfig};
+        use crate::star_system::GravityConfig;
 
         let mut entities = Vec::with_capacity(definition.bodies.len());
 
         for body in &definition.bodies {
-            let kind = if matches!(body.role, BodyRole::Star | BodyRole::Central) {
+            let kind = if body.role.is_kinematic() {
                 CelestialKind::Kinematic
             } else {
                 CelestialKind::Dynamic
@@ -180,6 +180,30 @@ impl World {
             };
 
             let entity = self.add_celestial_body(spec);
+
+            // Attach the cluster component for asteroid clusters.
+            if let Some(cluster_spec) = &body.cluster {
+                let cluster = crate::star_system::AsteroidCluster {
+                    members: cluster_spec
+                        .members
+                        .iter()
+                        .map(|m| crate::star_system::ClusterMember {
+                            name: m.name.clone(),
+                            offset: nalgebra::Vector3::new(m.offset[0], m.offset[1], m.offset[2]),
+                            velocity_offset: nalgebra::Vector3::new(
+                                m.velocity_offset[0],
+                                m.velocity_offset[1],
+                                m.velocity_offset[2],
+                            ),
+                            gm: GravitationalParameter::new(m.gm),
+                        })
+                        .collect(),
+                };
+                self.ecs
+                    .insert_one(entity, cluster)
+                    .expect("cluster component insertion");
+            }
+
             entities.push(entity);
         }
 

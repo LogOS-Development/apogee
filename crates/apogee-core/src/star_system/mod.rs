@@ -1,329 +1,217 @@
-//! Star-system definitions and low-fidelity analytic states.
+//! Star-system construction and simulation.
 //!
-//! Two layers live here:
+//! A star system is a self-contained gravitational system: a star, its
+//! planets, and minor bodies (asteroids, comets, dwarf planets).
 //!
-//! - [`definition`]: config-driven `SystemDefinition` — serde-serializable
-//!   descriptions of arbitrary systems (presets, JSON files, seeded random
-//!   generation) with per-body gravity models.
-//! - This module's analytic `StarSystem`/`CelestialBody`: a quick
-//!   low-fidelity state for visualization and mission planning (~1°
-//!   accuracy for the Sun/Earth/Moon), computable at any epoch.
+//! Three sources of truth build one:
 //!
-//! All state is stored in SI units: positions in meters, velocities in
-//! meters per second, accelerations in meters per second squared, and GM in
-//! m^3/s^2. The analytic formulas internally use AU/day because that is their
-//! natural scale, but results are converted to SI at construction time.
-//! Callers that need AU, km/s, etc. convert at output boundaries.
+//! - [`definition::SystemDefinition`]: config-driven descriptions —
+//!   presets, JSON files, seeded random generation.
+//! - [`EphemerisService`]: JPL SPICE kernels (SPK segments) for major-body
+//!   states.
+//! - [`StarSystem`]: the live simulation manager binding a definition, an
+//!   optional ephemeris service, and the ECS [`World`] together.
+//!
+//! ## Body classes
+//!
+//! - **Star / Planet / Moon** — kinematic when an ephemeris is attached:
+//!   `step` queries their states from SPICE and writes them into the
+//!   `World`. Without an ephemeris they stay at their configured states.
+//! - **Minor / Asteroid / AsteroidCluster** — dynamic: integrated by
+//!   `step_world` under full N-body gravity from all `GravitySource`s,
+//!   with self-gravity excluded per body.
+//! - **AsteroidCluster** — one entity carrying the aggregate GM of the
+//!   whole cluster (the cluster's gravitational influence on everything
+//!   else) plus a member table for high-fidelity promotion of individual
+//!   rocks. See [`AsteroidCluster`].
+//!
+//! All state is SI: positions in meters, velocities in m/s, GM in m³/s².
 
 pub mod definition;
 
-pub use definition::{presets, BodyDefinition, BodyRole, GravityConfig, SystemDefinition};
-
-use std::collections::HashMap;
-
-use apogee_common::constants::AU;
-use apogee_common::math::modulo;
-use apogee_common::units::GravitationalParameter;
-use apogee_common::units::{
-    AccelerationVector, AngularVelocityVector, PositionVector, Radians, VelocityVector,
+pub use definition::{
+    presets, AsteroidClusterSpec, BodyDefinition, BodyRole, ClusterMemberSpec, GravityConfig,
+    SystemDefinition,
 };
+
+use crate::ephemeris::EphemerisService;
+use crate::world::World;
+use apogee_common::units::{GravitationalParameter, Kilograms, Seconds};
+use apogee_common::ApogeeResult;
 use hifitime::Epoch;
 
-/// A celestial body with barycentric state, physical parameters, and orientation.
-///
-/// This is the foundation for a future ECS/config-driven star system. Each
-/// body knows its name, NAIF-style ID, gravitational parameter, current
-/// barycentric state, and rotation. Propagators can be attached later.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct CelestialBody {
-    /// Human-readable name, e.g. "Sun", "Earth", "Moon".
-    pub name: &'static str,
-    /// NAIF-style body identifier, if known.
-    pub naif_id: Option<i32>,
-    /// Gravitational parameter GM (m^3/s^2).
-    pub gm: GravitationalParameter<f64>,
-    /// Barycentric position in meters, SSB J2000 equatorial.
-    pub position: PositionVector,
-    /// Barycentric velocity in meters per second, SSB J2000 equatorial.
-    pub velocity: VelocityVector,
-    /// Barycentric acceleration in meters per second squared, SSB J2000 equatorial.
-    pub acceleration: AccelerationVector,
-    /// Angular velocity vector (rad/s) — magnitude is spin rate, direction is rotation pole.
-    pub angular_velocity: AngularVelocityVector,
-    /// Current rotation angle about `angular_velocity` (radians).
-    pub rotation_angle: Radians<f64>,
-}
-
-impl CelestialBody {
-    /// Unit direction from this body to an observer at `origin`.
-    /// Convention: vector points from self to the observer.
-    pub fn direction_to(&self, origin: &PositionVector) -> PositionVector {
-        PositionVector::new((origin.value() - self.position.value()).normalize())
-    }
-
-    /// Displacement vector from this body to an observer at `origin` (meters).
-    /// Convention: vector points from self to the observer.
-    pub fn vector_to(&self, origin: &PositionVector) -> PositionVector {
-        PositionVector::new(origin.value() - self.position.value())
-    }
-
-    /// Scalar distance from this body to an observer at `origin` (meters).
-    pub fn distance_to(&self, origin: &PositionVector) -> f64 {
-        (self.position.value() - origin.value()).norm()
-    }
-
-    /// Relative velocity of `origin` with respect to this body (m/s).
-    pub fn velocity_to(&self, origin: &VelocityVector) -> VelocityVector {
-        VelocityVector::new(origin.value() - self.velocity.value())
-    }
-
-    /// Relative acceleration of `origin` with respect to this body (m/s²).
-    pub fn acceleration_to(&self, origin: &AccelerationVector) -> AccelerationVector {
-        AccelerationVector::new(origin.value() - self.acceleration.value())
-    }
-}
-
-/// Snapshot of a star system at a single epoch.
-///
-/// `epoch` is the single source of truth for time. Derived representations
-/// (Julian Day, days since J2000) are computed on demand via [`julian_day`]
-/// and [`days_since_j2000`] accessors, avoiding redundant stored fields that
-/// can drift out of sync.
-///
-/// [`julian_day`]: StarSystem::julian_day
-/// [`days_since_j2000`]: StarSystem::days_since_j2000
+/// A member of an [`AsteroidCluster`]: an individual rock with its own
+/// state, recorded for later promotion to a full N-body entity.
 #[derive(Debug, Clone, PartialEq)]
+pub struct ClusterMember {
+    /// Human-readable identifier, e.g. "belt-1-rock-17".
+    pub name: String,
+    /// Position relative to the cluster barycenter (meters).
+    pub offset: nalgebra::Vector3<f64>,
+    /// Velocity relative to the cluster barycenter (m/s).
+    pub velocity_offset: nalgebra::Vector3<f64>,
+    /// GM of the individual rock (m³/s²).
+    pub gm: GravitationalParameter<f64>,
+}
+
+/// ECS component: asteroid cluster membership and aggregate data.
+///
+/// A cluster is ONE entity in the ECS with the aggregate GM of all its
+/// members — that is the gravitational field everything else feels. The
+/// member table records individual rocks so a member can later be promoted
+/// to its own full N-body entity (the cluster's aggregate GM is reduced by
+/// the promoted member's GM).
+#[derive(Debug, Clone, PartialEq)]
+pub struct AsteroidCluster {
+    /// Individual rocks, positions relative to the cluster entity.
+    pub members: Vec<ClusterMember>,
+}
+
+impl AsteroidCluster {
+    /// Total GM of all members (m³/s²).
+    pub fn aggregate_gm(&self) -> GravitationalParameter<f64> {
+        let total: f64 = self.members.iter().map(|m| m.gm.into_value()).sum();
+        GravitationalParameter::new(total)
+    }
+
+    /// Total mass of all members (kg), derived via G.
+    pub fn aggregate_mass(&self) -> Kilograms<f64> {
+        Kilograms::new(self.aggregate_gm().into_value() / apogee_common::constants::G.into_value())
+    }
+}
+
+/// A live star system: definition + ephemeris + ECS world.
+///
+/// This is the top-level object for Phase 1 simulation. `step` advances
+/// the whole system one interval:
+///
+/// 1. Kinematic bodies (star, planets, moons) are updated from the
+///    ephemeris service at the new epoch, if attached.
+/// 2. `step_world` integrates dynamic bodies (asteroids, clusters,
+///    spacecraft) under N-body gravity and steps all spacecraft states.
+///
+/// Without an ephemeris, kinematic bodies stay at their configured states
+/// and only dynamic bodies move.
+///
+/// # Example
+///
+/// ```ignore
+/// use apogee_core::star_system::{presets, StarSystem};
+///
+/// // Real solar system from a JPL kernel:
+/// let system = StarSystem::builder(presets::inner_solar_system())
+///     .with_ephemeris(EphemerisService::load("de440s.bsp", 32)?)
+///     .build()?;
+/// system.step(Seconds::new(60.0))?;
+///
+/// // Fictional system, no ephemeris — planets stay at configured states:
+/// let system = StarSystem::builder(SystemDefinition::random(42, 5)).build()?;
+/// ```
 pub struct StarSystem {
-    /// Epoch of the snapshot — single source of truth for time.
+    /// The immutable system description (bodies, gravity models, clusters).
+    pub definition: SystemDefinition,
+    /// The live ECS world.
+    pub world: World,
+    /// Simulation epoch, advanced by `step`.
     pub epoch: Epoch,
-    /// Bodies keyed by name.
-    pub bodies: HashMap<String, CelestialBody>,
 }
 
 impl StarSystem {
-    /// Julian Day (TT) corresponding to `epoch`.
-    pub fn julian_day(&self) -> f64 {
-        self.epoch.to_jde_tt_days()
+    /// Start building a star system from a definition.
+    pub fn builder(definition: SystemDefinition) -> StarSystemBuilder {
+        StarSystemBuilder {
+            definition,
+            ephemeris: None,
+        }
     }
 
-    /// Days since J2000.0 (JD 2451545.0).
-    pub fn days_since_j2000(&self) -> f64 {
-        self.julian_day() - 2451545.0
+    /// Construct from parts (builder is preferred).
+    pub fn new(
+        definition: SystemDefinition,
+        ephemeris: Option<EphemerisService>,
+        epoch: Epoch,
+    ) -> ApogeeResult<Self> {
+        let mut world = World::new();
+        if let Some(eph) = ephemeris {
+            world = world.with_ephemeris(eph);
+        }
+        // `add_system` handles ephemeris-driven vs dynamic roles.
+        world.add_system(&definition)?;
+        let mut system = Self {
+            definition,
+            world,
+            epoch,
+        };
+        system.sync_kinematic_from_ephemeris()?;
+        Ok(system)
     }
 
-    /// Compute the star-system state at the given epoch.
+    /// Advance the whole system by `dt`.
     ///
-    /// Uses the low-precision analytic model from "Astronomical Algorithms" by
-    /// Jean Meeus (Ch. 25) for the Sun's apparent position as seen from Earth.
-    /// For Phase 1 the solar-system barycenter is approximated as the Sun;
-    /// later this will be replaced by a proper JPL/NAIF ephemeris backend.
-    ///
-    /// Returned state is in SI units.
-    pub fn at_epoch(epoch: Epoch) -> Self {
-        let days_since_j2000 = epoch.to_jde_tt_days() - 2451545.0;
-
-        // Mean longitude of the Sun (degrees).
-        let l = modulo(280.460 + 0.9856474 * days_since_j2000, 360.0);
-
-        // Mean anomaly of the Sun (degrees).
-        let g = modulo(357.528 + 0.9856003 * days_since_j2000, 360.0);
-        let g_rad = g.to_radians();
-
-        // Ecliptic longitude of the Sun (degrees).
-        let lambda = modulo(
-            l + 1.915 * g_rad.sin() + 0.020 * (2.0_f64 * g_rad).sin(),
-            360.0,
-        );
-        let lambda_rad = lambda.to_radians();
-
-        // Obliquity of the ecliptic (degrees), simplified.
-        let epsilon: f64 = 23.439 - 0.0000004 * days_since_j2000;
-        let epsilon_rad = epsilon.to_radians();
-
-        // Distance from Earth to Sun (AU).
-        let r_au = 1.00014 - 0.01671 * g_rad.cos() - 0.00014 * (2.0_f64 * g_rad).cos();
-
-        // Sun unit vector in geocentric equatorial J2000 frame.
-        let sun_dir_x = lambda_rad.cos();
-        let sun_dir_y = epsilon_rad.cos() * lambda_rad.sin();
-        let sun_dir_z = epsilon_rad.sin() * lambda_rad.sin();
-        let sun_direction = nalgebra::Vector3::new(sun_dir_x, sun_dir_z, -sun_dir_y).normalize();
-
-        // Phase 1: SSB ≈ Sun.
-        let sun_position_m = PositionVector::new(nalgebra::Vector3::zeros());
-
-        // Earth is opposite the Sun direction at distance r_au.
-        let earth_position_m = PositionVector::new(-sun_direction * r_au * AU);
-
-        // Earth rotation angle: Greenwich Mean Sidereal Time.
-        let gmst_deg = modulo(280.46061837 + 360.98564736629 * days_since_j2000, 360.0);
-        let earth_rotation_rad = gmst_deg.to_radians();
-
-        // Celestial pole for Earth in J2000 equatorial frame.
-        let earth_pole = nalgebra::Vector3::new(
-            epsilon_rad.sin() * lambda_rad.sin(),
-            -epsilon_rad.cos() * lambda_rad.sin(),
-            lambda_rad.cos(),
-        )
-        .normalize();
-        let earth_rotation_axis = AngularVelocityVector::new(earth_pole);
-
-        let mut bodies = HashMap::new();
-        bodies.insert(
-            "Sun".to_string(),
-            CelestialBody {
-                name: "Sun",
-                naif_id: Some(10),
-                gm: GravitationalParameter::new(apogee_common::constants::GM_SUN),
-                position: sun_position_m,
-                velocity: VelocityVector::default(),
-                acceleration: AccelerationVector::default(),
-                angular_velocity: AngularVelocityVector::new(nalgebra::Vector3::z()),
-                rotation_angle: Radians::new(0.0),
-            },
-        );
-        bodies.insert(
-            "Earth".to_string(),
-            CelestialBody {
-                name: "Earth",
-                naif_id: Some(399),
-                gm: GravitationalParameter::new(apogee_common::constants::GM_EARTH),
-                position: earth_position_m,
-                velocity: VelocityVector::default(),
-                acceleration: AccelerationVector::default(),
-                angular_velocity: earth_rotation_axis,
-                rotation_angle: Radians::new(earth_rotation_rad),
-            },
-        );
-
-        Self { epoch, bodies }
+    /// 1. Advance the epoch.
+    /// 2. Update kinematic bodies from the ephemeris at the new epoch.
+    /// 3. Integrate dynamic bodies and spacecraft via `step_world`.
+    pub fn step(&mut self, dt: Seconds<f64>) -> ApogeeResult<()> {
+        self.epoch += dt.into_value() * hifitime::Unit::Second;
+        self.sync_kinematic_from_ephemeris()?;
+        crate::systems::step::step_world(&mut self.world, dt);
+        Ok(())
     }
 
-    /// Convenience accessor for a body by name.
-    pub fn body(&self, name: &str) -> Option<&CelestialBody> {
-        self.bodies.get(name)
-    }
+    /// Update all ephemeris-driven kinematic bodies from the ephemeris at
+    /// the current epoch. No-op without an ephemeris service.
+    fn sync_kinematic_from_ephemeris(&mut self) -> ApogeeResult<()> {
+        let Some(ephemeris) = self.world.ephemeris.as_mut() else {
+            return Ok(());
+        };
+        let epoch = self.epoch;
 
-    /// Displacement vector from `observer_name` to `target_name` (meters).
-    /// Convention: vector points from target to observer.
-    pub fn vector_between(&self, observer_name: &str, target_name: &str) -> Option<PositionVector> {
-        let observer = self.body(observer_name)?;
-        let target = self.body(target_name)?;
-        Some(observer.vector_to(&target.position))
-    }
+        // Collect states first to avoid holding the borrow across the
+        // world mutation.
+        let mut updates = Vec::new();
+        for body in &self.definition.bodies {
+            let Some(naif_id) = body.naif_id else {
+                continue;
+            };
+            if !body.role.is_kinematic() {
+                continue;
+            }
+            let state = ephemeris.state_at(naif_id, epoch)?;
+            updates.push((naif_id, state.position, state.velocity));
+        }
 
-    /// Unit direction from `observer_name` to `target_name`.
-    /// Convention: vector points from target to observer.
-    pub fn direction_between(
-        &self,
-        observer_name: &str,
-        target_name: &str,
-    ) -> Option<PositionVector> {
-        let observer = self.body(observer_name)?;
-        let target = self.body(target_name)?;
-        Some(observer.direction_to(&target.position))
-    }
-
-    /// Distance from `observer_name` to `target_name` (meters).
-    pub fn distance_between(&self, observer_name: &str, target_name: &str) -> Option<f64> {
-        let observer = self.body(observer_name)?;
-        let target = self.body(target_name)?;
-        Some(observer.distance_to(&target.position))
+        for (naif_id, position, velocity) in updates {
+            self.world
+                .update_kinematic_celestial(naif_id, position, velocity);
+        }
+        Ok(())
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use approx::assert_relative_eq;
-    use hifitime::{TimeScale, Unit};
+/// Builder for [`StarSystem`].
+pub struct StarSystemBuilder {
+    definition: SystemDefinition,
+    ephemeris: Option<EphemerisService>,
+}
 
-    #[test]
-    fn j2000_sun_direction_matches_analytic_reference() {
-        let epoch = Epoch::from_jde_in_time_scale(2451545.0, TimeScale::TT);
-        let system = StarSystem::at_epoch(epoch);
-
-        let dir = system.direction_between("Earth", "Sun").unwrap();
-
-        // Reference values in our swapped-Y/Z frame.
-        assert!(
-            (dir.x - 0.180).abs() < 0.02,
-            "expected X ≈ +0.18, got {:?}",
-            dir.value()
-        );
-        assert!(
-            (dir.y - (-0.392)).abs() < 0.02,
-            "expected swapped-Y ≈ -0.392, got {:?}",
-            dir.value()
-        );
-        assert!(
-            (dir.z - 0.902).abs() < 0.02,
-            "expected swapped-Z ≈ +0.902, got {:?}",
-            dir.value()
-        );
-
-        assert!((system.distance_between("Earth", "Sun").unwrap() - AU).abs() < 0.02 * AU);
-
-        assert!((dir.value().norm() - 1.0).abs() < 1e-9);
+impl StarSystemBuilder {
+    /// Attach a JPL ephemeris service for major-body states.
+    pub fn with_ephemeris(mut self, ephemeris: EphemerisService) -> Self {
+        self.ephemeris = Some(ephemeris);
+        self
     }
 
-    #[test]
-    fn six_months_later_sun_is_opposite() {
-        let j2000 = Epoch::from_jde_in_time_scale(2451545.0, TimeScale::TT);
-        let later = j2000 + 180.0 * Unit::Day;
-        let system_later = StarSystem::at_epoch(later);
-        let system_j2000 = StarSystem::at_epoch(j2000);
-
-        let a = system_j2000.direction_between("Earth", "Sun").unwrap();
-        let b = system_later.direction_between("Earth", "Sun").unwrap();
-        let dot = a.value().dot(b.value());
-        assert!(
-            dot < -0.95,
-            "expected Sun direction to flip ~180°, dot={}",
-            dot
-        );
+    /// Build the live star system at the given epoch.
+    pub fn build(self) -> ApogeeResult<StarSystem> {
+        StarSystem::new(
+            self.definition,
+            self.ephemeris,
+            Epoch::from_gregorian_utc_at_midnight(2000, 1, 1),
+        )
     }
 
-    #[test]
-    fn celestial_body_velocity_and_acceleration_to() {
-        let epoch = Epoch::from_jde_in_time_scale(2451545.0, TimeScale::TT);
-        let system = StarSystem::at_epoch(epoch);
-        let earth = system.body("Earth").unwrap();
-        let sun = system.body("Sun").unwrap();
-
-        // Relative velocity of Sun wrt Earth (both ~zero at J2000 in this model)
-        let rel_vel = earth.velocity_to(&sun.velocity);
-        assert_relative_eq!(rel_vel.vector.norm(), 0.0);
-
-        // Relative acceleration
-        let rel_acc = earth.acceleration_to(&sun.acceleration);
-        assert_relative_eq!(rel_acc.vector.norm(), 0.0);
-    }
-
-    #[test]
-    fn celestial_body_angular_velocity_is_set() {
-        let epoch = Epoch::from_jde_in_time_scale(2451545.0, TimeScale::TT);
-        let system = StarSystem::at_epoch(epoch);
-        let earth = system.body("Earth").unwrap();
-        // Angular velocity direction should be the pole (not zero)
-        assert!(earth.angular_velocity.vector.norm() > 0.0);
-        // Rotation angle should be wrapped
-        assert!(earth.rotation_angle.value >= 0.0);
-    }
-
-    #[test]
-    fn time_accessors_are_consistent_with_epoch() {
-        let epoch = Epoch::from_jde_in_time_scale(2451545.0, TimeScale::TT);
-        let system = StarSystem::at_epoch(epoch);
-
-        // J2000: days_since_j2000 should be ~0, julian_day should be 2451545.0
-        assert!((system.days_since_j2000()).abs() < 1e-9);
-        assert!((system.julian_day() - 2451545.0).abs() < 1e-9);
-
-        // Six months later: days_since_j2000 should be ~180
-        let later = epoch + 180.0 * Unit::Day;
-        let system_later = StarSystem::at_epoch(later);
-        assert!((system_later.days_since_j2000() - 180.0).abs() < 1e-6);
-        assert!((system_later.julian_day() - (2451545.0 + 180.0)).abs() < 1e-6);
+    /// Build at a specific epoch.
+    pub fn build_at(self, epoch: Epoch) -> ApogeeResult<StarSystem> {
+        StarSystem::new(self.definition, self.ephemeris, epoch)
     }
 }
