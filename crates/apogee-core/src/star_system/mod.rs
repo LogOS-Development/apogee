@@ -176,7 +176,9 @@ impl StarSystem {
             if !body.role.is_kinematic() {
                 continue;
             }
-            let state = ephemeris.state_at(naif_id, epoch)?;
+            // SSB-relative states: composes the center chain so mixed
+            // kernels (Earth/Moon relative to EMB) resolve to one frame.
+            let state = ephemeris.state_at_ssb(naif_id, epoch)?;
             updates.push((naif_id, state.position, state.velocity));
         }
 
