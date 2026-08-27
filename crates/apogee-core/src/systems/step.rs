@@ -730,14 +730,15 @@ mod tests {
             Vector3::zeros(),
         ));
 
-        // Step the world — the ephemeris update should move Mars to (1e7, 2e7, 3e7).
+        // Step the world — the ephemeris update should move Mars to
+        // (1e7, 2e7, 3e7) km in SPK units = (1e10, 2e10, 3e10) m.
         step_world(&mut world, Seconds::new(60.0));
 
         let mars = world.find_celestial(499).unwrap();
         let kin = world.get_component::<Kinematics>(mars).unwrap();
-        assert_relative_eq!(kin.position.x, 1e7, epsilon = 1e-3);
-        assert_relative_eq!(kin.position.y, 2e7, epsilon = 1e-3);
-        assert_relative_eq!(kin.position.z, 3e7, epsilon = 1e-3);
+        assert_relative_eq!(kin.position.x, 1e10, epsilon = 1e-3);
+        assert_relative_eq!(kin.position.y, 2e10, epsilon = 1e-3);
+        assert_relative_eq!(kin.position.z, 3e10, epsilon = 1e-3);
     }
 
     #[test]

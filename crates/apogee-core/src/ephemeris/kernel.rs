@@ -224,6 +224,14 @@ impl Kernel {
                 segment.spk_type
             ))),
         }?;
+        // SPK data records are stored in km and km/s regardless of segment
+        // type; the rest of the crate is SI (m, m/s). Convert once, here,
+        // so every evaluator type returns SI units. (Type 13 previously
+        // converted internally — that conversion now happens here; the
+        // duplicate was removed from the evaluator.)
+        const KM_TO_M: f64 = 1_000.0;
+        state.position *= KM_TO_M;
+        state.velocity *= KM_TO_M;
         state.naif_id = body;
         Ok(state)
     }
@@ -515,13 +523,10 @@ fn state_at_type13(
         (p0 + (p1 - p0) * s, v0 + (v1 - v0) * s)
     };
 
-    // SPK data records use km and km/s; the rest of the crate uses SI (m, m/s).
-    const KM_TO_M: f64 = 1_000.0;
-
     Ok(BodyState {
         naif_id: body,
-        position: position * KM_TO_M,
-        velocity: velocity * KM_TO_M,
+        position,
+        velocity,
     })
 }
 
@@ -1255,17 +1260,18 @@ pub mod tests {
         let kernel = Kernel::from_bytes(&fixture).unwrap();
         let state = kernel.state_at(499, 43200.0).unwrap();
 
-        assert_relative_eq!(state.position.x, 1.0, epsilon = 1e-9);
-        assert_relative_eq!(state.position.y, 2.0, epsilon = 1e-9);
-        assert_relative_eq!(state.position.z, 3.0, epsilon = 1e-9);
-        assert_relative_eq!(state.velocity.x, 0.0, epsilon = 1e-9);
-        assert_relative_eq!(state.velocity.y, 0.0, epsilon = 1e-9);
-        assert_relative_eq!(state.velocity.z, 0.0, epsilon = 1e-9);
+        // Fixture positions are in km (SPK units); state_at returns SI meters.
+        assert_relative_eq!(state.position.x, 1_000.0, epsilon = 1e-6);
+        assert_relative_eq!(state.position.y, 2_000.0, epsilon = 1e-6);
+        assert_relative_eq!(state.position.z, 3_000.0, epsilon = 1e-6);
+        assert_relative_eq!(state.velocity.x, 0.0, epsilon = 1e-6);
+        assert_relative_eq!(state.velocity.y, 0.0, epsilon = 1e-6);
+        assert_relative_eq!(state.velocity.z, 0.0, epsilon = 1e-6);
     }
 
     #[test]
     fn test_state_at_linear_trajectory() {
-        // Position p(t) = [t, 2t, 3t] over one day.
+        // Position p(t) = [t, 2t, 3t] km over one day.
         let start = 0.0;
         let end = 86400.0;
         let mid = (start + end) * 0.5;
@@ -1281,12 +1287,13 @@ pub mod tests {
         let kernel = Kernel::from_bytes(&fixture).unwrap();
         let state = kernel.state_at(499, mid).unwrap();
 
-        assert_relative_eq!(state.position.x, mid, epsilon = 1e-3);
-        assert_relative_eq!(state.position.y, 2.0 * mid, epsilon = 1e-3);
-        assert_relative_eq!(state.position.z, 3.0 * mid, epsilon = 1e-3);
-        assert_relative_eq!(state.velocity.x, 1.0, epsilon = 1e-6);
-        assert_relative_eq!(state.velocity.y, 2.0, epsilon = 1e-6);
-        assert_relative_eq!(state.velocity.z, 3.0, epsilon = 1e-6);
+        // Fixture in km; returned state in m.
+        assert_relative_eq!(state.position.x, mid * 1_000.0, epsilon = 1e-3);
+        assert_relative_eq!(state.position.y, 2.0 * mid * 1_000.0, epsilon = 1e-3);
+        assert_relative_eq!(state.position.z, 3.0 * mid * 1_000.0, epsilon = 1e-3);
+        assert_relative_eq!(state.velocity.x, 1_000.0, epsilon = 1e-3);
+        assert_relative_eq!(state.velocity.y, 2_000.0, epsilon = 1e-3);
+        assert_relative_eq!(state.velocity.z, 3_000.0, epsilon = 1e-3);
     }
 
     #[test]
@@ -1298,17 +1305,18 @@ pub mod tests {
         let kernel = Kernel::from_bytes(&fixture).unwrap();
         let state = kernel.state_at(499, 43200.0).unwrap();
 
-        assert_relative_eq!(state.position.x, 1.0, epsilon = 1e-9);
-        assert_relative_eq!(state.position.y, 2.0, epsilon = 1e-9);
-        assert_relative_eq!(state.position.z, 3.0, epsilon = 1e-9);
-        assert_relative_eq!(state.velocity.x, 0.0, epsilon = 1e-9);
-        assert_relative_eq!(state.velocity.y, 0.0, epsilon = 1e-9);
-        assert_relative_eq!(state.velocity.z, 0.0, epsilon = 1e-9);
+        // Fixture positions are in km (SPK units); state_at returns SI meters.
+        assert_relative_eq!(state.position.x, 1_000.0, epsilon = 1e-6);
+        assert_relative_eq!(state.position.y, 2_000.0, epsilon = 1e-6);
+        assert_relative_eq!(state.position.z, 3_000.0, epsilon = 1e-6);
+        assert_relative_eq!(state.velocity.x, 0.0, epsilon = 1e-6);
+        assert_relative_eq!(state.velocity.y, 0.0, epsilon = 1e-6);
+        assert_relative_eq!(state.velocity.z, 0.0, epsilon = 1e-6);
     }
 
     #[test]
     fn test_state_at_type2_linear_trajectory() {
-        // Position p(t) = [t, 2t, 3t] over one day.
+        // Position p(t) = [t, 2t, 3t] km over one day.
         let start = 0.0;
         let end = 86400.0;
         let mid = (start + end) * 0.5;
@@ -1317,12 +1325,13 @@ pub mod tests {
         let kernel = Kernel::from_bytes(&fixture).unwrap();
         let state = kernel.state_at(499, mid).unwrap();
 
-        assert_relative_eq!(state.position.x, mid, epsilon = 1e-3);
-        assert_relative_eq!(state.position.y, 2.0 * mid, epsilon = 1e-3);
-        assert_relative_eq!(state.position.z, 3.0 * mid, epsilon = 1e-3);
-        assert_relative_eq!(state.velocity.x, 1.0, epsilon = 1e-6);
-        assert_relative_eq!(state.velocity.y, 2.0, epsilon = 1e-6);
-        assert_relative_eq!(state.velocity.z, 3.0, epsilon = 1e-6);
+        // Fixture in km; returned state in m.
+        assert_relative_eq!(state.position.x, mid * 1_000.0, epsilon = 1e-3);
+        assert_relative_eq!(state.position.y, 2.0 * mid * 1_000.0, epsilon = 1e-3);
+        assert_relative_eq!(state.position.z, 3.0 * mid * 1_000.0, epsilon = 1e-3);
+        assert_relative_eq!(state.velocity.x, 1_000.0, epsilon = 1e-3);
+        assert_relative_eq!(state.velocity.y, 2_000.0, epsilon = 1e-3);
+        assert_relative_eq!(state.velocity.z, 3_000.0, epsilon = 1e-3);
     }
 
     #[test]
