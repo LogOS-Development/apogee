@@ -23,13 +23,12 @@
 //! segments in DE441, so no frame or center composition is needed —
 //! integrated SSB positions compare directly against kernel SSB positions.
 //!
-//! Expected accuracy: RK4 fixed-step with first-order inter-body coupling
-//! (each body integrates against a frozen snapshot of the others — see
-//! issue for joint-integration refactor). Observed at 0.5-day steps over
-//! 1 year: ~15,000 km max error (Mercury-dominated, growing ~linearly in
-//! step size and ~quadratically in time). The budget below is set to
-//! catch systematic errors — missing forces, wrong GM, unit or frame
-//! mismatches — which manifest at 1e6+ km, three orders above budget.
+//! Expected accuracy: joint RK4 integration (all dynamic bodies in one
+//! pass, forces recomputed at every substage — issue #189 fixed). At
+//! 0.5-day steps over 1 year with all 11 bodies: max error 1,502 km
+//! (Moon-dominated RK4 truncation on its 27-day orbit). Energy conserved
+//! to 2.6e-10. Halving the step shrinks the Moon error ~26× (fourth-order
+//! convergence, verified by `nbody_step_size_convergence`).
 
 use crate::ephemeris::EphemerisService;
 use crate::systems::step::step_world;
@@ -39,31 +38,45 @@ use hifitime::Epoch;
 
 /// Bodies under test: (NAIF ID, display name).
 ///
-/// Includes the giant planets: Jupiter and Saturn perturb the inner system
-/// at the ~1e5 km/year level; omitting them dominates the error budget.
+/// All 11 major bodies of the solar system, integrated as a true n-body
+/// system: the Earth-Moon barycenter motion EMERGES from Earth and Moon
+/// mutual gravity rather than being imposed. Jupiter and Saturn are
+/// included — their perturbations on the inner system are ~1e5 km/year.
 const BODIES: &[(i32, &str)] = &[
     (10, "Sun"),
     (1, "Mercury barycenter"),
     (2, "Venus barycenter"),
-    (3, "Earth-Moon barycenter"),
+    // EMB (3) is deliberately absent: Earth (399) and Moon (301) are
+    // integrated individually, so their barycenter motion emerges from
+    // the dynamics. Including all three would double-count the mass.
     (4, "Mars barycenter"),
     (5, "Jupiter barycenter"),
     (6, "Saturn barycenter"),
+    (7, "Uranus barycenter"),
+    (8, "Neptune barycenter"),
+    (9, "Pluto barycenter"),
+    (399, "Earth"),
+    (301, "Moon"),
 ];
 
 /// GM values for the bodies (m³/s²), DE441-consistent.
 ///
-/// For barycenters the GM is the total of the system (e.g. EMB = Earth +
-/// Moon), matching how DE441 integrates them.
+/// For barycenters the GM is the total of the system (e.g. Jupiter system
+/// = planet + moons), matching how DE441 integrates them. Earth and Moon
+/// carry their individual GMs.
 #[allow(clippy::excessive_precision)] // GM values quoted from DE441 documentation
 const GM: &[(i32, f64)] = &[
     (10, 1.32712440041279419e20),
     (1, 2.203186e13),
     (2, 3.2485859200000005e14),
-    (3, 4.035032326940000e14), // Earth + Moon
     (4, 4.282837581600000e13),
     (5, 1.267127648000002e17), // Jupiter system
     (6, 3.793118700000000e16), // Saturn system
+    (7, 5.793951322000000e15), // Uranus system
+    (8, 6.836527100580000e15), // Neptune system
+    (9, 9.755000000000000e11), // Pluto system
+    (399, 3.986004354360000e14),
+    (301, 4.902800066000000e12),
 ];
 
 fn de441_path() -> Option<std::path::PathBuf> {
@@ -77,7 +90,7 @@ fn de441_path() -> Option<std::path::PathBuf> {
 fn build_nbody_world(ephemeris: &mut EphemerisService, epoch: Epoch) -> World {
     let mut world = World::new();
     for &(naif_id, _) in BODIES {
-        let state = ephemeris.state_at(naif_id, epoch).unwrap();
+        let state = ephemeris.state_at_ssb(naif_id, epoch).unwrap();
         let gm = GM
             .iter()
             .find(|(id, _)| *id == naif_id)
@@ -132,7 +145,7 @@ fn inner_solar_system_nbody_vs_de441() {
             let epoch = epoch0 + elapsed * hifitime::Unit::Second;
             let mut max_err_km: f64 = 0.0;
             for &(naif_id, name) in BODIES {
-                let truth = ephemeris.state_at(naif_id, epoch).unwrap();
+                let truth = ephemeris.state_at_ssb(naif_id, epoch).unwrap();
                 let entity = world.find_celestial(naif_id).unwrap();
                 let kin = world
                     .get_component::<crate::components::kinematics::Kinematics>(entity)
@@ -153,12 +166,12 @@ fn inner_solar_system_nbody_vs_de441() {
         eprintln!("  {name} @ {days} days: {err_km:.1} km");
     }
 
-    // Error budget: catches systematic errors (wrong GM, unit/frame
-    // mismatches, missing forces) which appear at 1e6+ km. Truncation +
-    // first-order coupling residual at 0.5-day steps is ~1.5e4 km.
+    // Error budget: observed max 1,502.7 km (Moon truncation) at 0.5-day
+    // steps. Systematic errors (wrong GM, unit/frame mismatches, missing
+    // forces) appear at 1e5+ km — two orders above budget.
     assert!(
-        results.iter().all(|&(_, _, e)| e < 100_000.0),
-        "position errors exceeded 100,000 km budget"
+        results.iter().all(|&(_, _, e)| e < 10_000.0),
+        "position errors exceeded 10,000 km budget"
     );
 }
 
@@ -213,16 +226,58 @@ fn inner_solar_system_energy_conservation() {
     let drift = ((e1 - e0) / e0).abs();
     eprintln!("energy drift over 1 year: {drift:.3e}");
 
-    // RK4 is not symplectic; expect small but non-zero drift. 730 half-day
-    // steps of the seven-body system gives ~5e-6 observed; budget 1e-5.
-    assert!(drift < 1e-5, "energy drift too large: {drift:.3e}");
+    // Joint RK4: observed drift 2.6e-10 over a year of half-day steps.
+    assert!(drift < 1e-8, "energy drift too large: {drift:.3e}");
 }
 
-/// Step-size convergence canary: currently the inter-body coupling is
-/// first-order (each body integrates against a frozen snapshot of the
-/// others), so halving the step halves the error. When the integrator is
-/// refactored to joint integration, this ratio should jump to ~16 (RK4
-/// fourth order) — and this test's expectation should be tightened.
+/// Earth-Moon center-chain composition against known geometry.
+///
+/// Verifies `state_at_ssb` composes the DE441 chain (Earth/Moon → EMB →
+/// SSB) correctly: the composed Earth and Moon SSB positions must satisfy
+/// the mass-weighted barycenter relation
+///   (GM_E·r_E + GM_M·r_M) / (GM_E + GM_M) = r_EMB
+/// to within kernel interpolation accuracy.
+#[test]
+#[ignore = "requires local 3.3 GB DE441 kernel (data/ephemeris/de441.bsp)"]
+fn earth_moon_ssb_composition_matches_barycenter() {
+    let Some(path) = de441_path() else {
+        eprintln!("skipping: DE441 kernel not present");
+        return;
+    };
+    let mut ephemeris = EphemerisService::load(path.to_str().unwrap(), 64).unwrap();
+    let epoch = Epoch::from_gregorian(2025, 6, 1, 0, 0, 0, 0, hifitime::TimeScale::TDB);
+
+    let earth = ephemeris.state_at_ssb(399, epoch).unwrap();
+    let moon = ephemeris.state_at_ssb(301, epoch).unwrap();
+    let emb = ephemeris.state_at_ssb(3, epoch).unwrap();
+
+    let gm_e = GM.iter().find(|(id, _)| *id == 399).unwrap().1;
+    let gm_m = GM.iter().find(|(id, _)| *id == 301).unwrap().1;
+    let total = gm_e + gm_m;
+    let barycenter = (earth.position * gm_e + moon.position * gm_m) / total;
+
+    let err_km = (barycenter - emb.position).norm() / 1_000.0;
+    eprintln!("EMB composition error: {err_km:.6} km");
+    // Earth-Moon separation is 384,400 km; the barycenter sits ~4,670 km
+    // from Earth's center. Kernel interpolation error is sub-meter, so
+    // the composition must agree to millimeters — allow generous margin.
+    assert!(
+        err_km < 0.001,
+        "EMB composition error {err_km} km exceeds 1 m"
+    );
+
+    // Sanity: the Moon's SSB position is ~1 AU from the Sun, not 384,400 km.
+    let moon_dist_au = moon.position.norm() / 1.495978707e11;
+    assert!(
+        (moon_dist_au - 1.0).abs() < 0.02,
+        "Moon SSB distance {moon_dist_au} AU"
+    );
+}
+
+/// Step-size convergence test: with joint integration (#189 fixed), the
+/// error must converge at fourth order or better — halving the step
+/// should shrink the Moon's 30-day error by ≥16×. (Measured: 26× — the
+/// residual is clean RK4 truncation, not coupling error.)
 #[test]
 #[ignore = "requires local 3.3 GB DE441 kernel (data/ephemeris/de441.bsp)"]
 fn nbody_step_size_convergence() {
@@ -234,31 +289,31 @@ fn nbody_step_size_convergence() {
     let epoch0 = Epoch::from_gregorian(2025, 1, 1, 0, 0, 0, 0, hifitime::TimeScale::TDB);
     let day = 86_400.0;
 
-    // Mercury position error at 30 days for two step sizes.
-    let mut mercury_err = |step: f64| -> f64 {
+    // Moon position error at 30 days for two step sizes — the Moon is the
+    // most coupling-sensitive body (27-day binary with Earth).
+    let mut moon_err = |step: f64| -> f64 {
         let mut world = build_nbody_world(&mut ephemeris, epoch0);
         for _ in 0..(30.0 * day / step) as usize {
             step_world(&mut world, Seconds::new(step));
         }
         let epoch = epoch0 + 30.0 * day * hifitime::Unit::Second;
-        let truth = ephemeris.state_at(1, epoch).unwrap();
-        let entity = world.find_celestial(1).unwrap();
+        let truth = ephemeris.state_at_ssb(301, epoch).unwrap();
+        let entity = world.find_celestial(301).unwrap();
         let kin = world
             .get_component::<crate::components::kinematics::Kinematics>(entity)
             .unwrap();
         (kin.position - truth.position).norm() / 1_000.0
     };
 
-    let e_coarse = mercury_err(day);
-    let e_fine = mercury_err(day / 2.0);
+    let e_coarse = moon_err(day);
+    let e_fine = moon_err(day / 2.0);
     let ratio = e_coarse / e_fine;
-    eprintln!("30-day Mercury error: {e_coarse:.1} km -> {e_fine:.1} km (ratio {ratio:.2})");
+    eprintln!("30-day Moon error: {e_coarse:.1} km -> {e_fine:.1} km (ratio {ratio:.2})");
 
-    // First-order coupling dominates: ratio ≈ 2. Accept 1.5–3.0; a jump
-    // toward 16 means the coupling was fixed and this expectation (and
-    // the error budgets above) should be tightened.
+    // Fourth-order convergence or better: ratio ≥ 16. A ratio near 2 means
+    // the inter-body coupling regressed to first-order (frozen snapshot).
     assert!(
-        (1.5..3.0).contains(&ratio),
-        "convergence ratio changed to {ratio:.2} — if ~16, inter-body coupling was fixed; tighten budgets"
+        ratio >= 16.0,
+        "convergence ratio {ratio:.2} < 16 — inter-body coupling regressed to first-order"
     );
 }
