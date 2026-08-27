@@ -136,9 +136,10 @@ mod tests {
         let epoch = Epoch::from_et_seconds(43200.0);
         let state = service.state_at(499, epoch).unwrap();
 
-        assert_relative_eq!(state.position.x, 1.0, epsilon = 1e-9);
-        assert_relative_eq!(state.position.y, 2.0, epsilon = 1e-9);
-        assert_relative_eq!(state.position.z, 3.0, epsilon = 1e-9);
+        // Fixture positions are km (SPK units); the service returns SI meters.
+        assert_relative_eq!(state.position.x, 1_000.0, epsilon = 1e-6);
+        assert_relative_eq!(state.position.y, 2_000.0, epsilon = 1e-6);
+        assert_relative_eq!(state.position.z, 3_000.0, epsilon = 1e-6);
     }
 
     #[test]
@@ -164,7 +165,7 @@ mod tests {
         let solar = service.all_states_at(epoch).unwrap();
 
         assert_eq!(solar.states.len(), 1);
-        assert_relative_eq!(solar.states[0].position.x, 1.0, epsilon = 1e-9);
+        assert_relative_eq!(solar.states[0].position.x, 1_000.0, epsilon = 1e-6);
     }
 
     #[test]
