@@ -11,6 +11,26 @@ env:
   RUSTFLAGS: "-D warnings"
 
 jobs:
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout metron (path dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: LogOS-Development/metron
+          path: metron
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: Audit dependencies (RustSec advisories)
+        run: cargo audit
+
   test:
     name: Test & Lint
     runs-on: ubuntu-latest

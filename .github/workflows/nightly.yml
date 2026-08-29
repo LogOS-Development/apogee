@@ -12,6 +12,30 @@ env:
   RUSTFLAGS: "-D warnings"
 
 jobs:
+  # Daily RustSec advisory scan. The PR-time audit in ci.yml only catches
+  # advisories known at merge time; this catches new advisories published
+  # against versions we already locked (e.g. the 2026-08 arrayref /
+  # append-only-vec / internment supply-chain poisoning).
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout metron (path dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: LogOS-Development/metron
+          path: metron
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: Audit dependencies (RustSec advisories)
+        run: cargo audit
+
   # Fast tests: everything including ignored tests, except the heavy
   # kernel tests that previously required the 3.3 GB DE441 kernel.
   # The DE441 probe tests have been replaced with synthetic Type 3
