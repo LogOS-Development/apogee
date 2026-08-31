@@ -29,10 +29,15 @@ urlencoding = "2.1"
 [features]
 default = []
 hwm14 = []
+wrf = []
 
 [[example]]
 name = "hwm14_samples"
 required-features = ["hwm14"]
+
+[[example]]
+name = "wrf_kessler_samples"
+required-features = ["wrf"]
 
 [dev-dependencies]
 approx = "0.5"
