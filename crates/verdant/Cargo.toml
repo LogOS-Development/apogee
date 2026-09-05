@@ -1,0 +1,24 @@
+[package]
+name = "verdant"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+apogee-common = { workspace = true }
+apogee-core = { workspace = true }
+metron = { workspace = true }
+nalgebra = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+rayon = { workspace = true }
+# GeoTIFF terrain ingestion (pure Rust, no GDAL)
+tiff = "0.9"
+# Geotransform parsing from GeoTIFF tags
+
+[dev-dependencies]
+approx = "0.5"
+tempfile = "3.0"

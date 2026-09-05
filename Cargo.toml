@@ -11,6 +11,7 @@ members = [
     "crates/apogee-tactical",
     "crates/apogee-discovery",
     "crates/apogee-llm",
+    "crates/verdant",
 ]
 
 [workspace.package]
