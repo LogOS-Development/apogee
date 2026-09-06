@@ -1,0 +1,2 @@
+# WRF vendored source (375MB, fetched via scripts/fetch_wrf.sh)
+crates/apogee-core/external/wrf/vendor/
