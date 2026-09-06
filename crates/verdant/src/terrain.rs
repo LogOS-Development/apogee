@@ -419,7 +419,7 @@ mod tests {
             pixel_height: -10.0,
         };
         let elevations: Vec<f32> = (0..5)
-            .flat_map(|row| (0..5).map(move |col| (col * 10) as f32))
+            .flat_map(|_row| (0..5).map(|col| (col * 10) as f32))
             .collect();
         let grid = ElevationGrid::new(5, 5, gt, elevations).unwrap();
 
@@ -490,5 +490,49 @@ mod tests {
         };
         let result = ElevationGrid::new(3, 2, gt, vec![1.0, 2.0, 3.0]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_geotiff_roundtrip() {
+        use tiff::encoder::{colortype::Gray32Float, TiffEncoder};
+
+        // 4x3 grid with a simple ramp: z = col + row * 10
+        let width = 4usize;
+        let height = 3usize;
+        let elevations: Vec<f32> = (0..height)
+            .flat_map(|row| (0..width).map(move |col| (col + row * 10) as f32))
+            .collect();
+
+        // Write a plain TIFF (no GeoTIFF tags — tests fallback geotransform)
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut encoder = TiffEncoder::new(&mut buf).unwrap();
+            encoder
+                .write_image::<Gray32Float>(width as u32, height as u32, &elevations)
+                .unwrap();
+        }
+
+        // Read it back
+        let bytes = buf.into_inner();
+        let grid = ElevationGrid::from_geotiff_bytes(&bytes).unwrap();
+
+        assert_eq!(grid.width, width);
+        assert_eq!(grid.height, height);
+
+        // Fallback geotransform: 1m pixels, origin at (0, height)
+        assert!((grid.geotransform.pixel_width - 1.0).abs() < 0.01);
+        assert!((grid.geotransform.pixel_height - (-1.0)).abs() < 0.01);
+
+        // Check elevation values survived the round-trip
+        for row in 0..height {
+            for col in 0..width {
+                let expected = (col + row * 10) as f32;
+                let actual = grid.at(col, row);
+                assert!(
+                    (actual - expected).abs() < 0.001,
+                    "at ({col},{row}): expected {expected}, got {actual}"
+                );
+            }
+        }
     }
 }
