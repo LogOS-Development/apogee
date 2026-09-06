@@ -203,6 +203,44 @@ impl Kernel {
             .find(|s| s.target_id == target_id && s.start_et <= epoch_et && epoch_et <= s.end_et)
     }
 
+    /// Evaluate the state of `body` relative to the solar system barycenter
+    /// (NAIF 0) at `epoch_et`.
+    ///
+    /// SPK segments store states relative to their center body (e.g. Earth
+    /// relative to the Earth-Moon barycenter, which is itself relative to
+    /// the SSB). This walks the center chain — target → center → center's
+    /// center → … — summing relative states until it reaches center 0.
+    /// Depth is bounded by `max_depth` to catch cyclic kernels.
+    pub fn state_at_ssb(&self, body: NaifId, epoch_et: f64) -> ApogeeResult<BodyState> {
+        let mut position = nalgebra::Vector3::zeros();
+        let mut velocity = nalgebra::Vector3::zeros();
+        let mut current = body;
+
+        const MAX_DEPTH: usize = 8;
+        for _ in 0..=MAX_DEPTH {
+            let segment = self.find_segment(current, epoch_et).ok_or_else(|| {
+                ApogeeError::Ephemeris(format!(
+                    "no SPK segment covers body {current} at epoch {epoch_et} (center chain walk)"
+                ))
+            })?;
+            let state = self.state_at(current, epoch_et)?;
+            position += state.position;
+            velocity += state.velocity;
+
+            if segment.center_id == 0 {
+                return Ok(BodyState {
+                    naif_id: body,
+                    position,
+                    velocity,
+                });
+            }
+            current = segment.center_id;
+        }
+        Err(ApogeeError::Ephemeris(format!(
+            "center chain from body {body} exceeds {MAX_DEPTH} levels — cyclic or malformed kernel"
+        )))
+    }
+
     /// Evaluate position and velocity for `body` at `epoch_et`.
     ///
     /// `epoch_et` is seconds past J2000 TDB. This implementation supports
@@ -224,6 +262,14 @@ impl Kernel {
                 segment.spk_type
             ))),
         }?;
+        // SPK data records are stored in km and km/s regardless of segment
+        // type; the rest of the crate is SI (m, m/s). Convert once, here,
+        // so every evaluator type returns SI units. (Type 13 previously
+        // converted internally — that conversion now happens here; the
+        // duplicate was removed from the evaluator.)
+        const KM_TO_M: f64 = 1_000.0;
+        state.position *= KM_TO_M;
+        state.velocity *= KM_TO_M;
         state.naif_id = body;
         Ok(state)
     }
@@ -515,13 +561,10 @@ fn state_at_type13(
         (p0 + (p1 - p0) * s, v0 + (v1 - v0) * s)
     };
 
-    // SPK data records use km and km/s; the rest of the crate uses SI (m, m/s).
-    const KM_TO_M: f64 = 1_000.0;
-
     Ok(BodyState {
         naif_id: body,
-        position: position * KM_TO_M,
-        velocity: velocity * KM_TO_M,
+        position,
+        velocity,
     })
 }
 
@@ -884,9 +927,37 @@ pub mod tests {
     ///
     /// The fixture uses one DAF record per data record (RSIZE = number of
     /// doubles that fits in a DAF record after the mid/radius header). A
-    /// directory is appended at the end of the segment data.
+    /// directory is appended at the end of the segment data. The segment
+    /// is centered on the solar system barycenter (center 0) so
+    /// `state_at_ssb` terminates immediately.
     pub fn build_type3_fixture<F, G>(
         target_id: i32,
+        start_et: f64,
+        end_et: f64,
+        record_count: i32,
+        position_fn: F,
+        velocity_fn: G,
+    ) -> Vec<u8>
+    where
+        F: FnMut(f64) -> [f64; 3],
+        G: FnMut(f64) -> [f64; 3],
+    {
+        build_type3_fixture_centered(
+            target_id,
+            0,
+            start_et,
+            end_et,
+            record_count,
+            position_fn,
+            velocity_fn,
+        )
+    }
+
+    /// [`build_type3_fixture`] with an explicit center body (NAIF ID).
+    /// Use a non-zero center to exercise the `state_at_ssb` chain walk.
+    pub fn build_type3_fixture_centered<F, G>(
+        target_id: i32,
+        center_id: i32,
         start_et: f64,
         end_et: f64,
         record_count: i32,
@@ -919,7 +990,7 @@ pub mod tests {
         bytes[data_offset..data_offset + 8].copy_from_slice(&start_et.to_le_bytes());
         bytes[data_offset + 8..data_offset + 16].copy_from_slice(&end_et.to_le_bytes());
         bytes[data_offset + 16..data_offset + 20].copy_from_slice(&target_id.to_le_bytes());
-        bytes[data_offset + 20..data_offset + 24].copy_from_slice(&1i32.to_le_bytes());
+        bytes[data_offset + 20..data_offset + 24].copy_from_slice(&center_id.to_le_bytes());
         bytes[data_offset + 24..data_offset + 28].copy_from_slice(&1i32.to_le_bytes());
         bytes[data_offset + 28..data_offset + 32].copy_from_slice(&3i32.to_le_bytes());
 
@@ -1051,7 +1122,7 @@ pub mod tests {
         bytes[data_offset..data_offset + 8].copy_from_slice(&start_et.to_le_bytes());
         bytes[data_offset + 8..data_offset + 16].copy_from_slice(&end_et.to_le_bytes());
         bytes[data_offset + 16..data_offset + 20].copy_from_slice(&target_id.to_le_bytes());
-        bytes[data_offset + 20..data_offset + 24].copy_from_slice(&1i32.to_le_bytes());
+        bytes[data_offset + 20..data_offset + 24].copy_from_slice(&0i32.to_le_bytes());
         bytes[data_offset + 24..data_offset + 28].copy_from_slice(&1i32.to_le_bytes());
         bytes[data_offset + 28..data_offset + 32].copy_from_slice(&2i32.to_le_bytes());
 
@@ -1226,7 +1297,7 @@ pub mod tests {
         bytes[data_offset..data_offset + 8].copy_from_slice(&100.0f64.to_le_bytes());
         bytes[data_offset + 8..data_offset + 16].copy_from_slice(&200.0f64.to_le_bytes());
         bytes[data_offset + 16..data_offset + 20].copy_from_slice(&4i32.to_le_bytes()); // Mars barycenter
-        bytes[data_offset + 20..data_offset + 24].copy_from_slice(&1i32.to_le_bytes()); // center
+        bytes[data_offset + 20..data_offset + 24].copy_from_slice(&0i32.to_le_bytes()); // center
         bytes[data_offset + 24..data_offset + 28].copy_from_slice(&1i32.to_le_bytes());
         bytes[data_offset + 28..data_offset + 32].copy_from_slice(&3i32.to_le_bytes());
         // Word address 257 corresponds to byte 2048 (record 3).
@@ -1237,6 +1308,40 @@ pub mod tests {
         assert!(kernel.find_segment(4, 150.0).is_some());
         assert!(kernel.find_segment(4, 50.0).is_none());
         assert!(kernel.find_segment(5, 150.0).is_none());
+    }
+
+    #[test]
+    fn test_state_at_ssb_requires_center_segment() {
+        // A segment for 301 centered on 3, but no segment for 3 itself:
+        // the chain walk must fail with a clear error rather than silently
+        // returning the relative state. The full two-level chain
+        // (Earth/Moon → EMB → SSB) is validated against real DE441 in
+        // tests/ephemeris/nbody_validation.rs.
+        let bytes = build_type3_fixture_centered(
+            301,
+            3,
+            0.0,
+            86400.0,
+            1,
+            |_| [1.0e5, 2.0e5, 3.0e5],
+            |_| [1.0, 2.0, 3.0],
+        );
+        let kernel = Kernel::from_bytes(&bytes).unwrap();
+
+        // The raw relative state still evaluates normally.
+        let rel = kernel.state_at(301, 43200.0).unwrap();
+        assert_relative_eq!(rel.position.x, 1.0e8, epsilon = 1.0); // 1e5 km in m
+
+        // The SSB walk fails: center body 3 has no segment.
+        let err = kernel.state_at_ssb(301, 43200.0);
+        assert!(
+            err.is_err(),
+            "chain walk must fail when the center body has no segment"
+        );
+        assert!(err
+            .unwrap_err()
+            .to_string()
+            .contains("no SPK segment covers body 3"));
     }
 
     #[test]
@@ -1255,17 +1360,18 @@ pub mod tests {
         let kernel = Kernel::from_bytes(&fixture).unwrap();
         let state = kernel.state_at(499, 43200.0).unwrap();
 
-        assert_relative_eq!(state.position.x, 1.0, epsilon = 1e-9);
-        assert_relative_eq!(state.position.y, 2.0, epsilon = 1e-9);
-        assert_relative_eq!(state.position.z, 3.0, epsilon = 1e-9);
-        assert_relative_eq!(state.velocity.x, 0.0, epsilon = 1e-9);
-        assert_relative_eq!(state.velocity.y, 0.0, epsilon = 1e-9);
-        assert_relative_eq!(state.velocity.z, 0.0, epsilon = 1e-9);
+        // Fixture positions are in km (SPK units); state_at returns SI meters.
+        assert_relative_eq!(state.position.x, 1_000.0, epsilon = 1e-6);
+        assert_relative_eq!(state.position.y, 2_000.0, epsilon = 1e-6);
+        assert_relative_eq!(state.position.z, 3_000.0, epsilon = 1e-6);
+        assert_relative_eq!(state.velocity.x, 0.0, epsilon = 1e-6);
+        assert_relative_eq!(state.velocity.y, 0.0, epsilon = 1e-6);
+        assert_relative_eq!(state.velocity.z, 0.0, epsilon = 1e-6);
     }
 
     #[test]
     fn test_state_at_linear_trajectory() {
-        // Position p(t) = [t, 2t, 3t] over one day.
+        // Position p(t) = [t, 2t, 3t] km over one day.
         let start = 0.0;
         let end = 86400.0;
         let mid = (start + end) * 0.5;
@@ -1281,12 +1387,13 @@ pub mod tests {
         let kernel = Kernel::from_bytes(&fixture).unwrap();
         let state = kernel.state_at(499, mid).unwrap();
 
-        assert_relative_eq!(state.position.x, mid, epsilon = 1e-3);
-        assert_relative_eq!(state.position.y, 2.0 * mid, epsilon = 1e-3);
-        assert_relative_eq!(state.position.z, 3.0 * mid, epsilon = 1e-3);
-        assert_relative_eq!(state.velocity.x, 1.0, epsilon = 1e-6);
-        assert_relative_eq!(state.velocity.y, 2.0, epsilon = 1e-6);
-        assert_relative_eq!(state.velocity.z, 3.0, epsilon = 1e-6);
+        // Fixture in km; returned state in m.
+        assert_relative_eq!(state.position.x, mid * 1_000.0, epsilon = 1e-3);
+        assert_relative_eq!(state.position.y, 2.0 * mid * 1_000.0, epsilon = 1e-3);
+        assert_relative_eq!(state.position.z, 3.0 * mid * 1_000.0, epsilon = 1e-3);
+        assert_relative_eq!(state.velocity.x, 1_000.0, epsilon = 1e-3);
+        assert_relative_eq!(state.velocity.y, 2_000.0, epsilon = 1e-3);
+        assert_relative_eq!(state.velocity.z, 3_000.0, epsilon = 1e-3);
     }
 
     #[test]
@@ -1298,17 +1405,18 @@ pub mod tests {
         let kernel = Kernel::from_bytes(&fixture).unwrap();
         let state = kernel.state_at(499, 43200.0).unwrap();
 
-        assert_relative_eq!(state.position.x, 1.0, epsilon = 1e-9);
-        assert_relative_eq!(state.position.y, 2.0, epsilon = 1e-9);
-        assert_relative_eq!(state.position.z, 3.0, epsilon = 1e-9);
-        assert_relative_eq!(state.velocity.x, 0.0, epsilon = 1e-9);
-        assert_relative_eq!(state.velocity.y, 0.0, epsilon = 1e-9);
-        assert_relative_eq!(state.velocity.z, 0.0, epsilon = 1e-9);
+        // Fixture positions are in km (SPK units); state_at returns SI meters.
+        assert_relative_eq!(state.position.x, 1_000.0, epsilon = 1e-6);
+        assert_relative_eq!(state.position.y, 2_000.0, epsilon = 1e-6);
+        assert_relative_eq!(state.position.z, 3_000.0, epsilon = 1e-6);
+        assert_relative_eq!(state.velocity.x, 0.0, epsilon = 1e-6);
+        assert_relative_eq!(state.velocity.y, 0.0, epsilon = 1e-6);
+        assert_relative_eq!(state.velocity.z, 0.0, epsilon = 1e-6);
     }
 
     #[test]
     fn test_state_at_type2_linear_trajectory() {
-        // Position p(t) = [t, 2t, 3t] over one day.
+        // Position p(t) = [t, 2t, 3t] km over one day.
         let start = 0.0;
         let end = 86400.0;
         let mid = (start + end) * 0.5;
@@ -1317,12 +1425,13 @@ pub mod tests {
         let kernel = Kernel::from_bytes(&fixture).unwrap();
         let state = kernel.state_at(499, mid).unwrap();
 
-        assert_relative_eq!(state.position.x, mid, epsilon = 1e-3);
-        assert_relative_eq!(state.position.y, 2.0 * mid, epsilon = 1e-3);
-        assert_relative_eq!(state.position.z, 3.0 * mid, epsilon = 1e-3);
-        assert_relative_eq!(state.velocity.x, 1.0, epsilon = 1e-6);
-        assert_relative_eq!(state.velocity.y, 2.0, epsilon = 1e-6);
-        assert_relative_eq!(state.velocity.z, 3.0, epsilon = 1e-6);
+        // Fixture in km; returned state in m.
+        assert_relative_eq!(state.position.x, mid * 1_000.0, epsilon = 1e-3);
+        assert_relative_eq!(state.position.y, 2.0 * mid * 1_000.0, epsilon = 1e-3);
+        assert_relative_eq!(state.position.z, 3.0 * mid * 1_000.0, epsilon = 1e-3);
+        assert_relative_eq!(state.velocity.x, 1_000.0, epsilon = 1e-3);
+        assert_relative_eq!(state.velocity.y, 2_000.0, epsilon = 1e-3);
+        assert_relative_eq!(state.velocity.z, 3_000.0, epsilon = 1e-3);
     }
 
     #[test]
