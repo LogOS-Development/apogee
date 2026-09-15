@@ -67,18 +67,18 @@ fn type3_evaluates_state_at_midpoint() {
     let expected_pos = position(mid);
     let expected_vel = velocity(mid);
 
-    // state_at_type3 returns position in km and velocity in km/s.
     let pos_err = (state.position
-        - nalgebra::Vector3::new(expected_pos[0], expected_pos[1], expected_pos[2]))
-    .norm();
+        - // Fixture positions are km (SPK units); state_at returns SI meters.
+        nalgebra::Vector3::new(expected_pos[0], expected_pos[1], expected_pos[2]) * 1_000.0)
+        .norm();
     let vel_err = (state.velocity
-        - nalgebra::Vector3::new(expected_vel[0], expected_vel[1], expected_vel[2]))
-    .norm();
+        - nalgebra::Vector3::new(expected_vel[0], expected_vel[1], expected_vel[2]) * 1_000.0)
+        .norm();
 
     // Chebyshev fit of a sinusoid over 1-day records should be accurate to
     // sub-meter in position and sub-mm/s in velocity.
-    assert!(pos_err < 1.0e-3, "position error too large: {pos_err} km");
-    assert!(vel_err < 1.0e-6, "velocity error too large: {vel_err} km/s");
+    assert!(pos_err < 1.0, "position error too large: {pos_err} m");
+    assert!(vel_err < 1.0e-3, "velocity error too large: {vel_err} m/s");
 }
 
 #[test]
@@ -98,20 +98,21 @@ fn type3_evaluates_state_at_multiple_epochs() {
         let expected_pos = position(t);
         let expected_vel = velocity(t);
 
+        // Fixture positions are km (SPK units); state_at returns SI meters.
         let pos_err = (state.position
-            - nalgebra::Vector3::new(expected_pos[0], expected_pos[1], expected_pos[2]))
-        .norm();
+            - nalgebra::Vector3::new(expected_pos[0], expected_pos[1], expected_pos[2]) * 1_000.0)
+            .norm();
         let vel_err = (state.velocity
-            - nalgebra::Vector3::new(expected_vel[0], expected_vel[1], expected_vel[2]))
-        .norm();
+            - nalgebra::Vector3::new(expected_vel[0], expected_vel[1], expected_vel[2]) * 1_000.0)
+            .norm();
 
         assert!(
-            pos_err < 1.0e-3,
-            "epoch {t}: position error too large: {pos_err} km"
+            pos_err < 1.0,
+            "epoch {t}: position error too large: {pos_err} m"
         );
         assert!(
-            vel_err < 1.0e-6,
-            "epoch {t}: velocity error too large: {vel_err} km/s"
+            vel_err < 1.0e-3,
+            "epoch {t}: velocity error too large: {vel_err} m/s"
         );
     }
 }
@@ -136,20 +137,21 @@ fn type3_evaluates_state_at_record_boundaries() {
         let expected_pos = position(t);
         let expected_vel = velocity(t);
 
+        // Fixture positions are km (SPK units); state_at returns SI meters.
         let pos_err = (state.position
-            - nalgebra::Vector3::new(expected_pos[0], expected_pos[1], expected_pos[2]))
-        .norm();
+            - nalgebra::Vector3::new(expected_pos[0], expected_pos[1], expected_pos[2]) * 1_000.0)
+            .norm();
         let vel_err = (state.velocity
-            - nalgebra::Vector3::new(expected_vel[0], expected_vel[1], expected_vel[2]))
-        .norm();
+            - nalgebra::Vector3::new(expected_vel[0], expected_vel[1], expected_vel[2]) * 1_000.0)
+            .norm();
 
         assert!(
-            pos_err < 1.0e-3,
-            "record {rec} boundary t={t}: position error too large: {pos_err} km"
+            pos_err < 1.0,
+            "record {rec} boundary t={t}: position error too large: {pos_err} m"
         );
         assert!(
-            vel_err < 1.0e-6,
-            "record {rec} boundary t={t}: velocity error too large: {vel_err} km/s"
+            vel_err < 1.0e-3,
+            "record {rec} boundary t={t}: velocity error too large: {vel_err} m/s"
         );
     }
 }

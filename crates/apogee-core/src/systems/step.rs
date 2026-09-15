@@ -23,7 +23,7 @@
 use apogee_common::units::Seconds;
 use nalgebra::Vector3;
 
-use crate::components::celestial::{CelestialKind, CelestialMass, GravitySource, NaifIdComponent};
+use crate::components::celestial::{CelestialKind, GravitySource, NaifIdComponent};
 use crate::components::drag_surfaces::DragSurfaces;
 use crate::components::kinematics::Kinematics;
 use crate::components::rigid_body::{RigidBody, SimulationConfig};
@@ -294,7 +294,11 @@ fn update_kinematic_from_ephemeris(world: &mut World) {
     )> = kinematic_bodies
         .into_iter()
         .filter_map(|(entity, naif_id)| {
-            let state = ephemeris.state_at(naif_id, epoch).ok()?;
+            // SSB-relative states: composes the segment center chain so all
+            // bodies share one common frame regardless of how the kernel
+            // stores them (Earth is stored relative to the Earth-Moon
+            // barycenter, for example).
+            let state = ephemeris.state_at_ssb(naif_id, epoch).ok()?;
             Some((entity, state.position, state.velocity))
         })
         .collect();
@@ -309,64 +313,140 @@ fn update_kinematic_from_ephemeris(world: &mut World) {
 
 /// Integrate all dynamic celestial bodies in the ECS world one step forward.
 ///
-/// Each dynamic body is accelerated by point-mass gravity from every other
-/// gravity source in the world (excluding itself — a body does not feel its
-/// own gravity). Kinematic bodies are skipped: their positions are driven by
-/// the ephemeris service.
+/// **Joint integration**: all dynamic bodies are integrated together in a
+/// single RK4 pass over the combined state, and the gravitational force on
+/// each body is recomputed at every substage from the *current substage
+/// positions* of all bodies. This preserves RK4's fourth-order convergence
+/// for the coupled system — per-body integration against a frozen snapshot
+/// of the others is only first-order in the inter-body coupling (issue
+/// #189), which is fatal for tight binaries like Earth-Moon.
+///
+/// Each body is accelerated by point-mass gravity from every other gravity
+/// source in the world (dynamic and kinematic alike), excluding itself.
+/// Kinematic bodies are not integrated: their positions are driven by the
+/// ephemeris service and act as fixed (frozen for this step) sources.
 fn integrate_dynamic_celestials(
     world: &mut World,
     ctx: &SimContext,
-    integrator: &mut Rk4,
+    _integrator: &mut Rk4,
     dt: Seconds<f64>,
 ) {
-    // Collect entity IDs + positions of dynamic celestial bodies first, so we
-    // can borrow the world mutably without holding a query borrow alive.
-    let dynamic_bodies: Vec<(hecs::Entity, apogee_common::Position)> = world
+    // Collect the dynamic bodies' entities, GMs, and current states.
+    let mut dynamic: Vec<(hecs::Entity, f64, Vector3<f64>, Vector3<f64>)> = Vec::new();
+    for (entity, (_kind, kin)) in world
         .ecs
         .query::<(&CelestialKind, &Kinematics)>()
         .iter()
         .filter(|(_, (kind, _))| kind.is_dynamic())
-        .map(|(e, (_, kin))| (e, kin.position))
+    {
+        // GM of this body (its gravity on the others is symmetric).
+        let gm = world
+            .get_component::<crate::components::celestial::GravitySource>(entity)
+            .map(|g| g.gm.into_value())
+            .unwrap_or(0.0);
+        dynamic.push((entity, gm, kin.position, kin.velocity));
+    }
+    let n = dynamic.len();
+    if n == 0 {
+        return;
+    }
+
+    // External (kinematic) sources, e.g. ephemeris-driven planets: frozen
+    // for the duration of this step — exact for inertial-fixed sources and
+    // standard practice for ephemeris-backed major bodies.
+    let external: Vec<(f64, Vector3<f64>)> = ctx
+        .gravity_sources
+        .sources
+        .iter()
+        .filter(|entry| !dynamic.iter().any(|(_, _, p, _)| *p == entry.position))
+        .map(|entry| (entry.gm.into_value(), entry.position))
         .collect();
 
-    for (entity, body_position) in dynamic_bodies {
-        // Read mass for this dynamic body.
-        let mass = match world.get_component::<CelestialMass>(entity) {
-            Some(m) => m.mass(),
-            None => continue,
-        };
+    let h = dt.into_value();
 
-        let mut kin = match world.get_component_mut::<Kinematics>(entity) {
-            Some(k) => k,
-            None => continue,
-        };
+    // Combined state: [p0..pn, v0..vn] flattened.
+    let mut pos: Vec<Vector3<f64>> = dynamic.iter().map(|(_, _, p, _)| *p).collect();
+    let mut vel: Vec<Vector3<f64>> = dynamic.iter().map(|(_, _, _, v)| *v).collect();
 
-        // Build a gravity sources snapshot excluding this body's own
-        // gravity source (identified by matching position). A body should
-        // not feel its own gravity — including it produces a singularity
-        // at the initial position that silently zeroes the k1 acceleration.
-        let mut body_gs = GravitySources::new();
-        for entry in &ctx.gravity_sources.sources {
-            if entry.position != body_position {
-                body_gs.push_with_sh(entry.gm, entry.position, entry.spherical_harmonics.clone());
+    // Acceleration on body i given all current body positions.
+    let accel = |pos: &[Vector3<f64>], i: usize| -> Vector3<f64> {
+        let mut a = Vector3::zeros();
+        // Gravity from the other dynamic bodies.
+        for (j, (_, gm_j, _, _)) in dynamic.iter().enumerate() {
+            if j != i && *gm_j > 0.0 {
+                let delta = pos[j] - pos[i];
+                let r2 = delta.norm_squared();
+                if r2 > 0.0 {
+                    a += *gm_j * delta / (r2 * r2.sqrt());
+                }
             }
         }
+        // Gravity from kinematic/external sources.
+        for (gm_ext, ext_pos) in &external {
+            let delta = ext_pos - pos[i];
+            let r2 = delta.norm_squared();
+            if r2 > 0.0 {
+                a += *gm_ext * delta / (r2 * r2.sqrt());
+            }
+        }
+        a
+    };
 
-        let body_ctx = SimContext {
-            sim_config: ctx.sim_config,
-            gravity_sources: body_gs,
-            sun_position: ctx.sun_position,
-            epoch: ctx.epoch,
-        };
+    // RK4 over the combined state.
+    let mut k1p: Vec<Vector3<f64>> = Vec::with_capacity(n);
+    let mut k1v: Vec<Vector3<f64>> = Vec::with_capacity(n);
+    for (i, v) in vel.iter().enumerate() {
+        k1p.push(*v);
+        k1v.push(accel(&pos, i));
+    }
 
-        // Dynamic bodies only feel gravity — no drag/SRP surfaces.
-        let rb = RigidBody {
-            mass,
-            inertia: nalgebra::Matrix3::identity(),
-            cg_offset: Vector3::zeros(),
-        };
+    let mut pos2: Vec<Vector3<f64>> = Vec::with_capacity(n);
+    for i in 0..n {
+        pos2.push(pos[i] + k1p[i] * (0.5 * h));
+    }
+    let mut k2p: Vec<Vector3<f64>> = Vec::with_capacity(n);
+    let mut k2v: Vec<Vector3<f64>> = Vec::with_capacity(n);
+    for i in 0..n {
+        let v2 = vel[i] + k1v[i] * (0.5 * h);
+        k2p.push(v2);
+        k2v.push(accel(&pos2, i));
+    }
 
-        step_spacecraft(&mut kin, &rb, None, None, &body_ctx, integrator, dt);
+    let mut pos3: Vec<Vector3<f64>> = Vec::with_capacity(n);
+    for i in 0..n {
+        pos3.push(pos[i] + k2p[i] * (0.5 * h));
+    }
+    let mut k3p: Vec<Vector3<f64>> = Vec::with_capacity(n);
+    let mut k3v: Vec<Vector3<f64>> = Vec::with_capacity(n);
+    for i in 0..n {
+        let v3 = vel[i] + k2v[i] * (0.5 * h);
+        k3p.push(v3);
+        k3v.push(accel(&pos3, i));
+    }
+
+    let mut pos4: Vec<Vector3<f64>> = Vec::with_capacity(n);
+    for i in 0..n {
+        pos4.push(pos[i] + k3p[i] * h);
+    }
+    let mut k4p: Vec<Vector3<f64>> = Vec::with_capacity(n);
+    let mut k4v: Vec<Vector3<f64>> = Vec::with_capacity(n);
+    for i in 0..n {
+        let v4 = vel[i] + k3v[i] * h;
+        k4p.push(v4);
+        k4v.push(accel(&pos4, i));
+    }
+
+    for i in 0..n {
+        pos[i] += (k1p[i] + k2p[i] * 2.0 + k3p[i] * 2.0 + k4p[i]) * (h / 6.0);
+        vel[i] += (k1v[i] + k2v[i] * 2.0 + k3v[i] * 2.0 + k4v[i]) * (h / 6.0);
+    }
+
+    // Write the new states back into the ECS.
+    for (i, (entity, _, _, _)) in dynamic.iter().enumerate() {
+        if let Some(mut kin) = world.get_component_mut::<Kinematics>(*entity) {
+            kin.position = pos[i];
+            kin.velocity = vel[i];
+        }
     }
 }
 
@@ -730,14 +810,15 @@ mod tests {
             Vector3::zeros(),
         ));
 
-        // Step the world — the ephemeris update should move Mars to (1e7, 2e7, 3e7).
+        // Step the world — the ephemeris update should move Mars to
+        // (1e7, 2e7, 3e7) km in SPK units = (1e10, 2e10, 3e10) m.
         step_world(&mut world, Seconds::new(60.0));
 
         let mars = world.find_celestial(499).unwrap();
         let kin = world.get_component::<Kinematics>(mars).unwrap();
-        assert_relative_eq!(kin.position.x, 1e7, epsilon = 1e-3);
-        assert_relative_eq!(kin.position.y, 2e7, epsilon = 1e-3);
-        assert_relative_eq!(kin.position.z, 3e7, epsilon = 1e-3);
+        assert_relative_eq!(kin.position.x, 1e10, epsilon = 1e-3);
+        assert_relative_eq!(kin.position.y, 2e10, epsilon = 1e-3);
+        assert_relative_eq!(kin.position.z, 3e10, epsilon = 1e-3);
     }
 
     #[test]
