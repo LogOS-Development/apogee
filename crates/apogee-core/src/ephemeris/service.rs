@@ -92,6 +92,22 @@ impl EphemerisService {
         self.state_at_cached(body, epoch_et)
     }
 
+    /// Evaluate the state of one body at an epoch relative to the solar
+    /// system barycenter (NAIF 0).
+    ///
+    /// Unlike [`state_at`], which returns the raw segment-relative state,
+    /// this composes the center chain (e.g. Earth → Earth-Moon barycenter
+    /// → SSB) so all bodies are expressed in one common frame.
+    pub fn state_at_ssb(&mut self, body: NaifId, epoch: Epoch) -> ApogeeResult<BodyState> {
+        let epoch_et = Self::epoch_to_et(epoch)?;
+        if let Some(state) = self.cache.get_state(body, epoch_et) {
+            return Ok(state.clone());
+        }
+        let state = self.kernel.state_at_ssb(body, epoch_et)?;
+        self.cache.put_state(body, epoch_et, state.clone());
+        Ok(state)
+    }
+
     fn epoch_to_et(epoch: Epoch) -> ApogeeResult<f64> {
         let seconds = epoch.to_tdb_seconds();
         if !seconds.is_finite() {
@@ -136,9 +152,10 @@ mod tests {
         let epoch = Epoch::from_et_seconds(43200.0);
         let state = service.state_at(499, epoch).unwrap();
 
-        assert_relative_eq!(state.position.x, 1.0, epsilon = 1e-9);
-        assert_relative_eq!(state.position.y, 2.0, epsilon = 1e-9);
-        assert_relative_eq!(state.position.z, 3.0, epsilon = 1e-9);
+        // Fixture positions are km (SPK units); the service returns SI meters.
+        assert_relative_eq!(state.position.x, 1_000.0, epsilon = 1e-6);
+        assert_relative_eq!(state.position.y, 2_000.0, epsilon = 1e-6);
+        assert_relative_eq!(state.position.z, 3_000.0, epsilon = 1e-6);
     }
 
     #[test]
@@ -164,7 +181,7 @@ mod tests {
         let solar = service.all_states_at(epoch).unwrap();
 
         assert_eq!(solar.states.len(), 1);
-        assert_relative_eq!(solar.states[0].position.x, 1.0, epsilon = 1e-9);
+        assert_relative_eq!(solar.states[0].position.x, 1_000.0, epsilon = 1e-6);
     }
 
     #[test]

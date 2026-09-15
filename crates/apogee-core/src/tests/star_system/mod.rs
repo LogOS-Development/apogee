@@ -32,6 +32,7 @@ fn kinematics_of(world: &World, naif_id: i32) -> Option<crate::components::kinem
 #[test]
 fn planets_follow_ephemeris() {
     // Build a tiny ephemeris kernel: Earth (399) at fixed position.
+    // Fixture values are in km (SPK units) — the service converts to meters.
     let et_ref = Epoch::from_gregorian_utc_at_midnight(2000, 1, 2);
     let start_et = -86400.0 * 2.0;
     let end_et = 86400.0 * 2.0;
@@ -40,7 +41,7 @@ fn planets_follow_ephemeris() {
         start_et,
         end_et,
         4,
-        |_| [1.0e11, 2.0e11, 3.0e11],
+        |_| [1.0e8, 2.0e8, 3.0e8],
         |_| [29.0e3, 0.0, 0.0],
     );
     let kernel = crate::ephemeris::Kernel::from_bytes(&fixture).unwrap();
@@ -66,7 +67,7 @@ fn planets_follow_ephemeris() {
         .unwrap();
 
     // Earth is kinematic and at the ephemeris position (Chebyshev fit of a
-    // constant — expect sub-mm interpolation error).
+    // constant — expect sub-mm interpolation error). 1e8 km = 1e11 m.
     let kin = kinematics_of(&system.world, 399).expect("Earth kinematics");
     assert!((kin.position.x - 1.0e11).abs() < 1.0e-2);
     assert!((kin.position.y - 2.0e11).abs() < 1.0e-2);
