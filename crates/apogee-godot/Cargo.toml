@@ -11,6 +11,7 @@ crate-type = ["cdylib"]
 [dependencies]
 apogee-common = { workspace = true }
 apogee-core = { workspace = true }
+verdant = { path = "../verdant" }
 nalgebra = { workspace = true }
 thiserror = { workspace = true }
 godot = { workspace = true }
