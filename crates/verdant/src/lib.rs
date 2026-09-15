@@ -6,8 +6,10 @@
 
 pub mod fire;
 pub mod grid;
+pub mod species;
 pub mod terrain;
 
 pub use fire::{FireFront, FuelCategory, FuelModel, RateOfSpread, SpreadCoeffs};
 pub use grid::{BoundingBox, SurfaceGrid};
+pub use species::{PostFireRegen, SpeciesConfig, SpeciesConfigError};
 pub use terrain::{ElevationGrid, GeoTransform};
