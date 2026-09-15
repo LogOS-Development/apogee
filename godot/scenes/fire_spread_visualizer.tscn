@@ -1,0 +1,81 @@
+[gd_scene load_steps=6 format=3 uid="uid://verdant_fire_visualizer"]
+
+[ext_resource type="Script" path="res://scripts/fire_spread_visualizer.gd" id="1_fire_viz"]
+
+[sub_resource type="StandardMaterial3D" id="ground_mat"]
+shading_mode = 0
+albedo_color = Color(0.12, 0.15, 0.1, 1)
+
+[sub_resource type="PlaneMesh" id="ground_mesh"]
+material = SubResource("ground_mat")
+size = Vector2(10, 10)
+
+[sub_resource type="Environment" id="env"]
+background_mode = 1
+ambient_light_source = 2
+ambient_light_color = Color(0.3, 0.3, 0.35, 1)
+ambient_light_energy = 0.5
+background_color = Color(0.03, 0.03, 0.05, 1)
+
+[sub_resource type="StandardMaterial3D" id="fire_mat"]
+shading_mode = 0
+vertex_color_use_as_albedo = true
+
+[node name="VerdantFireVisualizer" type="Node3D"]
+script = ExtResource("1_fire_viz")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("env")
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.707107, 0.707107, 0, -0.707107, 0.707107, 0, 2, 2)
+current = true
+fov = 60.0
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.707107, -0.5, 0.5, 0, 0.707107, 0.707107, -0.707107, -0.5, 0.5, 0, 0, 0)
+light_energy = 1.5
+
+[node name="Ground" type="MeshInstance3D" parent="."]
+mesh = SubResource("ground_mesh")
+
+[node name="VerdantFireSampler" type="VerdantFireSampler" parent="."]
+grid_width = 60
+grid_height = 60
+cell_size = 10.0
+fuel_category = 1
+fuel_moisture = 0.08
+wind_u = 5.0
+wind_v = 0.0
+
+[node name="FireMultiMesh" type="MultiMeshInstance3D" parent="."]
+
+[node name="UI" type="Control" parent="."]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="StatusLabel" type="Label" parent="UI"]
+layout_mode = 1
+anchors_preset = 0
+offset_left = 16.0
+offset_top = 16.0
+offset_right = 600.0
+offset_bottom = 48.0
+text = "Status"
+
+[node name="Instructions" type="Label" parent="UI"]
+layout_mode = 1
+anchors_preset = 0
+offset_left = 16.0
+offset_top = 56.0
+offset_right = 380.0
+offset_bottom = 180.0
+text = "Space: play/pause
+R: reset fire
+Left drag: orbit camera
+Scroll: zoom
+Esc: quit"
