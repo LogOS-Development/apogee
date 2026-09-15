@@ -16,7 +16,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 rayon = { workspace = true }
 # GeoTIFF terrain ingestion (pure Rust, no GDAL)
-tiff = "0.9"
+tiff = "0.11.3"
 # Geotransform parsing from GeoTIFF tags
 
 [dev-dependencies]
