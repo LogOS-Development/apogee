@@ -1,0 +1,75 @@
+[gd_scene load_steps=4 format=3 uid="uid://solar_system_visualizer"]
+
+[ext_resource type="Script" path="res://scripts/solar_system_visualizer.gd" id="1_solar_viz"]
+
+[sub_resource type="Environment" id="env"]
+background_mode = 1
+ambient_light_source = 2
+ambient_light_color = Color(0.15, 0.15, 0.2, 1)
+ambient_light_energy = 0.3
+background_color = Color(0.01, 0.01, 0.02, 1)
+glow_enabled = true
+glow_intensity = 0.8
+glow_strength = 1.0
+
+[sub_resource type="StandardMaterial3D" id="star_mat"]
+shading_mode = 0
+albedo_color = Color(1, 0.9, 0.3, 1)
+emission_enabled = true
+emission = Color(1, 0.8, 0.2, 1)
+emission_energy_multiplier = 2.0
+
+[node name="SolarSystemVisualizer" type="Node3D"]
+script = ExtResource("1_solar_viz")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("env")
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.866025, 0.5, 0, -0.5, 0.866025, 0, 15, 25)
+current = true
+fov = 70.0
+
+[node name="SolarSystemView" type="SolarSystemView" parent="."]
+preset = 0
+time_scale = 86400.0
+distance_scale = 1e-07
+radius_scale = 1e-09
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.707107, -0.5, 0.5, 0, 0.707107, 0.707107, -0.707107, -0.5, 0.5, 10, 10, 10)
+light_energy = 1.5
+
+[node name="UI" type="Control" parent="."]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="StatusLabel" type="Label" parent="UI"]
+layout_mode = 1
+anchors_preset = 0
+offset_left = 16.0
+offset_top = 16.0
+offset_right = 600.0
+offset_bottom = 48.0
+text = "Status"
+
+[node name="Instructions" type="Label" parent="UI"]
+layout_mode = 1
+anchors_preset = 0
+offset_left = 16.0
+offset_top = 48.0
+offset_right = 380.0
+offset_bottom = 220.0
+text = "Left drag: orbit
+Right drag: pan
+Scroll: zoom
+Click body: focus
+F: toggle follow
+Space: play/pause
+R: reset view
+1/2/3: switch preset
+Esc: quit"

@@ -12,6 +12,7 @@ config_version=5
 
 config/name="Apogee"
 config/description="Multiplayer space simulation"
+run/main_scene="res://scenes/solar_system_visualizer.tscn"
 run/main_scene="res://scenes/fire_spread_visualizer.tscn"
 config/features=PackedStringArray("4.7", "Forward Plus")
 
