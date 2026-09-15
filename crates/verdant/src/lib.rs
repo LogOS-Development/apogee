@@ -6,8 +6,18 @@
 
 pub mod fire;
 pub mod grid;
+pub mod member;
+pub mod patch;
+pub mod patch_stack;
+pub mod plant;
+pub mod species;
 pub mod terrain;
 
 pub use fire::{FireFront, FuelCategory, FuelModel, RateOfSpread, SpreadCoeffs};
 pub use grid::{BoundingBox, SurfaceGrid};
+pub use member::{Member, Representation, WorldPos};
+pub use patch::{FidelityLevel, PatchBounds, PatchCell, SimulationPatch};
+pub use patch_stack::{FidelityLevelSerde, PatchSpec, PatchStack};
+pub use plant::{Environment, FuelContribution, GenericPlant, Seed};
+pub use species::{PostFireRegen, SpeciesConfig, SpeciesConfigError};
 pub use terrain::{ElevationGrid, GeoTransform};
