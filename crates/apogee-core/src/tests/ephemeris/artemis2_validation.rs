@@ -52,7 +52,6 @@ fn build_gravity_sources(kernel: &Kernel, et: f64) -> GravitySources {
 }
 
 #[test]
-#[ignore = "requires tests/fixtures/artemis2.bsp (within apogee-core); run scripts/fetch_data.sh to obtain it"]
 fn test_artemis2_propagation_vs_spk() {
     let kernel = Kernel::load(ARTEMIS2_BSP).expect("load Artemis 2 SPK");
 
@@ -109,7 +108,6 @@ fn test_artemis2_propagation_vs_spk() {
 /// coverage window. Each checkpoint re-initialises from the SPK and
 /// propagates a short arc, which isolates per-segment integration error.
 #[test]
-#[ignore = "requires tests/fixtures/artemis2.bsp (within apogee-core); run scripts/fetch_data.sh to obtain it"]
 fn test_artemis2_multi_epoch_state_check() {
     let kernel = Kernel::load(ARTEMIS2_BSP).expect("load Artemis 2 SPK");
 
@@ -172,7 +170,6 @@ fn test_artemis2_multi_epoch_state_check() {
 /// spacecraft states read from the kernel at known segment boundaries.
 /// This verifies the SPK Type 13 parser is returning consistent values.
 #[test]
-#[ignore = "requires tests/fixtures/artemis2.bsp (within apogee-core); run scripts/fetch_data.sh to obtain it"]
 fn test_artemis2_spk_state_consistency() {
     let kernel = Kernel::load(ARTEMIS2_BSP).expect("load Artemis 2 SPK");
 
