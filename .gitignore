@@ -37,3 +37,9 @@ verification/metron
 
 # Metron units library — local path dependency, checked out as sibling or symlink
 metron
+
+# WRF vendor tree — Fortran sources fetched by the build, ~375 MB, never tracked
+crates/apogee-core/external/wrf/vendor/
+
+# Hermes agent workspace (local plans, session artifacts)
+.hermes/
