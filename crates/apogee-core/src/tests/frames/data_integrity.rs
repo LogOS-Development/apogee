@@ -23,16 +23,17 @@ fn fixtures_dir() -> PathBuf {
 }
 
 #[test]
+#[ignore = "requires data/ from scripts/fetch_data.sh; runs in nightly --include-ignored"]
 fn test_real_iers_leap_second_dat_loads() {
     // End-to-end test: load the actual IERS Bulletin C leap second file
     // downloaded by `scripts/fetch_data.sh` and verify the parser handles the
     // real format. Checks the first entry (1972-01-01, 10 s), the current
     // last entry (37 s since 2017-01-01), and lookup at known MJDs.
     let path = data_dir().join("time").join("Leap_Second.dat");
-    if !path.exists() {
-        // Data file not fetched yet; skip gracefully in CI.
-        return;
-    }
+    assert!(
+        path.exists(),
+        "Leap_Second.dat missing — run ./scripts/fetch_data.sh"
+    );
     let table = crate::frames::LeapSecondTable::load(&path).unwrap();
     assert!(table.len() > 20);
     assert_eq!(table.entries()[0].tai_utc, 10); // 1972-01-01
@@ -44,14 +45,15 @@ fn test_real_iers_leap_second_dat_loads() {
 }
 
 #[test]
+#[ignore = "requires data/ from scripts/fetch_data.sh; runs in nightly --include-ignored"]
 fn test_clock_service_from_data_dir() {
     let data_dir = data_dir();
     let leap_path = data_dir.join("time").join("Leap_Second.dat");
     let eop_path = data_dir.join("eop").join("eopc04.txt");
-    if !leap_path.exists() || !eop_path.exists() {
-        // Data files not fetched yet; skip gracefully in CI.
-        return;
-    }
+    assert!(
+        leap_path.exists() && eop_path.exists(),
+        "leap/EOP data files missing — run ./scripts/fetch_data.sh"
+    );
     let svc = crate::frames::ClockService::from_data_dir(&data_dir).unwrap();
     assert!(svc.has_eop());
     assert!(svc.has_leap_table());
@@ -105,9 +107,11 @@ fn test_fixture_space_weather_parses() {
 #[test]
 fn test_fixture_egm2008_truncated_loads() {
     let path = fixtures_dir().join("egm2008_to70.gfc");
-    if !path.exists() {
-        return;
-    }
+    assert!(
+        path.exists(),
+        "committed fixture missing: {}",
+        path.display()
+    );
     let model =
         crate::gravity::SphericalHarmonics::load_egm2008(path.to_str().unwrap(), 70, 70).unwrap();
     assert_eq!(model.degree, 70);
@@ -121,14 +125,20 @@ fn test_fixture_egm2008_truncated_loads() {
 }
 
 #[test]
+#[ignore = "requires data/ from scripts/fetch_data.sh; runs in nightly --include-ignored"]
 fn test_real_egm2008_loads() {
     let path = data_dir().join("gravity").join("EGM2008_2190_TideFree.gfc");
-    if !path.exists() {
-        return;
-    }
+    assert!(
+        path.exists(),
+        "EGM2008_2190_TideFree.gfc missing — run ./scripts/fetch_data.sh"
+    );
     let model =
         crate::gravity::SphericalHarmonics::load_egm2008(path.to_str().unwrap(), 70, 70).unwrap();
     assert_eq!(model.degree, 70);
+    assert_eq!(model.order, 70);
     assert!((model.c[2][0] - (-0.484165143790815e-03)).abs() < 1e-15);
+    assert!((model.c[2][2] - 0.243938357328313e-05).abs() < 1e-15);
+    assert!((model.s[2][2] - (-0.140027370385934e-05)).abs() < 1e-15);
     assert!((model.gm.into_value() - 0.3986004415e15).abs() < 1.0);
+    assert!((model.reference_radius.into_value() - 0.63781363e7).abs() < 1e-3);
 }

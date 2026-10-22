@@ -254,9 +254,11 @@ mod tests {
             "/tests/fixtures/igrf13_reference.csv"
         );
         let path = std::path::Path::new(csv);
-        if !path.exists() {
-            return;
-        }
+        assert!(
+            path.exists(),
+            "committed fixture missing: {} — this test never runs without it",
+            path.display()
+        );
         let contents = std::fs::read_to_string(path).expect("igrf fixture read");
         let model = Igrf::new();
 
