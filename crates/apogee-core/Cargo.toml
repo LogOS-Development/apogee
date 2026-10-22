@@ -40,6 +40,10 @@ required-features = ["hwm14"]
 name = "wrf_kessler_samples"
 required-features = ["wrf"]
 
+[[example]]
+name = "extract_de441_fixture"
+required-features = ["de441"]
+
 [dev-dependencies]
 approx = "0.5"
 serde_json = { workspace = true }
