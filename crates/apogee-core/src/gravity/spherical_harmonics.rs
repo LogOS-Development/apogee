@@ -771,40 +771,4 @@ gfc 2 2 2.43938357328313d-06 -1.40027370385934d-06\n";
             "radial component should dominate: radial={radial}, tangential={tangential}"
         );
     }
-
-    #[test]
-    fn test_real_egm2008_loads_if_present() {
-        // End-to-end test: load the actual EGM2008 file downloaded by
-        // scripts/fetch_data.sh. Skips gracefully if the file is absent
-        // (e.g. in fast CI without data cache).
-        let data_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("data")
-            .join("gravity");
-        let path = data_dir.join("EGM2008_2190_TideFree.gfc");
-        if !path.exists() {
-            return;
-        }
-
-        // Load to degree 70 (fast enough for CI; full 2190 would be slow).
-        let model = SphericalHarmonics::load_egm2008(path.to_str().unwrap(), 70, 70).unwrap();
-        assert_eq!(model.degree, 70);
-        assert_eq!(model.order, 70);
-
-        // Known EGM2008 tide-free values.
-        assert_relative_eq!(model.c[2][0], -0.484165143790815e-03, epsilon = 1e-15);
-        assert_relative_eq!(model.c[2][2], 0.243938357328313e-05, epsilon = 1e-15);
-        assert_relative_eq!(model.s[2][2], -0.140027370385934e-05, epsilon = 1e-15);
-
-        // Header metadata.
-        assert_relative_eq!(model.gm.into_value(), 0.3986004415e15, epsilon = 1.0);
-        assert_relative_eq!(
-            model.reference_radius.into_value(),
-            0.63781363e7,
-            epsilon = 1e-3
-        );
-    }
 }

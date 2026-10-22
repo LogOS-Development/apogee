@@ -31,32 +31,33 @@ const APOLLO15_CSV: &str = concat!(
 type Sample = (f64, Vector3<f64>, Vector3<f64>);
 
 /// Load the reference trajectory as a list of (et_s, position_m, velocity_m_s).
-fn load_reference() -> Option<Vec<Sample>> {
+///
+/// The CSV is a committed fixture, so a missing file or malformed line is a
+/// repository defect, not a runtime condition — fail loudly.
+fn load_reference() -> Vec<Sample> {
     let path = std::path::Path::new(APOLLO15_CSV);
-    if !path.exists() {
-        return None;
-    }
-    let contents = std::fs::read_to_string(path).ok()?;
+    assert!(
+        path.exists(),
+        "committed fixture missing: {}",
+        path.display()
+    );
+    let contents = std::fs::read_to_string(path).expect("read apollo15_reference.csv");
     let mut out = Vec::new();
-    for line in contents.lines().skip(1) {
+    for (i, line) in contents.lines().enumerate().skip(1) {
         let parts: Vec<&str> = line.split(',').collect();
-        if parts.len() != 7 {
-            continue;
-        }
-        let et: f64 = parts[0].parse().ok()?;
-        let x: f64 = parts[1].parse().ok()?;
-        let y: f64 = parts[2].parse().ok()?;
-        let z: f64 = parts[3].parse().ok()?;
-        let vx: f64 = parts[4].parse().ok()?;
-        let vy: f64 = parts[5].parse().ok()?;
-        let vz: f64 = parts[6].parse().ok()?;
+        assert_eq!(parts.len(), 7, "malformed CSV line {i}: {line:?}");
+        let field = |j: usize| {
+            parts[j]
+                .parse::<f64>()
+                .unwrap_or_else(|e| panic!("CSV line {i}, field {j}: {e}"))
+        };
         out.push((
-            et,
-            Vector3::new(x, y, z) * 1_000.0,
-            Vector3::new(vx, vy, vz) * 1_000.0,
+            field(0),
+            Vector3::new(field(1), field(2), field(3)) * 1_000.0,
+            Vector3::new(field(4), field(5), field(6)) * 1_000.0,
         ));
     }
-    Some(out)
+    out
 }
 
 /// Build a Moon-centered gravity source set with Moon at origin and Earth
@@ -80,7 +81,7 @@ fn moon_earth_sources() -> GravitySources {
 
 #[test]
 fn test_apollo15_lunar_orbit_vs_reference() {
-    let reference = load_reference().expect("Apollo 15 reference CSV fixture");
+    let reference = load_reference();
     assert!(
         reference.len() >= 2,
         "reference trajectory must contain at least two states"
@@ -136,7 +137,7 @@ fn test_apollo15_lunar_orbit_vs_reference() {
 
 #[test]
 fn test_apollo15_multi_point_trajectory() {
-    let reference = load_reference().expect("Apollo 15 reference CSV fixture");
+    let reference = load_reference();
     assert!(
         reference.len() >= 10,
         "reference trajectory must contain at least 10 samples for multi-point validation"

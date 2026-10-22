@@ -10,12 +10,17 @@
 //! kernel evaluation → initial states → ECS spawning → force aggregation →
 //! RK4 integration → position comparison.
 //!
-//! DE441 is a 3.3 GB kernel that is NOT committed to the repo. Tests are
-//! `#[ignore]`d by default and only run locally when the kernel exists:
+//! DE441 is a 3.3 GB kernel that is NOT committed to the repo. This whole
+//! module compiles only behind the `de441` cargo feature (nightly does
+//! not enable it), so CI's `--include-ignored` can never reach these
+//! tests. Locally, with the kernel fetched (`FETCH_DE441=1
+//! ./scripts/fetch_data.sh`), run:
 //!
 //! ```sh
-//! cargo test -p apogee-core --lib tests::ephemeris::nbody_validation -- --ignored
+//! cargo test -p apogee-core --features de441 --lib -- --ignored
 //! ```
+//! A missing kernel panics with fetch instructions rather than
+//! silently passing.
 //!
 //! Bodies and frames: all seven bodies (Sun 10, Mercury barycenter 1,
 //! Venus barycenter 2, Earth-Moon barycenter 3, Mars barycenter 4,
@@ -79,10 +84,22 @@ const GM: &[(i32, f64)] = &[
     (301, 4.902800066000000e12),
 ];
 
-fn de441_path() -> Option<std::path::PathBuf> {
+/// Path to the local DE441 kernel.
+///
+/// Panics with fetch instructions when the kernel is absent — these tests
+/// are only compiled behind the `de441` feature, so a run that reaches
+/// this point has explicitly requested them.
+fn de441_path() -> std::path::PathBuf {
     let path =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/ephemeris/de441.bsp");
-    path.exists().then_some(path)
+    assert!(
+        path.exists(),
+        "DE441 kernel not found at {}. Fetch it (3.3 GB, not used by CI) with: \
+         FETCH_DE441=1 ./scripts/fetch_data.sh — or download directly from \
+         https://ssd.jpl.nasa.gov/ftp/eph/planets/bsp/de441.bsp",
+        path.display()
+    );
+    path
 }
 
 /// Build a World with the five bodies as dynamic celestials, initial
@@ -113,12 +130,9 @@ fn build_nbody_world(ephemeris: &mut EphemerisService, epoch: Epoch) -> World {
 
 /// Checkpoint comparison: integrated position vs DE441 at each checkpoint.
 #[test]
-#[ignore = "requires local 3.3 GB DE441 kernel (data/ephemeris/de441.bsp)"]
+#[ignore = "requires de441 feature + local 3.3 GB kernel (data/ephemeris/de441.bsp)"]
 fn inner_solar_system_nbody_vs_de441() {
-    let Some(path) = de441_path() else {
-        eprintln!("skipping: DE441 kernel not present");
-        return;
-    };
+    let path = de441_path();
 
     let mut ephemeris = EphemerisService::load(path.to_str().unwrap(), 64).unwrap();
 
@@ -177,12 +191,9 @@ fn inner_solar_system_nbody_vs_de441() {
 
 /// Energy conservation of the 5-body system over the same integration.
 #[test]
-#[ignore = "requires local 3.3 GB DE441 kernel (data/ephemeris/de441.bsp)"]
+#[ignore = "requires de441 feature + local 3.3 GB kernel (data/ephemeris/de441.bsp)"]
 fn inner_solar_system_energy_conservation() {
-    let Some(path) = de441_path() else {
-        eprintln!("skipping: DE441 kernel not present");
-        return;
-    };
+    let path = de441_path();
 
     let mut ephemeris = EphemerisService::load(path.to_str().unwrap(), 64).unwrap();
     let epoch0 = Epoch::from_gregorian(2025, 1, 1, 0, 0, 0, 0, hifitime::TimeScale::TDB);
@@ -238,12 +249,9 @@ fn inner_solar_system_energy_conservation() {
 ///   (GM_E·r_E + GM_M·r_M) / (GM_E + GM_M) = r_EMB
 /// to within kernel interpolation accuracy.
 #[test]
-#[ignore = "requires local 3.3 GB DE441 kernel (data/ephemeris/de441.bsp)"]
+#[ignore = "requires de441 feature + local 3.3 GB kernel (data/ephemeris/de441.bsp)"]
 fn earth_moon_ssb_composition_matches_barycenter() {
-    let Some(path) = de441_path() else {
-        eprintln!("skipping: DE441 kernel not present");
-        return;
-    };
+    let path = de441_path();
     let mut ephemeris = EphemerisService::load(path.to_str().unwrap(), 64).unwrap();
     let epoch = Epoch::from_gregorian(2025, 6, 1, 0, 0, 0, 0, hifitime::TimeScale::TDB);
 
@@ -279,12 +287,9 @@ fn earth_moon_ssb_composition_matches_barycenter() {
 /// should shrink the Moon's 30-day error by ≥16×. (Measured: 26× — the
 /// residual is clean RK4 truncation, not coupling error.)
 #[test]
-#[ignore = "requires local 3.3 GB DE441 kernel (data/ephemeris/de441.bsp)"]
+#[ignore = "requires de441 feature + local 3.3 GB kernel (data/ephemeris/de441.bsp)"]
 fn nbody_step_size_convergence() {
-    let Some(path) = de441_path() else {
-        eprintln!("skipping: DE441 kernel not present");
-        return;
-    };
+    let path = de441_path();
     let mut ephemeris = EphemerisService::load(path.to_str().unwrap(), 64).unwrap();
     let epoch0 = Epoch::from_gregorian(2025, 1, 1, 0, 0, 0, 0, hifitime::TimeScale::TDB);
     let day = 86_400.0;

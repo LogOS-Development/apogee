@@ -30,6 +30,7 @@ urlencoding = "2.1"
 default = []
 hwm14 = []
 wrf = []
+de441 = []
 
 [[example]]
 name = "hwm14_samples"
