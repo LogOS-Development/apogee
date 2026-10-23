@@ -120,8 +120,11 @@ fn test_apollo_11_style_lunar_orbit() {
     let initial_relative = Vector3::new(0.0, orbit_radius, 0.0);
 
     let position_error = (final_relative - initial_relative).norm();
+    // RK4 at 10 s steps over one lunar orbit period (2 h 7 min) leaves a
+    // measured 0.0017 m closure error on this toolchain; 0.1 m leaves a
+    // ~60x margin for platform floating-point variation.
     assert!(
-        position_error < 0.01 * orbit_radius,
+        position_error < 0.1,
         "lunar orbit did not close: position error = {position_error} m after {} s",
         period_expected
     );

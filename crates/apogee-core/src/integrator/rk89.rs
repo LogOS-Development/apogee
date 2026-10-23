@@ -38,6 +38,8 @@ pub struct Rk89 {
     pub max_step: f64,
     /// Safety factor for step size scaling.
     pub safety: f64,
+    /// Fixed-step mode: take exactly `dt` without adaptive control.
+    pub fixed_step: bool,
 }
 
 impl Default for Rk89 {
@@ -47,6 +49,7 @@ impl Default for Rk89 {
             min_step: 1e-10,
             max_step: 1e3,
             safety: 0.9,
+            fixed_step: false,
         }
     }
 }
@@ -56,6 +59,14 @@ impl Rk89 {
     pub fn new(tolerance: f64) -> Self {
         Self {
             tolerance,
+            ..Default::default()
+        }
+    }
+
+    /// Create a fixed-step Rk89 (no adaptive control).
+    pub fn fixed() -> Self {
+        Self {
+            fixed_step: true,
             ..Default::default()
         }
     }
@@ -124,6 +135,17 @@ const E5_9: f64 = 0.3341791187130175;
 const E5_10: f64 = 0.08192320648511571;
 const E5_11: f64 = -0.022355307863886294;
 
+// DOP853 8th-order solution weights (b); b2..b5 are zero.
+// Source: sources/dop853.f parameter block (Hairer & Wanner).
+const B_1: f64 = 0.054293734116568765;
+const B_6: f64 = 4.450312892752409;
+const B_7: f64 = 1.8915178993145003;
+const B_8: f64 = -5.801203960010585;
+const B_9: f64 = 0.3111643669578199;
+const B_10: f64 = -0.1521609496625161;
+const B_11: f64 = 0.20136540080403034;
+const B_12: f64 = 0.04471061572777259;
+
 impl Integrator for Rk89 {
     fn step(
         &mut self,
@@ -134,6 +156,15 @@ impl Integrator for Rk89 {
         let h = dt.into_value();
         let h_abs = h.abs();
         let sign = if h >= 0.0 { 1.0 } else { -1.0 };
+
+        if self.fixed_step {
+            let err = dop853_step(state, derivative_fn, h);
+            return IntegrationResult {
+                accepted: true,
+                error_estimate: err,
+                step_taken: dt,
+            };
+        }
 
         let mut current_h = h_abs.min(self.max_step);
         let mut iterations = 0;
@@ -288,7 +319,7 @@ fn dop853_step(
         + k10.acceleration * (A11_10 * h);
     let k11 = derivative_fn(&s11);
 
-    // Stage 12 (also the 8th-order solution via FSAL).
+    // Stage 12 — its derivative k12 feeds the error estimate below.
     let mut s12 = s0.clone();
     s12.position += k1.velocity * (A12_1 * h)
         + k4.velocity * (A12_4 * h)
@@ -310,9 +341,25 @@ fn dop853_step(
         + k11.acceleration * (A12_11 * h);
     let k12 = derivative_fn(&s12);
 
-    // 8th-order solution: y_new = y0 + h * sum(B_i * k_i)
-    state.position = s12.position;
-    state.velocity = s12.velocity;
+    // 8th-order solution: y_new = y0 + h * sum(b_i * k_i) with Hairer's b
+    // weights (b2..b5 are zero). NOT the stage-12 argument: DOP853 is not
+    // FSAL, the a12 row only places the k12 node (sources/dop853.f:649).
+    state.position += k1.velocity * (B_1 * h)
+        + k6.velocity * (B_6 * h)
+        + k7.velocity * (B_7 * h)
+        + k8.velocity * (B_8 * h)
+        + k9.velocity * (B_9 * h)
+        + k10.velocity * (B_10 * h)
+        + k11.velocity * (B_11 * h)
+        + k12.velocity * (B_12 * h);
+    state.velocity += k1.acceleration * (B_1 * h)
+        + k6.acceleration * (B_6 * h)
+        + k7.acceleration * (B_7 * h)
+        + k8.acceleration * (B_8 * h)
+        + k9.acceleration * (B_9 * h)
+        + k10.acceleration * (B_10 * h)
+        + k11.acceleration * (B_11 * h)
+        + k12.acceleration * (B_12 * h);
 
     // Error estimate: E5_i * k_i.
     let err_pos = k1.velocity * (E5_0 * h)
@@ -338,7 +385,146 @@ fn dop853_step(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::integrator::tableau_sources::{
+        assert_convergence_order, fortran_params, harmonic_derivative,
+    };
     use approx::assert_relative_eq;
+
+    #[test]
+    fn test_rk89_global_convergence_order_is_eight() {
+        assert_convergence_order(|| Box::new(Rk89::fixed()), 0.4, 8, 6.0);
+    }
+
+    #[test]
+    fn test_rk89_tableau_matches_dop853_source() {
+        let f = fortran_params("dop853.f");
+        let rust: &[(&str, f64)] = &[
+            ("a21", A2_1),
+            ("a31", A3_1),
+            ("a32", A3_2),
+            ("a41", A4_1),
+            ("a43", A4_3),
+            ("a51", A5_1),
+            ("a53", A5_3),
+            ("a54", A5_4),
+            ("a61", A6_1),
+            ("a64", A6_4),
+            ("a65", A6_5),
+            ("a71", A7_1),
+            ("a74", A7_4),
+            ("a75", A7_5),
+            ("a76", A7_6),
+            ("a81", A8_1),
+            ("a84", A8_4),
+            ("a85", A8_5),
+            ("a86", A8_6),
+            ("a87", A8_7),
+            ("a91", A9_1),
+            ("a94", A9_4),
+            ("a95", A9_5),
+            ("a96", A9_6),
+            ("a97", A9_7),
+            ("a98", A9_8),
+            ("a101", A10_1),
+            ("a104", A10_4),
+            ("a105", A10_5),
+            ("a106", A10_6),
+            ("a107", A10_7),
+            ("a108", A10_8),
+            ("a109", A10_9),
+            ("a111", A11_1),
+            ("a114", A11_4),
+            ("a115", A11_5),
+            ("a116", A11_6),
+            ("a117", A11_7),
+            ("a118", A11_8),
+            ("a119", A11_9),
+            ("a1110", A11_10),
+            ("a121", A12_1),
+            ("a124", A12_4),
+            ("a125", A12_5),
+            ("a126", A12_6),
+            ("a127", A12_7),
+            ("a128", A12_8),
+            ("a129", A12_9),
+            ("a1210", A12_10),
+            ("a1211", A12_11),
+            ("b1", B_1),
+            ("b6", B_6),
+            ("b7", B_7),
+            ("b8", B_8),
+            ("b9", B_9),
+            ("b10", B_10),
+            ("b11", B_11),
+            ("b12", B_12),
+            ("er1", E5_0),
+            ("er6", E5_5),
+            ("er7", E5_6),
+            ("er8", E5_7),
+            ("er9", E5_8),
+            ("er10", E5_9),
+            ("er11", E5_10),
+            ("er12", E5_11),
+        ];
+        for (name, value) in rust {
+            let fort = f
+                .get(*name)
+                .unwrap_or_else(|| panic!("dop853.f lacks {name}"));
+            // Same decimal literal on both sides: a correctly-rounded parse
+            // of the source digits must equal the Rust constant bit-exactly.
+            assert!(value == fort, "{name}: rust {value} vs dop853.f {fort}");
+        }
+    }
+
+    #[test]
+    fn test_rk89_tableau_consistency() {
+        let f = fortran_params("dop853.f");
+        // Each stage argument sits at its node: sum_j a_ij = c_i.
+        let rows: &[(f64, &str)] = &[
+            (A2_1, "c2"),
+            (A3_1 + A3_2, "c3"),
+            (A4_1 + A4_3, "c4"),
+            (A5_1 + A5_3 + A5_4, "c5"),
+            (A6_1 + A6_4 + A6_5, "c6"),
+            (A7_1 + A7_4 + A7_5 + A7_6, "c7"),
+            (A8_1 + A8_4 + A8_5 + A8_6 + A8_7, "c8"),
+            (A9_1 + A9_4 + A9_5 + A9_6 + A9_7 + A9_8, "c9"),
+            (A10_1 + A10_4 + A10_5 + A10_6 + A10_7 + A10_8 + A10_9, "c10"),
+            (
+                A11_1 + A11_4 + A11_5 + A11_6 + A11_7 + A11_8 + A11_9 + A11_10,
+                "c11",
+            ),
+        ];
+        for (sum, cname) in rows {
+            let c = f
+                .get(*cname)
+                .unwrap_or_else(|| panic!("dop853.f lacks {cname}"));
+            assert!((sum - c).abs() < 1e-12, "{cname}: row sum {sum}");
+        }
+        // Stage 12 sits at t + h (c12 = 1, implicit in the source).
+        let s12_sum = A12_1 + A12_4 + A12_5 + A12_6 + A12_7 + A12_8 + A12_9 + A12_10 + A12_11;
+        assert!((s12_sum - 1.0).abs() < 1e-12, "stage 12 node: {s12_sum}");
+        // Quadrature condition: b weights sum to 1.
+        let b_sum = B_1 + B_6 + B_7 + B_8 + B_9 + B_10 + B_11 + B_12;
+        assert!((b_sum - 1.0).abs() < 1e-12, "b-row sum: {b_sum}");
+        // Error row = b(5th) - b(3rd); both sum to 1, so er sums to 0.
+        let er_sum = E5_0 + E5_5 + E5_6 + E5_7 + E5_8 + E5_9 + E5_10 + E5_11;
+        assert!(er_sum.abs() < 1e-12, "er-row sum: {er_sum}");
+    }
+
+    #[test]
+    fn test_rk89_fixed_mode_takes_exact_step() {
+        let mut integ = Rk89::fixed();
+        let mut state = StateVector {
+            position: apogee_common::Position::new(1.0, 0.0, 0.0),
+            velocity: apogee_common::Velocity::new(0.0, 0.0, 0.0),
+            attitude: nalgebra::Quaternion::identity(),
+            angular_velocity: nalgebra::Vector3::zeros(),
+        };
+        let result = integ.step(&mut state, &harmonic_derivative, Seconds::new(0.4));
+        assert!(result.accepted);
+        assert!((result.step_taken.into_value() - 0.4).abs() < 1e-15);
+    }
 
     #[test]
     fn test_rk89_harmonic_oscillator() {
