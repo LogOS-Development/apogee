@@ -77,3 +77,6 @@ pub struct MultiRateIntegrator {
     pub inner: Box<dyn Integrator>,
     pub flexible: Box<dyn Integrator>,
 }
+
+#[cfg(test)]
+pub(crate) mod tableau_sources;

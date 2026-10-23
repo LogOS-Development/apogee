@@ -109,7 +109,37 @@ fn _integrate_attitude_quat(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::integrator::tableau_sources::assert_convergence_order;
     use approx::assert_relative_eq;
+
+    #[test]
+    fn test_rk4_global_convergence_order_is_four() {
+        assert_convergence_order(|| Box::new(Rk4::new(Seconds::new(0.2))), 0.2, 4, 6.0);
+    }
+
+    #[test]
+    fn test_rk4_quadrature_is_exact_for_polynomials() {
+        // Simpson weights are exact for cubics: integrate y'' = t (y = t²/2)
+        // by carrying t in position.x. Catches any weight/node typo.
+        let mut state = StateVector {
+            position: apogee_common::Position::new(0.0, 0.0, 0.0),
+            velocity: apogee_common::Velocity::new(1.0, 0.0, 0.0),
+            attitude: nalgebra::Quaternion::identity(),
+            angular_velocity: nalgebra::Vector3::zeros(),
+        };
+        let mut integ = Rk4::new(Seconds::new(0.5));
+        integ.step(
+            &mut state,
+            &|s: &StateVector| StateDerivative {
+                velocity: apogee_common::Velocity::new(1.0, s.velocity.y, 0.0),
+                acceleration: apogee_common::Position::new(0.0, s.position.x, 0.0),
+                attitude_derivative: nalgebra::Quaternion::new(0.0, 0.0, 0.0, 0.0),
+                angular_acceleration: nalgebra::Vector3::zeros(),
+            },
+            Seconds::new(6.0),
+        );
+        assert_relative_eq!(state.position.y, 6.0_f64.powi(3) / 6.0, epsilon = 1e-12);
+    }
 
     #[test]
     fn test_rk4_harmonic_oscillator() {

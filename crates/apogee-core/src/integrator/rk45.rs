@@ -282,7 +282,96 @@ fn error_norm(error: f64, _state: &StateVector, _tolerance: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::integrator::tableau_sources::{assert_convergence_order, fortran_params};
     use approx::assert_relative_eq;
+
+    #[test]
+    fn test_rk45_global_convergence_order_is_five() {
+        assert_convergence_order(|| Box::new(Rk45::fixed()), 0.2, 5, 6.0);
+    }
+
+    #[test]
+    fn test_rk45_tableau_matches_dopri5_source() {
+        let f = fortran_params("dopri5.f");
+        let rust: &[(&str, f64)] = &[
+            ("a21", A21),
+            ("a31", A31),
+            ("a32", A32),
+            ("a41", A41),
+            ("a42", A42),
+            ("a43", A43),
+            ("a51", A51),
+            ("a52", A52),
+            ("a53", A53),
+            ("a54", A54),
+            ("a61", A61),
+            ("a62", A62),
+            ("a63", A63),
+            ("a64", A64),
+            ("a65", A65),
+            ("a71", A71),
+            ("a73", A73),
+            ("a74", A74),
+            ("a75", A75),
+            ("a76", A76),
+            // 5th-order solution weights: dopri5.f has no separate b
+            // block — DOPRI5 is FSAL, so they are the stage-7 a-row.
+            ("a71", B1),
+            ("a73", B3),
+            ("a74", B4),
+            ("a75", B5),
+            ("a76", B6),
+            ("e1", E1),
+            ("e3", E3),
+            ("e4", E4),
+            ("e5", E5),
+            ("e6", E6),
+            ("e7", E7),
+        ];
+        for (name, value) in rust {
+            let fort = f
+                .get(*name)
+                .unwrap_or_else(|| panic!("dopri5.f lacks {name}"));
+            // Same decimal literal on both sides: a correctly-rounded parse
+            // of the source digits must equal the Rust constant bit-exactly.
+            assert!(value == fort, "{name}: rust {value} vs dopri5.f {fort}");
+        }
+    }
+
+    #[test]
+    fn test_rk45_tableau_consistency() {
+        let f = fortran_params("dopri5.f");
+        // Each stage argument sits at its node: sum_j a_ij = c_i.
+        let c = |name: &str| -> f64 {
+            *f.get(name)
+                .unwrap_or_else(|| panic!("dopri5.f lacks {name}"))
+        };
+        let rows: &[(f64, f64)] = &[
+            (A21, c("c2")),
+            (A31 + A32, c("c3")),
+            (A41 + A42 + A43, c("c4")),
+            (A51 + A52 + A53 + A54, c("c5")),
+            // Stages 6 and 7 both sit at t + h (c6 = c7 = 1, implicit in
+            // the source): stage 6 is the k6 argument row, stage 7 is FSAL
+            // and doubles as the 5th-order solution weights.
+            (A61 + A62 + A63 + A64 + A65, 1.0),
+            (A71 + A73 + A74 + A75 + A76, 1.0),
+        ];
+        for (sum, node) in rows {
+            assert!((sum - node).abs() < 1e-12, "row sum {sum} vs node {node}");
+        }
+        assert_eq!(A71, B1);
+        assert_eq!(A73, B3);
+        assert_eq!(A74, B4);
+        assert_eq!(A75, B5);
+        assert_eq!(A76, B6);
+        // Quadrature condition: b weights sum to 1.
+        let b_sum = B1 + B3 + B4 + B5 + B6;
+        assert!((b_sum - 1.0).abs() < 1e-12, "b-row sum: {b_sum}");
+        // Error row = b(5th) - b(4th); both sum to 1, so E sums to 0.
+        let e_sum = E1 + E3 + E4 + E5 + E6 + E7;
+        assert!(e_sum.abs() < 1e-12, "e-row sum: {e_sum}");
+    }
 
     #[test]
     fn test_rk45_harmonic_oscillator() {
