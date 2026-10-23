@@ -1,5 +1,19 @@
 # Reference sources for integrator coefficients
 
+## Module reference sheets
+
+The physics/algorithm modules (atmosphere, fire, terrain, gravity,
+magnetosphere, ephemeris, frames) have per-module citation sheets in
+`sources/references/` — every formula, constant, and coefficient table is
+traced to its primary source with equation/table numbers, verbatim quotes,
+and fetch URLs (2026-10-22 full-codebase citation audit). See
+`sources/references/README.md` for the index and status-mark legend.
+Redistributable primary source documents (USDA, NASA/NTRS, NRL, NOAA, IERS,
+CC-BY open access) are committed under `sources/` and `sources/pdfs/`;
+copyrighted publisher PDFs are linked, never committed.
+
+## Integrator coefficient sources
+
 Primary reference implementations for the embedded Runge-Kutta pairs in
 `crates/apogee-core/src/integrator/`:
 
