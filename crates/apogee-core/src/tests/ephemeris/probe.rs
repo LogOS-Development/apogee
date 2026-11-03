@@ -180,3 +180,60 @@ fn type3_segment_summary_is_correct() {
     assert!((seg.start_et - START_ET).abs() < 1e-9);
     assert!((seg.end_et - END_ET).abs() < 1e-9);
 }
+
+/// A type-3 velocity series is evaluated directly, with no interval
+/// scaling: SPICE's SPKE03 reads the X'/Y'/Z' coefficient sets with CHBVAL,
+/// and SPKW03 defines them as derivatives with respect to time. The record
+/// below is correct by construction in that convention — a constant
+/// velocity V is the Chebyshev series V·T0 (independent of the record
+/// interval), and the linear position series P0 + V·R·s has coefficients
+/// P0 (T0) and V·R (T1).
+///
+/// The interval half-width is 10 s, so a velocity divided by the radius is
+/// off by an order of magnitude. Regression test for #205: the reader
+/// previously divided the evaluated velocity series by the record
+/// half-interval, and the fitted fixture scaled its samples to match,
+/// so every round-trip test validated the wrong convention against itself.
+#[test]
+fn type3_velocity_series_evaluated_without_interval_scaling() {
+    use crate::ephemeris::kernel::tests::build_type3_raw_fixture;
+
+    let start_et = 0.0;
+    let end_et = 20.0;
+    let radius = 10.0; // record half-interval, (end - start) / 2
+    let p0 = [1.0e5, -2.0e5, 5.0e4]; // km
+    let v0 = [3.0, -4.0, 12.0]; // km/s
+
+    let mut pos = vec![[0.0f64; 3]; 8];
+    let mut vel = vec![[0.0f64; 3]; 8];
+    pos[0] = p0;
+    pos[1] = [v0[0] * radius, v0[1] * radius, v0[2] * radius];
+    vel[0] = v0;
+
+    let bytes = build_type3_raw_fixture(TARGET_ID, start_et, end_et, &[(pos, vel)]);
+    let kernel = Kernel::from_bytes(&bytes).unwrap();
+
+    for dt in [-5.0, 0.0, 7.5] {
+        let et = start_et + radius + dt; // mid + dt
+        let state = kernel.state_at(TARGET_ID, et).unwrap();
+
+        let expected_pos = nalgebra::Vector3::new(
+            (p0[0] + v0[0] * dt) * 1_000.0,
+            (p0[1] + v0[1] * dt) * 1_000.0,
+            (p0[2] + v0[2] * dt) * 1_000.0,
+        );
+        let expected_vel =
+            nalgebra::Vector3::new(v0[0] * 1_000.0, v0[1] * 1_000.0, v0[2] * 1_000.0);
+
+        let pos_err = (state.position - expected_pos).norm();
+        let vel_err = (state.velocity - expected_vel).norm();
+        assert!(
+            pos_err < 1.0e-3,
+            "position error at t-mid = {dt} s too large: {pos_err} m"
+        );
+        assert!(
+            vel_err < 1.0e-6,
+            "velocity error at t-mid = {dt} s too large: {vel_err} m/s"
+        );
+    }
+}

@@ -480,19 +480,21 @@ impl Kernel {
             crate::ephemeris::chebyshev::chebyshev_eval(x, &pos_coeffs[2]),
         );
 
-        // Type 3 velocity coefficients are stored as derivatives with respect
-        // to normalized time x. Convert back to physical units.
-        let velocity_normalized = nalgebra::Vector3::new(
+        // SPK Type 3 stores the velocity series explicitly: the X'/Y'/Z'
+        // coefficient sets are derivatives with respect to time and are
+        // evaluated directly, with no interval scaling (SPKE03/CHBVAL).
+        // Only Type 2 — where velocity is derived by differentiating the
+        // position series — carries the 1/radius chain-rule factor.
+        let velocity = nalgebra::Vector3::new(
             crate::ephemeris::chebyshev::chebyshev_eval(x, &vel_coeffs[0]),
             crate::ephemeris::chebyshev::chebyshev_eval(x, &vel_coeffs[1]),
             crate::ephemeris::chebyshev::chebyshev_eval(x, &vel_coeffs[2]),
         );
-        let scale = 1.0 / radius;
 
         Ok(BodyState {
             naif_id: body,
             position,
-            velocity: velocity_normalized * scale,
+            velocity,
         })
     }
 }
@@ -1022,13 +1024,10 @@ pub mod tests {
                 let x = ((2 * i + 1) as f64 * std::f64::consts::PI / (2.0 * n_coeffs as f64)).cos();
                 let t = mid + x * radius;
                 pos_samples[i] = position_fn(t);
-                // Type 3 stores velocity Chebyshev coefficients with respect
-                // to normalized time x. Convert physical velocity to
-                // normalized velocity before fitting.
-                let v = velocity_fn(t);
-                vel_samples[i][0] = v[0] * radius;
-                vel_samples[i][1] = v[1] * radius;
-                vel_samples[i][2] = v[2] * radius;
+                // Type 3 stores the velocity series directly: the X'/Y'/Z'
+                // coefficient sets are derivatives with respect to time
+                // (SPKW03), so the physical velocity is fit as-is.
+                vel_samples[i] = velocity_fn(t);
             }
 
             let mut pos_coeffs = vec![[0.0; 3]; n_coeffs];
@@ -1082,6 +1081,91 @@ pub mod tests {
             .copy_from_slice(&interval_length.to_le_bytes());
         bytes[directory_offset + 16..directory_offset + 24]
             .copy_from_slice(&((rsize_doubles * 6 + 2) as f64).to_le_bytes());
+        bytes[directory_offset + 24..directory_offset + 32]
+            .copy_from_slice(&(record_count as f64).to_le_bytes());
+
+        bytes
+    }
+
+    /// Type-3 coefficient sets in per-coefficient-index form:
+    /// `coefficients[k][axis]`.
+    type Type3Coefficients = Vec<[f64; 3]>;
+
+    /// Build an SPK Type 3 segment from coefficient sets written verbatim.
+    ///
+    /// Unlike [`build_type3_fixture`] no fitting happens: each record's
+    /// position and velocity coefficient sets are written exactly as
+    /// supplied, so a test can construct a record that is correct by
+    /// construction in the SPICE convention. A round-trip through the
+    /// fitted builders cannot detect a scaling error shared by the fixture
+    /// and the reader; this builder pins the reader to the record
+    /// convention alone.
+    pub fn build_type3_raw_fixture(
+        target_id: i32,
+        start_et: f64,
+        end_et: f64,
+        records: &[(Type3Coefficients, Type3Coefficients)],
+    ) -> Vec<u8> {
+        let first_data_record = 3;
+        let n_coeffs = records[0].0.len();
+        let rsize_doubles = n_coeffs as i32;
+        let record_size_bytes = (rsize_doubles * 6 + 2) * 8;
+        let directory_size = 4 * 8;
+        let record_count = records.len() as i32;
+        let total_data_bytes = record_count as usize * record_size_bytes as usize + directory_size;
+        let data_daf_records = total_data_bytes.div_ceil(RECORD_SIZE);
+        let total_daf_records = first_data_record as usize - 1 + data_daf_records;
+        let mut bytes = minimal_daf_header("DAF/SPK", 2, 2, total_daf_records as i32 + 1);
+        bytes.resize(RECORD_SIZE * total_daf_records, 0);
+
+        // Summary record at record 2 — the same envelope as the fitted
+        // builder, centered on the solar system barycenter.
+        let summary_offset = RECORD_SIZE;
+        bytes[summary_offset..summary_offset + 8].copy_from_slice(&0.0f64.to_le_bytes());
+        bytes[summary_offset + 8..summary_offset + 16].copy_from_slice(&0.0f64.to_le_bytes());
+        bytes[summary_offset + 16..summary_offset + 24].copy_from_slice(&1.0f64.to_le_bytes());
+        let data_offset = summary_offset + 24;
+        bytes[data_offset..data_offset + 8].copy_from_slice(&start_et.to_le_bytes());
+        bytes[data_offset + 8..data_offset + 16].copy_from_slice(&end_et.to_le_bytes());
+        bytes[data_offset + 16..data_offset + 20].copy_from_slice(&target_id.to_le_bytes());
+        bytes[data_offset + 20..data_offset + 24].copy_from_slice(&0i32.to_le_bytes());
+        bytes[data_offset + 24..data_offset + 28].copy_from_slice(&1i32.to_le_bytes());
+        bytes[data_offset + 28..data_offset + 32].copy_from_slice(&3i32.to_le_bytes());
+        let initial_word = 257i32;
+        let final_word = initial_word + (total_data_bytes as i32 / 8) - 1;
+        bytes[data_offset + 32..data_offset + 36].copy_from_slice(&initial_word.to_le_bytes());
+        bytes[data_offset + 36..data_offset + 40].copy_from_slice(&final_word.to_le_bytes());
+
+        let interval_length = (end_et - start_et) / record_count as f64;
+        let block_size = n_coeffs * 8;
+        for (rec, (pos_coeffs, vel_coeffs)) in records.iter().enumerate() {
+            let offset =
+                (first_data_record as usize - 1) * RECORD_SIZE + rec * record_size_bytes as usize;
+            let rec_start = start_et + rec as f64 * interval_length;
+            let mid = rec_start + interval_length * 0.5;
+            let radius = interval_length * 0.5;
+            bytes[offset..offset + 8].copy_from_slice(&mid.to_le_bytes());
+            bytes[offset + 8..offset + 16].copy_from_slice(&radius.to_le_bytes());
+            for i in 0..n_coeffs {
+                for axis in 0..3 {
+                    let pos_offset = offset + 16 + axis * block_size + i * 8;
+                    let vel_offset = offset + 16 + (3 + axis) * block_size + i * 8;
+                    bytes[pos_offset..pos_offset + 8]
+                        .copy_from_slice(&pos_coeffs[i][axis].to_le_bytes());
+                    bytes[vel_offset..vel_offset + 8]
+                        .copy_from_slice(&vel_coeffs[i][axis].to_le_bytes());
+                }
+            }
+        }
+
+        // Directory: INIT, INTLEN, RSIZE, N.
+        let directory_offset = (first_data_record as usize - 1) * RECORD_SIZE
+            + record_count as usize * record_size_bytes as usize;
+        bytes[directory_offset..directory_offset + 8].copy_from_slice(&start_et.to_le_bytes());
+        bytes[directory_offset + 8..directory_offset + 16]
+            .copy_from_slice(&interval_length.to_le_bytes());
+        bytes[directory_offset + 16..directory_offset + 24]
+            .copy_from_slice(&(rsize_doubles as f64 * 6.0 + 2.0).to_le_bytes());
         bytes[directory_offset + 24..directory_offset + 32]
             .copy_from_slice(&(record_count as f64).to_le_bytes());
 

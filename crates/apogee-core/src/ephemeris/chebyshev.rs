@@ -145,10 +145,12 @@ pub fn chebyshev_derivative(x: f64, coefficients: &[f64]) -> f64 {
 ///
 /// SPK Type 3 stores three sets of coefficients, one per coordinate
 /// (x, y, z). `coefficients` must be a slice of three equal-length slices,
-/// each normalized to the same time interval. The returned velocity is in
-/// the same physical units as position per unit normalized time; multiply
-/// by `2.0 / radius` to convert to physical units if `x` was obtained from
-/// a physical time interval.
+/// each normalized to the same time interval. The returned velocity is the
+/// derivative of the position series with respect to normalized time; to
+/// convert to physical units, multiply by `ds/dt = 1.0 / radius`, where
+/// `radius` is the half-width of the record's time interval. (SPK Type 3
+/// kernels store velocity series explicitly and need no such factor — this
+/// helper is not used by the kernel reader path.)
 ///
 /// # Panics
 ///
